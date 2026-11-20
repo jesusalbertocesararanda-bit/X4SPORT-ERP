@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   Calendar,
@@ -55,18 +54,7 @@ const VERSION_FILTERS: VersionFilter[] = ['Todas', 'Player', 'Fans', 'Retro'];
 type SlideLoadStage = 'primary' | 'thumbnail' | 'failed';
 
 const SWIMLANE_CARD_SIZE_CLASSES =
-  'w-[calc(50%-6px)] min-w-[152px] max-w-[210px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
-
-interface CatalogLightboxPayload {
-  model: string;
-  version: JerseyVersion;
-  team: TeamCategory;
-  images: string[];
-  initialIndex: number;
-  size: JerseySize;
-  priceUsd?: number;
-  isTransit: boolean;
-}
+  'w-[46%] min-w-[148px] max-w-[205px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
 
 function isPriorityCatalogTeam(team: TeamCategory): boolean {
   const normalized = team.trim().toLowerCase();
@@ -80,7 +68,6 @@ function ProductImageGallery({
   model,
   version,
   isTransit = false,
-  onOpenLightbox,
 }: {
   images?: string[];
   photoUrl?: string;
@@ -88,7 +75,6 @@ function ProductImageGallery({
   model: string;
   version: JerseyVersion;
   isTransit?: boolean;
-  onOpenLightbox?: (normalizedImages: string[], activeIndex: number) => void;
 }) {
   const normalizedImages = useMemo(() => {
     const rawList =
@@ -107,8 +93,6 @@ function ProductImageGallery({
   const [slideStages, setSlideStages] = useState<Record<number, SlideLoadStage>>({});
 
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
-  const tapStartRef = useRef<{ x: number; y: number } | null>(null);
-  const didDragRef = useRef(false);
   const safeIndex = clampCatalogCarouselIndex(activeIndex, total);
 
   const resolveSlideSrc = (index: number, baseUrl: string): string | null => {
@@ -138,8 +122,6 @@ function ProductImageGallery({
   };
 
   const beginSwipe = (clientX: number, clientY: number) => {
-    tapStartRef.current = { x: clientX, y: clientY };
-    didDragRef.current = false;
     if (total <= 1) {
       swipeStartRef.current = null;
       return;
@@ -149,15 +131,6 @@ function ProductImageGallery({
   };
 
   const moveSwipe = (clientX: number, clientY: number) => {
-    if (tapStartRef.current) {
-      const dist = Math.hypot(
-        clientX - tapStartRef.current.x,
-        clientY - tapStartRef.current.y,
-      );
-      if (dist > 8) {
-        didDragRef.current = true;
-      }
-    }
     if (!swipeStartRef.current || total <= 1) return;
     const dx = clientX - swipeStartRef.current.x;
     const dy = clientY - swipeStartRef.current.y;
@@ -170,7 +143,6 @@ function ProductImageGallery({
   };
 
   const endSwipe = () => {
-    tapStartRef.current = null;
     if (!swipeStartRef.current) {
       setIsDragging(false);
       setDragOffsetPx(0);
@@ -189,16 +161,6 @@ function ProductImageGallery({
     setDragOffsetPx(0);
   };
 
-  const handleTriggerLightbox = () => {
-    if (didDragRef.current) {
-      didDragRef.current = false;
-      return;
-    }
-    if (total > 0 && onOpenLightbox) {
-      onOpenLightbox(normalizedImages, safeIndex);
-    }
-  };
-
   return (
     <div
       data-testid="product-image-gallery"
@@ -215,29 +177,6 @@ function ProductImageGallery({
       }}
       onTouchEnd={endSwipe}
       onTouchCancel={endSwipe}
-      onPointerDown={(e) => {
-        if (e.pointerType === 'mouse') {
-          tapStartRef.current = { x: e.clientX, y: e.clientY };
-          didDragRef.current = false;
-        }
-      }}
-      onPointerMove={(e) => {
-        if (e.pointerType === 'mouse' && tapStartRef.current) {
-          if (
-            Math.hypot(
-              e.clientX - tapStartRef.current.x,
-              e.clientY - tapStartRef.current.y,
-            ) > 8
-          ) {
-            didDragRef.current = true;
-          }
-        }
-      }}
-      onPointerUp={(e) => {
-        if (e.pointerType === 'mouse') {
-          tapStartRef.current = null;
-        }
-      }}
     >
       {total === 0 ? (
         <JerseyShowcaseFallback team={team} model={model} version={version} />
@@ -255,27 +194,20 @@ function ProductImageGallery({
             return (
               <div
                 key={`${imgUrl}-${idx}`}
-                className="h-full w-full shrink-0 overflow-hidden bg-[#070D19]"
+                className="flex h-full w-full shrink-0 items-center justify-center overflow-hidden bg-[#070D19]"
               >
                 {resolvedSrc ? (
-                  <button
-                    type="button"
-                    onClick={handleTriggerLightbox}
-                    aria-label={`Ampliar foto ${idx + 1} de ${model}`}
-                    className="flex h-full w-full cursor-zoom-in items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400"
-                  >
-                    <img
-                      src={resolvedSrc}
-                      alt={`${model} (${version})${isTransit ? ' en camino' : ''} · foto ${idx + 1} de ${total}`}
-                      referrerPolicy="no-referrer"
-                      loading="lazy"
-                      draggable={false}
-                      onError={() => handleSlideError(idx, imgUrl)}
-                      className={`h-full w-full object-contain p-1.5 sm:p-2 ${
-                        isTransit ? 'opacity-90' : ''
-                      }`}
-                    />
-                  </button>
+                  <img
+                    src={resolvedSrc}
+                    alt={`${model} (${version})${isTransit ? ' en camino' : ''} · foto ${idx + 1} de ${total}`}
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    draggable={false}
+                    onError={() => handleSlideError(idx, imgUrl)}
+                    className={`h-full w-full object-contain p-1.5 sm:p-2 ${
+                      isTransit ? 'opacity-90' : ''
+                    }`}
+                  />
                 ) : (
                   <JerseyShowcaseFallback
                     team={team}
@@ -344,13 +276,11 @@ function CatalogProductCard({
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
-  onOpenLightbox,
 }: {
   product: PublicCatalogProduct;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
-  onOpenLightbox: (payload: CatalogLightboxPayload) => void;
 }) {
   const [selectedSize, setSelectedSize] = useState<JerseySize>(
     product.sizes[0]?.size ?? 'M',
@@ -380,18 +310,6 @@ function CatalogProductCard({
         team={product.team}
         model={product.model}
         version={product.version}
-        onOpenLightbox={(imgs, idx) =>
-          onOpenLightbox({
-            model: product.model,
-            version: product.version,
-            team: product.team,
-            images: imgs,
-            initialIndex: idx,
-            size: currentSizeLabel,
-            priceUsd: currentPrice,
-            isTransit: false,
-          })
-        }
       />
 
       {/* Cuerpo */}
@@ -501,13 +419,11 @@ function CatalogTransitCard({
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
-  onOpenLightbox,
 }: {
   card: PublicTransitCard;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
-  onOpenLightbox: (payload: CatalogLightboxPayload) => void;
 }) {
   const firstSize = card.sizes[0]?.size ?? 'M';
   const { advisor, href } = buildCatalogWhatsAppHref(waTurnIndex, {
@@ -529,18 +445,6 @@ function CatalogTransitCard({
         model={card.model}
         version={card.version}
         isTransit
-        onOpenLightbox={(imgs, idx) =>
-          onOpenLightbox({
-            model: card.model,
-            version: card.version,
-            team: card.team,
-            images: imgs,
-            initialIndex: idx,
-            size: firstSize,
-            priceUsd: card.salePrice,
-            isTransit: true,
-          })
-        }
       />
 
       <div className="flex flex-1 flex-col justify-between space-y-2 p-2.5 sm:space-y-3 sm:p-4 sm:pt-2.5">
@@ -738,356 +642,18 @@ function SwimlaneSection({
       {itemCount === 0 && emptyState ? (
         emptyState
       ) : (
-        <div
-          ref={scrollerRef}
-          onScroll={syncScrollBounds}
-          className="no-scrollbar flex w-full max-w-full min-w-0 flex-nowrap gap-3 overflow-x-auto overscroll-x-contain touch-pan-x touch-pan-y snap-x snap-mandatory scroll-smooth pb-2 sm:gap-4"
-        >
-          {children}
+        <div className="w-full max-w-full min-w-0 overflow-hidden [contain:inline-size]">
+          <div
+            ref={scrollerRef}
+            onScroll={syncScrollBounds}
+            className="no-scrollbar flex w-full max-w-full min-w-0 flex-nowrap gap-3 sm:gap-4 overflow-x-auto overscroll-x-contain touch-pan-x touch-pan-y snap-x snap-mandatory scroll-smooth pb-2"
+          >
+            {children}
+          </div>
         </div>
       )}
     </section>
   );
-}
-
-function CatalogLightboxModal({
-  payload,
-  usdtRate,
-  waTurnIndex,
-  onWhatsAppClick,
-  onClose,
-}: {
-  payload: CatalogLightboxPayload;
-  usdtRate: number;
-  waTurnIndex: number;
-  onWhatsAppClick: () => void;
-  onClose: () => void;
-}) {
-  const total = payload.images.length;
-  const [activeIndex, setActiveIndex] = useState(() =>
-    clampCatalogCarouselIndex(payload.initialIndex, total),
-  );
-  const [dragOffsetPx, setDragOffsetPx] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
-  const [slideStages, setSlideStages] = useState<Record<number, SlideLoadStage>>({});
-  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
-
-  const safeIndex = clampCatalogCarouselIndex(activeIndex, total);
-
-  useEffect(() => {
-    setActiveIndex(clampCatalogCarouselIndex(payload.initialIndex, total));
-    setSlideStages({});
-    setDragOffsetPx(0);
-  }, [payload, total]);
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      } else if (e.key === 'ArrowLeft' && total > 1) {
-        setActiveIndex((prev) => clampCatalogCarouselIndex(prev - 1, total));
-      } else if (e.key === 'ArrowRight' && total > 1) {
-        setActiveIndex((prev) => clampCatalogCarouselIndex(prev + 1, total));
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [onClose, total]);
-
-  const resolveSlideSrc = (index: number, baseUrl: string): string | null => {
-    const stage = slideStages[index] ?? 'primary';
-    if (stage === 'failed') return null;
-    if (stage === 'thumbnail') {
-      return obtenerFallbackUrlImagen(baseUrl);
-    }
-    return normalizarUrlImagen(baseUrl);
-  };
-
-  const handleSlideError = (index: number, baseUrl: string) => {
-    setSlideStages((prev) => {
-      const current = prev[index] ?? 'primary';
-      if (current === 'primary') {
-        const thumbFallback = obtenerFallbackUrlImagen(baseUrl);
-        if (thumbFallback) {
-          return { ...prev, [index]: 'thumbnail' };
-        }
-      }
-      return { ...prev, [index]: 'failed' };
-    });
-  };
-
-  const goToIndex = (nextIdx: number) => {
-    setActiveIndex(clampCatalogCarouselIndex(nextIdx, total));
-  };
-
-  const beginSwipe = (clientX: number, clientY: number) => {
-    if (total <= 1) {
-      swipeStartRef.current = null;
-      return;
-    }
-    swipeStartRef.current = { x: clientX, y: clientY };
-    setIsDragging(true);
-  };
-
-  const moveSwipe = (clientX: number, clientY: number) => {
-    if (!swipeStartRef.current || total <= 1) return;
-    const dx = clientX - swipeStartRef.current.x;
-    const dy = clientY - swipeStartRef.current.y;
-    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dragOffsetPx) < 4) {
-      return;
-    }
-    setDragOffsetPx(computeClampedSwipeOffset(dx, safeIndex, total));
-  };
-
-  const endSwipe = () => {
-    if (!swipeStartRef.current) {
-      setIsDragging(false);
-      setDragOffsetPx(0);
-      return;
-    }
-    if (total > 1) {
-      const threshold = 45;
-      if (dragOffsetPx <= -threshold && safeIndex < total - 1) {
-        goToIndex(safeIndex + 1);
-      } else if (dragOffsetPx >= threshold && safeIndex > 0) {
-        goToIndex(safeIndex - 1);
-      }
-    }
-    swipeStartRef.current = null;
-    setIsDragging(false);
-    setDragOffsetPx(0);
-  };
-
-  const { advisor, href } = buildCatalogWhatsAppHref(waTurnIndex, {
-    model: payload.model,
-    version: payload.version,
-    size: payload.size,
-    isTransit: payload.isTransit,
-  });
-
-  const bsPrice =
-    payload.priceUsd !== undefined
-      ? calculateCatalogBsPrice(payload.priceUsd, usdtRate)
-      : null;
-
-  const modalNode = (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Vista ampliada de ${payload.model}`}
-      data-testid="catalog-photo-lightbox"
-      onClick={onClose}
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-3 sm:p-6 backdrop-blur-sm"
-    >
-      {/* Ventana flotante centrada */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="relative flex w-[92vw] max-w-[520px] h-[84dvh] max-h-[780px] flex-col overflow-hidden rounded-2xl border border-slate-700/90 bg-[#0D1526] shadow-2xl"
-      >
-        {/* Botón X en esquina superior derecha */}
-        <button
-          type="button"
-          data-testid="lightbox-close-btn"
-          onClick={onClose}
-          aria-label="Cerrar visor"
-          className="absolute right-3 top-3 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-600 bg-slate-900/90 text-white shadow-lg transition-colors hover:bg-red-600 hover:border-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-        >
-          <X className="h-5 w-5" aria-hidden="true" />
-        </button>
-
-        {/* Encabezado superior de la ventana */}
-        <div className="shrink-0 border-b border-slate-800/90 px-4 pt-3.5 pb-2.5 pr-14 text-left">
-          <h2 className="font-display text-sm sm:text-base font-bold leading-snug text-white break-words">
-            {payload.model}
-          </h2>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-300">
-            <span>
-              {payload.version} · {payload.team}
-            </span>
-            {total > 1 && (
-              <span
-                data-testid="lightbox-counter"
-                className="font-mono-num shrink-0 rounded bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-white"
-              >
-                {safeIndex + 1} / {total}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Área central de foto completa */}
-        <div
-          className="relative flex flex-1 min-h-0 w-full items-center justify-center overflow-hidden bg-[#070D19] p-2 sm:p-4"
-          onTouchStart={(e) => {
-            const t = e.touches[0];
-            if (t) beginSwipe(t.clientX, t.clientY);
-          }}
-          onTouchMove={(e) => {
-            const t = e.touches[0];
-            if (t) moveSwipe(t.clientX, t.clientY);
-          }}
-          onTouchEnd={endSwipe}
-          onTouchCancel={endSwipe}
-        >
-          <div
-            className={`flex h-full w-full items-center ${
-              isDragging ? '' : 'transition-transform duration-200 ease-out'
-            }`}
-            style={{
-              transform: `translateX(calc(-${safeIndex * 100}% + ${dragOffsetPx}px))`,
-            }}
-          >
-            {payload.images.map((imgUrl, idx) => {
-              const resolvedSrc = resolveSlideSrc(idx, imgUrl);
-              return (
-                <div
-                  key={`lb-${imgUrl}-${idx}`}
-                  className="flex h-full w-full shrink-0 items-center justify-center"
-                >
-                  {resolvedSrc ? (
-                    <img
-                      src={resolvedSrc}
-                      alt={`${payload.model} (${payload.version}) · foto ampliada ${idx + 1} de ${total}`}
-                      referrerPolicy="no-referrer"
-                      draggable={false}
-                      onError={() => handleSlideError(idx, imgUrl)}
-                      className="h-full w-full object-contain select-none"
-                    />
-                  ) : (
-                    <div className="h-72 w-60 overflow-hidden rounded-xl border border-slate-800">
-                      <JerseyShowcaseFallback
-                        team={payload.team}
-                        model={payload.model}
-                        version={payload.version}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {total > 1 && (
-            <>
-              {safeIndex > 0 && (
-                <button
-                  type="button"
-                  data-testid="lightbox-prev-btn"
-                  onClick={() => goToIndex(safeIndex - 1)}
-                  aria-label="Foto anterior"
-                  className="absolute left-2 top-1/2 z-10 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-                >
-                  <ChevronLeft className="h-5 w-5" aria-hidden="true" />
-                </button>
-              )}
-              {safeIndex < total - 1 && (
-                <button
-                  type="button"
-                  data-testid="lightbox-next-btn"
-                  onClick={() => goToIndex(safeIndex + 1)}
-                  aria-label="Siguiente foto"
-                  className="absolute right-2 top-1/2 z-10 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-                >
-                  <ChevronRight className="h-5 w-5" aria-hidden="true" />
-                </button>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Barra inferior compacta dentro de la ventana */}
-        <div className="shrink-0 border-t border-slate-800 bg-[#0A1120] px-4 py-3 space-y-2">
-          {total > 1 && (
-            <div className="no-scrollbar flex w-full items-center justify-center gap-1.5 overflow-x-auto pb-0.5">
-              {payload.images.map((imgUrl, idx) => {
-                const thumbSrc = resolveSlideSrc(idx, imgUrl);
-                const isCurrent = idx === safeIndex;
-                return (
-                  <button
-                    key={`thumb-${imgUrl}-${idx}`}
-                    type="button"
-                    onClick={() => goToIndex(idx)}
-                    aria-label={`Ver foto ${idx + 1}`}
-                    aria-current={isCurrent ? 'true' : undefined}
-                    className={`h-10 w-8 shrink-0 overflow-hidden rounded border-2 bg-[#0D1526] transition-all ${
-                      isCurrent
-                        ? 'border-blue-500 ring-1 ring-blue-400/50'
-                        : 'border-white/15 opacity-60 hover:opacity-100'
-                    }`}
-                  >
-                    {thumbSrc ? (
-                      <img
-                        src={thumbSrc}
-                        alt=""
-                        referrerPolicy="no-referrer"
-                        className="h-full w-full object-contain p-0.5"
-                      />
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="flex min-w-0 items-center justify-between gap-2.5">
-            <div className="min-w-0">
-              {payload.priceUsd !== undefined ? (
-                <div className="flex flex-col">
-                  <span className="font-mono-num text-base font-bold leading-tight text-white sm:text-lg">
-                    {formatUSD(payload.priceUsd)}{' '}
-                    <span className="text-[11px] font-semibold text-slate-400">
-                      USDT
-                    </span>
-                  </span>
-                  {bsPrice !== null ? (
-                    <span className="font-mono-num text-[11px] font-semibold text-blue-300 sm:text-xs">
-                      {formatVES(bsPrice)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-medium text-amber-300">
-                      Precio en Bs en actualización
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <span className="text-xs text-slate-300">
-                  Precio referencial · Talla {payload.size}
-                </span>
-              )}
-            </div>
-
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="lightbox-buy-btn"
-              data-advisor={advisor.name}
-              data-wa-number={advisor.waNumber}
-              onClick={onWhatsAppClick}
-              className="inline-flex min-h-[40px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap"
-            >
-              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>
-                {payload.isTransit ? 'Apartar por WhatsApp' : 'Comprar por WhatsApp'}
-              </span>
-            </a>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (typeof document !== 'undefined') {
-    return createPortal(modalNode, document.body);
-  }
-  return modalNode;
 }
 
 function TeamProductSection({
@@ -1095,13 +661,11 @@ function TeamProductSection({
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
-  onOpenLightbox,
 }: {
   group: PublicCatalogTeamGroup;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
-  onOpenLightbox: (payload: CatalogLightboxPayload) => void;
 }) {
   return (
     <SwimlaneSection
@@ -1127,7 +691,6 @@ function TeamProductSection({
           usdtRate={usdtRate}
           waTurnIndex={waTurnIndex}
           onWhatsAppClick={onWhatsAppClick}
-          onOpenLightbox={onOpenLightbox}
         />
       ))}
     </SwimlaneSection>
@@ -1143,7 +706,6 @@ export function PublicCatalogView({
   const [versionFilter, setVersionFilter] = useState<VersionFilter>('Todas');
   const [sizeFilter, setSizeFilter] = useState<SizeFilter>('Todas');
   const [logoError, setLogoError] = useState(false);
-  const [lightboxPayload, setLightboxPayload] = useState<CatalogLightboxPayload | null>(null);
   const [waTurnIndex, setWaTurnIndex] = useState<number>(() =>
     getCurrentWhatsAppTurnIndex(),
   );
@@ -1485,7 +1047,6 @@ export function PublicCatalogView({
                   usdtRate={usdtRate}
                   waTurnIndex={waTurnIndex}
                   onWhatsAppClick={handleAdvanceWhatsAppTurn}
-                  onOpenLightbox={setLightboxPayload}
                 />
               ))}
 
@@ -1520,7 +1081,6 @@ export function PublicCatalogView({
                       usdtRate={usdtRate}
                       waTurnIndex={waTurnIndex}
                       onWhatsAppClick={handleAdvanceWhatsAppTurn}
-                      onOpenLightbox={setLightboxPayload}
                     />
                   ))}
                 </SwimlaneSection>
@@ -1551,7 +1111,6 @@ export function PublicCatalogView({
                 usdtRate={usdtRate}
                 waTurnIndex={waTurnIndex}
                 onWhatsAppClick={handleAdvanceWhatsAppTurn}
-                onOpenLightbox={setLightboxPayload}
               />
             ))}
           </SwimlaneSection>
@@ -1560,16 +1119,6 @@ export function PublicCatalogView({
             X4SPORT · Indumentaria Deportiva · Guacara, Carabobo, Venezuela
           </footer>
         </main>
-      )}
-
-      {lightboxPayload && (
-        <CatalogLightboxModal
-          payload={lightboxPayload}
-          usdtRate={usdtRate}
-          waTurnIndex={waTurnIndex}
-          onWhatsAppClick={handleAdvanceWhatsAppTurn}
-          onClose={() => setLightboxPayload(null)}
-        />
       )}
     </div>
   );
