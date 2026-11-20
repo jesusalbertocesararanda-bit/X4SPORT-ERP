@@ -4861,6 +4861,23 @@ export function toArray<T>(value: unknown): T[] {
   return [];
 }
 
+function sanitizeFirebaseObjectKey(key: string): string {
+  return key.replace(/[.#$/[\]]/g, '_');
+}
+
+function normalizeCatalogRecordMap(rawMap: unknown): Record<string, string> {
+  if (!rawMap || typeof rawMap !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(rawMap as Record<string, unknown>)) {
+    if (typeof val !== 'string') continue;
+    const safeKey = sanitizeFirebaseObjectKey(key);
+    if (!safeKey) continue;
+    if (key !== safeKey && safeKey in out) continue;
+    out[safeKey] = val;
+  }
+  return out;
+}
+
 export function sanitizeForFirebase<T>(value: T): T {
   if (value === null || value === undefined) {
     return value;
@@ -4877,7 +4894,10 @@ export function sanitizeForFirebase<T>(value: T): T {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
       if (val !== undefined) {
-        out[key] = sanitizeForFirebase(val);
+        const safeKey = sanitizeFirebaseObjectKey(key);
+        if (!safeKey) continue;
+        if (key !== safeKey && safeKey in out) continue;
+        out[safeKey] = sanitizeForFirebase(val);
       }
     }
     return out as T;
@@ -5046,10 +5066,10 @@ export function normalizeAppState(raw: unknown): AppState {
           ? parsed.catalogEnabled
           : true,
       ...(parsed.catalogPhotos && typeof parsed.catalogPhotos === 'object'
-        ? { catalogPhotos: { ...parsed.catalogPhotos } }
+        ? { catalogPhotos: normalizeCatalogRecordMap(parsed.catalogPhotos) }
         : {}),
       ...(parsed.catalogKeywords && typeof parsed.catalogKeywords === 'object'
-        ? { catalogKeywords: { ...parsed.catalogKeywords } }
+        ? { catalogKeywords: normalizeCatalogRecordMap(parsed.catalogKeywords) }
         : {}),
       authorizedUsers: getMergedAuthorizedUsers(
         parsed.authorizedUsers ? toArray<AuthorizedUserRecord>(parsed.authorizedUsers) : undefined,

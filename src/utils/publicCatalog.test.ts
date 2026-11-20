@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDemoSeedState, createEmptyCleanState } from '../data/initialState';
-import { normalizeAppState, registerMultiItemSale } from './finance';
+import { normalizeAppState, registerMultiItemSale, sanitizeForFirebase } from './finance';
 import {
   advanceWhatsAppTurnIndex,
   buildCatalogWhatsAppHref,
@@ -25,6 +25,9 @@ import {
   normalizeCatalogModelKey,
   obtenerFallbackUrlImagen,
   parseCatalogImageList,
+  resolveCatalogKeywords,
+  resolveCatalogPhoto,
+  sanitizeFirebaseCatalogKey,
 } from './publicCatalog';
 
 function createMemoryStorage(): Storage {
@@ -380,9 +383,10 @@ test('shareable catalog route detection and normalizeAppState preserve catalog s
   const normalized = normalizeAppState(JSON.parse(JSON.stringify(seed)));
   assert.equal(normalized.catalogEnabled, false);
   assert.equal(
-    normalized.catalogPhotos?.['barcelona local 25/26::Player'],
+    normalized.catalogPhotos?.['barcelona local 25_26::Player'],
     'https://cdn.example.com/barca.jpg',
   );
+  assert.equal(normalized.catalogPhotos?.['barcelona local 25/26::Player'], undefined);
   assert.equal(normalized.cashOnHand, seed.cashOnHand);
   assert.equal(normalized.funds.growthReinvestment, seed.funds.growthReinvestment);
 });
@@ -439,5 +443,54 @@ test('normalizarUrlImagen converts file/d, open?id and uc?id links to lh3 =w1000
   assert.equal(computeClampedSwipeOffset(-80, 0, 1), 0); // single photo, swipe locked completely
   assert.equal(computeClampedSwipeOffset(-60, 0, 3), -60); // valid advance allowed
   assert.equal(computeClampedSwipeOffset(60, 2, 3), 60); // valid retreat allowed
+});
+
+test('Firebase RTDB catalog key sanitization preserves compatibility across legacy and new keys', () => {
+  assert.equal(
+    sanitizeFirebaseCatalogKey('a.b#c$d/e[f]g'),
+    'a_b_c_d_e_f_g',
+  );
+  assert.equal(
+    normalizeCatalogModelKey('BARCELONA LOCAL 2026/2027 LAMINE YAMAL 10', 'Player'),
+    'barcelona local 2026_2027 lamine yamal 10::Player',
+  );
+
+  // Legacy unsanitized keys still resolve cleanly via resolveCatalogPhoto & resolveCatalogKeywords
+  const legacyPhotos = {
+    'BARCELONA LOCAL 2026/2027 LAMINE YAMAL 10::Player': 'https://cdn.example.com/lamine.jpg',
+  };
+  const legacyKeywords = {
+    'BARCELONA LOCAL 2026/2027 LAMINE YAMAL 10::Player': 'Lamine Yamal 10 Barca',
+  };
+  assert.equal(
+    resolveCatalogPhoto('BARCELONA LOCAL 2026/2027 LAMINE YAMAL 10', 'Player', legacyPhotos),
+    'https://cdn.example.com/lamine.jpg',
+  );
+  assert.equal(
+    resolveCatalogKeywords('BARCELONA LOCAL 2026/2027 LAMINE YAMAL 10', 'Player', legacyKeywords),
+    'Lamine Yamal 10 Barca',
+  );
+
+  // sanitizeForFirebase replaces forbidden RTDB key chars recursively
+  const dirtyState = createDemoSeedState();
+  dirtyState.catalogPhotos = {
+    'barcelona local 2026/2027 lamine yamal 10::Player': 'https://cdn.example.com/lamine.jpg',
+  };
+  dirtyState.catalogKeywords = {
+    'real madrid 25/26 [edición].#1$::Fans': 'Mbappe Bellingham',
+  };
+  const sanitized = sanitizeForFirebase(dirtyState);
+  assert.equal(
+    sanitized.catalogPhotos?.['barcelona local 2026_2027 lamine yamal 10::Player'],
+    'https://cdn.example.com/lamine.jpg',
+  );
+  assert.equal(
+    sanitized.catalogPhotos?.['barcelona local 2026/2027 lamine yamal 10::Player'],
+    undefined,
+  );
+  assert.equal(
+    sanitized.catalogKeywords?.['real madrid 25_26 _edición___1_::Fans'],
+    'Mbappe Bellingham',
+  );
 });
 

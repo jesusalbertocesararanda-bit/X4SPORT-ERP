@@ -220,14 +220,18 @@ export function normalizeSearchText(value: string): string {
     .trim();
 }
 
+export function sanitizeFirebaseCatalogKey(rawKey: string): string {
+  return rawKey.replace(/[.#$/[\]]/g, '_');
+}
+
 export function normalizeCatalogModelKey(
   model: string,
   version?: JerseyVersion | string,
 ): string {
   const cleanModel = model.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!version) return cleanModel;
+  if (!version) return sanitizeFirebaseCatalogKey(cleanModel);
   const ver = normalizeVersionDisplay(version as JerseyVersion);
-  return `${cleanModel}::${ver}`;
+  return sanitizeFirebaseCatalogKey(`${cleanModel}::${ver}`);
 }
 
 export function resolveCatalogPhoto(
@@ -238,18 +242,27 @@ export function resolveCatalogPhoto(
   if (!photosMap) return undefined;
   const exactKey = normalizeCatalogModelKey(model, version);
   const exact = photosMap[exactKey];
-  if (exact && exact.trim()) return exact.trim();
+  if (typeof exact === 'string' && exact.trim()) return exact.trim();
 
   const modelOnlyKey = normalizeCatalogModelKey(model);
   const byModel = photosMap[modelOnlyKey];
-  if (byModel && byModel.trim()) return byModel.trim();
+  if (typeof byModel === 'string' && byModel.trim()) return byModel.trim();
 
-  // Case-insensitive fallback in case legacy keys exist
+  // Case-insensitive and legacy unsanitized key fallback
   const targetExactLower = exactKey.toLowerCase();
   const targetModelLower = modelOnlyKey.toLowerCase();
-  for (const [k, v] of Object.entries(photosMap)) {
-    const kl = k.trim().toLowerCase();
-    if ((kl === targetExactLower || kl === targetModelLower) && v.trim()) {
+  const entries = Object.entries(photosMap);
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
+    if (kl === targetExactLower) {
+      return v.trim();
+    }
+  }
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
+    if (kl === targetModelLower) {
       return v.trim();
     }
   }
@@ -263,9 +276,32 @@ export function resolveCatalogKeywords(
 ): string | undefined {
   if (!keywordsMap) return undefined;
   const exactKey = normalizeCatalogModelKey(model, version);
+  const exact = keywordsMap[exactKey];
+  if (typeof exact === 'string' && exact.trim()) return exact.trim();
+
   const modelOnlyKey = normalizeCatalogModelKey(model);
-  const hit = keywordsMap[exactKey] ?? keywordsMap[modelOnlyKey];
-  return hit && hit.trim() ? hit.trim() : undefined;
+  const byModel = keywordsMap[modelOnlyKey];
+  if (typeof byModel === 'string' && byModel.trim()) return byModel.trim();
+
+  // Case-insensitive and legacy unsanitized key fallback
+  const targetExactLower = exactKey.toLowerCase();
+  const targetModelLower = modelOnlyKey.toLowerCase();
+  const entries = Object.entries(keywordsMap);
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
+    if (kl === targetExactLower) {
+      return v.trim();
+    }
+  }
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
+    if (kl === targetModelLower) {
+      return v.trim();
+    }
+  }
+  return undefined;
 }
 
 /**

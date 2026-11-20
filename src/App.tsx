@@ -120,7 +120,10 @@ import {
   SUBMODULE_ROUTES,
   tabToDefaultSubModule,
 } from './utils/navigation';
-import { isPublicCatalogModeFromLocation } from './utils/publicCatalog';
+import {
+  isPublicCatalogModeFromLocation,
+  sanitizeFirebaseCatalogKey,
+} from './utils/publicCatalog';
 
 export interface RateSyncInfo {
   status: 'idle' | 'loading' | 'synced' | 'error';
@@ -962,13 +965,18 @@ export default function App() {
   const handleSaveCatalogPhoto = useCallback(
     (modelKey: string, photoUrl: string) => {
       if (!modelKey || !photoUrl) return;
+      const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
       setState((prev) => {
+        const updated = { ...(prev.catalogPhotos ?? {}) };
+        for (const existingKey of Object.keys(updated)) {
+          if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
+            delete updated[existingKey];
+          }
+        }
+        updated[safeModelKey] = photoUrl;
         const next: AppState = {
           ...prev,
-          catalogPhotos: {
-            ...(prev.catalogPhotos ?? {}),
-            [modelKey]: photoUrl,
-          },
+          catalogPhotos: updated,
         };
         saveLocalStateBackup(next, { allowOverwriteEmpty: true });
         void writeErpState(next).catch((err: unknown) => {
@@ -982,9 +990,16 @@ export default function App() {
 
   const handleRemoveCatalogPhoto = useCallback((modelKey: string) => {
     if (!modelKey) return;
+    const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
     setState((prev) => {
       const updated = { ...(prev.catalogPhotos ?? {}) };
       delete updated[modelKey];
+      delete updated[safeModelKey];
+      for (const existingKey of Object.keys(updated)) {
+        if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
+          delete updated[existingKey];
+        }
+      }
       const next: AppState = {
         ...prev,
         catalogPhotos: updated,
@@ -1000,13 +1015,19 @@ export default function App() {
   const handleSaveCatalogKeywords = useCallback(
     (modelKey: string, keywords: string) => {
       if (!modelKey) return;
+      const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
       setState((prev) => {
         const updated = { ...(prev.catalogKeywords ?? {}) };
+        delete updated[modelKey];
+        delete updated[safeModelKey];
+        for (const existingKey of Object.keys(updated)) {
+          if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
+            delete updated[existingKey];
+          }
+        }
         const trimmed = keywords.trim();
         if (trimmed) {
-          updated[modelKey] = trimmed;
-        } else {
-          delete updated[modelKey];
+          updated[safeModelKey] = trimmed;
         }
         const next: AppState = {
           ...prev,
