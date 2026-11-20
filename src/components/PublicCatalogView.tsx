@@ -594,7 +594,7 @@ function SwimlaneSection({
     <section
       aria-labelledby={headingId}
       data-testid={testId}
-      className={`w-full max-w-full min-w-0 overflow-hidden space-y-3 ${className}`}
+      className={`w-full max-w-full min-w-0 overflow-x-clip space-y-3 ${className}`}
     >
       <div className="flex w-full max-w-full min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -642,7 +642,7 @@ function SwimlaneSection({
       {itemCount === 0 && emptyState ? (
         emptyState
       ) : (
-        <div className="w-full max-w-full min-w-0 overflow-hidden [contain:inline-size]">
+        <div className="w-full max-w-full min-w-0 overflow-x-clip [contain:inline-size]">
           <div
             ref={scrollerRef}
             onScroll={syncScrollBounds}
@@ -801,10 +801,10 @@ export function PublicCatalogView({
   return (
     <div
       data-testid="public-catalog-storefront"
-      className="min-h-screen w-full max-w-full min-w-0 overflow-hidden bg-[#060B16] text-slate-100"
+      className="min-h-screen w-full max-w-full min-w-0 overflow-x-clip bg-[#060B16] text-slate-100"
     >
       {/* Barra superior fija con Logo X4SPORT y Tasa vigente (compacta <15% móvil) */}
-      <header className="sticky top-0 z-40 w-full max-w-full min-w-0 overflow-hidden border-b border-slate-800/90 bg-[#060B16]/95 backdrop-blur-md">
+      <header className="sticky top-0 z-40 w-full max-w-full min-w-0 overflow-x-clip border-b border-slate-800/90 bg-[#060B16]/95 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-2 px-3 sm:gap-3 sm:px-6">
           <div className="flex items-center gap-2 min-w-0">
             {!logoError ? (
@@ -856,7 +856,7 @@ export function PublicCatalogView({
       </header>
 
       {!catalogEnabled ? (
-        <main className="mx-auto flex w-full max-w-2xl flex-col items-center justify-center px-4 py-16 text-center">
+        <main className="mx-auto flex w-full max-w-full min-w-0 overflow-x-clip flex-col items-center justify-center px-4 py-16 text-center sm:max-w-2xl">
           <div className="w-full rounded-2xl border border-slate-800 bg-[#0D1526] p-6 sm:p-8 space-y-4">
             <ShoppingBag
               className="mx-auto h-10 w-10 text-blue-400"
@@ -892,9 +892,9 @@ export function PublicCatalogView({
           </div>
         </main>
       ) : (
-        <main className="mx-auto w-full max-w-full min-w-0 overflow-hidden space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8 xl:max-w-7xl">
+        <main className="mx-auto w-full max-w-full min-w-0 overflow-x-clip space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8 xl:max-w-7xl">
           {/* Hero compacto + Buscador Inteligente */}
-          <section className="w-full max-w-full min-w-0 overflow-hidden space-y-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0D172B] via-[#0B1222] to-[#080D19] p-4 sm:space-y-5 sm:p-7">
+          <section className="w-full max-w-full min-w-0 overflow-x-clip space-y-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0D172B] via-[#0B1222] to-[#080D19] p-4 sm:space-y-5 sm:p-7">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div className="min-w-0 space-y-1.5">
                 <h1 className="font-display text-xl font-bold tracking-tight text-white sm:text-3xl text-balance">
@@ -1013,7 +1013,7 @@ export function PublicCatalogView({
 
           {/* Secciones por Equipo: carruseles horizontales apilados verticalmente */}
           {filteredGroups.length === 0 ? (
-            <section className="w-full max-w-full rounded-xl border border-slate-800 bg-[#0D1526] p-8 text-center space-y-3">
+            <section className="w-full max-w-full min-w-0 overflow-x-clip rounded-xl border border-slate-800 bg-[#0D1526] p-8 text-center space-y-3">
               <p className="text-base font-semibold text-white">
                 {teamGroups.length === 0
                   ? 'No hay franelas en stock inmediato en este momento'
@@ -1039,7 +1039,7 @@ export function PublicCatalogView({
               )}
             </section>
           ) : (
-            <div className="w-full max-w-full min-w-0 overflow-hidden space-y-7 sm:space-y-9">
+            <div className="w-full max-w-full min-w-0 overflow-x-clip space-y-7 sm:space-y-9">
               {individualGroups.map((group) => (
                 <TeamProductSection
                   key={group.team}
