@@ -884,217 +884,201 @@ function CatalogLightboxModal({
       aria-label={`Vista ampliada de ${payload.model}`}
       data-testid="catalog-photo-lightbox"
       onClick={onClose}
-      className="fixed inset-0 z-[9999] flex h-[100dvh] w-full max-w-full flex-col justify-between overflow-hidden bg-black/95 backdrop-blur-md"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-3 sm:p-6 backdrop-blur-sm"
     >
-      {/* Cabecera superior */}
+      {/* Ventana flotante centrada */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full shrink-0 border-b border-white/10 bg-black/60 px-4 pt-3 pb-2"
+        className="relative flex w-[92vw] max-w-[520px] h-[84dvh] max-h-[780px] flex-col overflow-hidden rounded-2xl border border-slate-700/90 bg-[#0D1526] shadow-2xl"
       >
-        <div className="flex w-full items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-1 text-left">
-            <h2 className="min-w-0 flex-1 text-left font-display text-sm sm:text-base font-bold leading-snug text-white break-words">
-              {payload.model}
-            </h2>
-            <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-300">
-              <span>
-                {payload.version} · {payload.team}
-              </span>
-              {total > 0 && (
-                <span
-                  data-testid="lightbox-counter"
-                  className="font-mono-num shrink-0 rounded bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white"
-                >
-                  {safeIndex + 1} / {total}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            data-testid="lightbox-close-btn"
-            onClick={onClose}
-            aria-label="Cerrar visor"
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-          >
-            <X className="h-5 w-5" aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-
-      {/* Imagen grande central con flechas + swipe */}
-      <div
-        className="relative flex flex-1 min-h-0 w-full items-center justify-center overflow-hidden px-3 py-2"
-        onTouchStart={(e) => {
-          const t = e.touches[0];
-          if (t) beginSwipe(t.clientX, t.clientY);
-        }}
-        onTouchMove={(e) => {
-          const t = e.touches[0];
-          if (t) moveSwipe(t.clientX, t.clientY);
-        }}
-        onTouchEnd={endSwipe}
-        onTouchCancel={endSwipe}
-      >
-        <div
-          className={`flex h-full w-full items-center ${
-            isDragging ? '' : 'transition-transform duration-200 ease-out'
-          }`}
-          style={{
-            transform: `translateX(calc(-${safeIndex * 100}% + ${dragOffsetPx}px))`,
-          }}
+        {/* Botón X en esquina superior derecha */}
+        <button
+          type="button"
+          data-testid="lightbox-close-btn"
+          onClick={onClose}
+          aria-label="Cerrar visor"
+          className="absolute right-3 top-3 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-600 bg-slate-900/90 text-white shadow-lg transition-colors hover:bg-red-600 hover:border-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
         >
-          {payload.images.map((imgUrl, idx) => {
-            const resolvedSrc = resolveSlideSrc(idx, imgUrl);
-            return (
-              <div
-                key={`lb-${imgUrl}-${idx}`}
-                className="flex h-full w-full shrink-0 items-center justify-center"
+          <X className="h-5 w-5" aria-hidden="true" />
+        </button>
+
+        {/* Encabezado superior de la ventana */}
+        <div className="shrink-0 border-b border-slate-800/90 px-4 pt-3.5 pb-2.5 pr-14 text-left">
+          <h2 className="font-display text-sm sm:text-base font-bold leading-snug text-white break-words">
+            {payload.model}
+          </h2>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-300">
+            <span>
+              {payload.version} · {payload.team}
+            </span>
+            {total > 1 && (
+              <span
+                data-testid="lightbox-counter"
+                className="font-mono-num shrink-0 rounded bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-white"
               >
-                {resolvedSrc ? (
-                  <img
-                    src={resolvedSrc}
-                    alt={`${payload.model} (${payload.version}) · foto ampliada ${idx + 1} de ${total}`}
-                    referrerPolicy="no-referrer"
-                    draggable={false}
-                    onClick={(e) => e.stopPropagation()}
-                    onError={() => handleSlideError(idx, imgUrl)}
-                    className="h-full w-full max-h-[72dvh] max-w-[94vw] object-contain select-none"
-                  />
-                ) : (
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    className="h-72 w-60 overflow-hidden rounded-xl border border-slate-800"
-                  >
-                    <JerseyShowcaseFallback
-                      team={payload.team}
-                      model={payload.model}
-                      version={payload.version}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                {safeIndex + 1} / {total}
+              </span>
+            )}
+          </div>
         </div>
 
-        {total > 1 && (
-          <>
-            {safeIndex > 0 && (
-              <button
-                type="button"
-                data-testid="lightbox-prev-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  goToIndex(safeIndex - 1);
-                }}
-                aria-label="Foto anterior"
-                className="absolute left-3 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-              >
-                <ChevronLeft className="h-5 w-5" aria-hidden="true" />
-              </button>
-            )}
-            {safeIndex < total - 1 && (
-              <button
-                type="button"
-                data-testid="lightbox-next-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  goToIndex(safeIndex + 1);
-                }}
-                aria-label="Siguiente foto"
-                className="absolute right-3 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-              >
-                <ChevronRight className="h-5 w-5" aria-hidden="true" />
-              </button>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Miniaturas + Barra inferior con Precio y WhatsApp */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full shrink-0 border-t border-slate-800 bg-[#080E1C] px-4 py-3 space-y-2.5"
-      >
-        {total > 1 && (
-          <div className="no-scrollbar flex w-full items-center justify-center gap-2 overflow-x-auto pb-1">
+        {/* Área central de foto completa */}
+        <div
+          className="relative flex flex-1 min-h-0 w-full items-center justify-center overflow-hidden bg-[#070D19] p-2 sm:p-4"
+          onTouchStart={(e) => {
+            const t = e.touches[0];
+            if (t) beginSwipe(t.clientX, t.clientY);
+          }}
+          onTouchMove={(e) => {
+            const t = e.touches[0];
+            if (t) moveSwipe(t.clientX, t.clientY);
+          }}
+          onTouchEnd={endSwipe}
+          onTouchCancel={endSwipe}
+        >
+          <div
+            className={`flex h-full w-full items-center ${
+              isDragging ? '' : 'transition-transform duration-200 ease-out'
+            }`}
+            style={{
+              transform: `translateX(calc(-${safeIndex * 100}% + ${dragOffsetPx}px))`,
+            }}
+          >
             {payload.images.map((imgUrl, idx) => {
-              const thumbSrc = resolveSlideSrc(idx, imgUrl);
-              const isCurrent = idx === safeIndex;
+              const resolvedSrc = resolveSlideSrc(idx, imgUrl);
               return (
-                <button
-                  key={`thumb-${imgUrl}-${idx}`}
-                  type="button"
-                  onClick={() => goToIndex(idx)}
-                  aria-label={`Ver foto ${idx + 1}`}
-                  aria-current={isCurrent ? 'true' : undefined}
-                  className={`h-12 w-10 shrink-0 overflow-hidden rounded-md border-2 bg-[#0D1526] transition-all ${
-                    isCurrent
-                      ? 'border-blue-500 ring-2 ring-blue-400/50'
-                      : 'border-white/15 opacity-60 hover:opacity-100'
-                  }`}
+                <div
+                  key={`lb-${imgUrl}-${idx}`}
+                  className="flex h-full w-full shrink-0 items-center justify-center"
                 >
-                  {thumbSrc ? (
+                  {resolvedSrc ? (
                     <img
-                      src={thumbSrc}
-                      alt=""
+                      src={resolvedSrc}
+                      alt={`${payload.model} (${payload.version}) · foto ampliada ${idx + 1} de ${total}`}
                       referrerPolicy="no-referrer"
-                      className="h-full w-full object-contain p-0.5"
+                      draggable={false}
+                      onError={() => handleSlideError(idx, imgUrl)}
+                      className="h-full w-full object-contain select-none"
                     />
-                  ) : null}
-                </button>
+                  ) : (
+                    <div className="h-72 w-60 overflow-hidden rounded-xl border border-slate-800">
+                      <JerseyShowcaseFallback
+                        team={payload.team}
+                        model={payload.model}
+                        version={payload.version}
+                      />
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
-        )}
 
-        <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            {payload.priceUsd !== undefined ? (
-              <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
-                <span className="font-mono-num text-lg font-bold text-white sm:text-xl">
-                  {formatUSD(payload.priceUsd)}{' '}
-                  <span className="text-xs font-semibold text-slate-400">
-                    USDT
+          {total > 1 && (
+            <>
+              {safeIndex > 0 && (
+                <button
+                  type="button"
+                  data-testid="lightbox-prev-btn"
+                  onClick={() => goToIndex(safeIndex - 1)}
+                  aria-label="Foto anterior"
+                  className="absolute left-2 top-1/2 z-10 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                >
+                  <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+                </button>
+              )}
+              {safeIndex < total - 1 && (
+                <button
+                  type="button"
+                  data-testid="lightbox-next-btn"
+                  onClick={() => goToIndex(safeIndex + 1)}
+                  aria-label="Siguiente foto"
+                  className="absolute right-2 top-1/2 z-10 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                >
+                  <ChevronRight className="h-5 w-5" aria-hidden="true" />
+                </button>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Barra inferior compacta dentro de la ventana */}
+        <div className="shrink-0 border-t border-slate-800 bg-[#0A1120] px-4 py-3 space-y-2">
+          {total > 1 && (
+            <div className="no-scrollbar flex w-full items-center justify-center gap-1.5 overflow-x-auto pb-0.5">
+              {payload.images.map((imgUrl, idx) => {
+                const thumbSrc = resolveSlideSrc(idx, imgUrl);
+                const isCurrent = idx === safeIndex;
+                return (
+                  <button
+                    key={`thumb-${imgUrl}-${idx}`}
+                    type="button"
+                    onClick={() => goToIndex(idx)}
+                    aria-label={`Ver foto ${idx + 1}`}
+                    aria-current={isCurrent ? 'true' : undefined}
+                    className={`h-10 w-8 shrink-0 overflow-hidden rounded border-2 bg-[#0D1526] transition-all ${
+                      isCurrent
+                        ? 'border-blue-500 ring-1 ring-blue-400/50'
+                        : 'border-white/15 opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    {thumbSrc ? (
+                      <img
+                        src={thumbSrc}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="h-full w-full object-contain p-0.5"
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex min-w-0 items-center justify-between gap-2.5">
+            <div className="min-w-0">
+              {payload.priceUsd !== undefined ? (
+                <div className="flex flex-col">
+                  <span className="font-mono-num text-base font-bold leading-tight text-white sm:text-lg">
+                    {formatUSD(payload.priceUsd)}{' '}
+                    <span className="text-[11px] font-semibold text-slate-400">
+                      USDT
+                    </span>
                   </span>
+                  {bsPrice !== null ? (
+                    <span className="font-mono-num text-[11px] font-semibold text-blue-300 sm:text-xs">
+                      {formatVES(bsPrice)}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-medium text-amber-300">
+                      Precio en Bs en actualización
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <span className="text-xs text-slate-300">
+                  Precio referencial · Talla {payload.size}
                 </span>
-                {bsPrice !== null ? (
-                  <span className="font-mono-num text-xs font-semibold text-blue-300 sm:text-sm">
-                    {formatVES(bsPrice)}
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-medium text-amber-300">
-                    Precio en Bs en actualización
-                  </span>
-                )}
-              </div>
-            ) : (
-              <span className="text-xs text-slate-300">
-                Precio referencial al llegar · Talla {payload.size}
-              </span>
-            )}
-            <p className="text-[11px] text-slate-400">
-              Talla seleccionada: <strong className="text-slate-200">{payload.size}</strong>
-            </p>
-          </div>
+              )}
+            </div>
 
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid="lightbox-buy-btn"
-            data-advisor={advisor.name}
-            data-wa-number={advisor.waNumber}
-            onClick={onWhatsAppClick}
-            className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap sm:flex-initial"
-          >
-            <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>
-              {payload.isTransit ? 'Apartar por WhatsApp' : 'Comprar por WhatsApp'}
-            </span>
-          </a>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="lightbox-buy-btn"
+              data-advisor={advisor.name}
+              data-wa-number={advisor.waNumber}
+              onClick={onWhatsAppClick}
+              className="inline-flex min-h-[40px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap"
+            >
+              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>
+                {payload.isTransit ? 'Apartar por WhatsApp' : 'Comprar por WhatsApp'}
+              </span>
+            </a>
+          </div>
         </div>
       </div>
     </div>
