@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   Calendar,
@@ -54,7 +55,7 @@ const VERSION_FILTERS: VersionFilter[] = ['Todas', 'Player', 'Fans', 'Retro'];
 type SlideLoadStage = 'primary' | 'thumbnail' | 'failed';
 
 const SWIMLANE_CARD_SIZE_CLASSES =
-  'w-[44vw] min-w-[156px] max-w-[210px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
+  'w-[calc(50%-6px)] min-w-[152px] max-w-[210px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
 
 interface CatalogLightboxPayload {
   model: string;
@@ -691,10 +692,10 @@ function SwimlaneSection({
       data-testid={testId}
       className={`w-full max-w-full min-w-0 overflow-hidden space-y-3 ${className}`}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
+      <div className="flex w-full max-w-full min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           {icon}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h2
               id={headingId}
               className="truncate font-display text-lg font-bold tracking-tight text-white sm:text-xl"
@@ -876,53 +877,55 @@ function CatalogLightboxModal({
       ? calculateCatalogBsPrice(payload.priceUsd, usdtRate)
       : null;
 
-  return (
+  const modalNode = (
     <div
       role="dialog"
       aria-modal="true"
       aria-label={`Vista ampliada de ${payload.model}`}
       data-testid="catalog-photo-lightbox"
       onClick={onClose}
-      className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col justify-between bg-black/95 backdrop-blur-md"
+      className="fixed inset-0 z-[9999] flex h-[100dvh] w-full max-w-full flex-col justify-between overflow-hidden bg-black/95 backdrop-blur-md"
     >
-      {/* Barra superior del visor */}
+      {/* Cabecera superior */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-between gap-3 border-b border-white/10 bg-black/60 px-4 py-3 sm:px-6"
+        className="w-full shrink-0 border-b border-white/10 bg-black/60 px-4 pt-3 pb-2"
       >
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
-            <span className="truncate">
-              {payload.version} · {payload.team}
-            </span>
-            {total > 0 && (
-              <span
-                data-testid="lightbox-counter"
-                className="font-mono-num shrink-0 rounded bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white"
-              >
-                {safeIndex + 1} / {total}
+        <div className="flex w-full items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 space-y-1 text-left">
+            <h2 className="min-w-0 flex-1 text-left font-display text-sm sm:text-base font-bold leading-snug text-white break-words">
+              {payload.model}
+            </h2>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-300">
+              <span>
+                {payload.version} · {payload.team}
               </span>
-            )}
+              {total > 0 && (
+                <span
+                  data-testid="lightbox-counter"
+                  className="font-mono-num shrink-0 rounded bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white"
+                >
+                  {safeIndex + 1} / {total}
+                </span>
+              )}
+            </div>
           </div>
-          <h2 className="font-display text-sm font-bold leading-snug text-white break-words sm:text-lg">
-            {payload.model}
-          </h2>
-        </div>
 
-        <button
-          type="button"
-          data-testid="lightbox-close-btn"
-          onClick={onClose}
-          aria-label="Cerrar visor"
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-        >
-          <X className="h-5 w-5" aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            data-testid="lightbox-close-btn"
+            onClick={onClose}
+            aria-label="Cerrar visor"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      {/* Escenario central con foto 100% completa + flechas + swipe */}
+      {/* Imagen grande central con flechas + swipe */}
       <div
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 py-2 sm:px-10"
+        className="relative flex flex-1 min-h-0 w-full items-center justify-center overflow-hidden px-3 py-2"
         onTouchStart={(e) => {
           const t = e.touches[0];
           if (t) beginSwipe(t.clientX, t.clientY);
@@ -957,7 +960,7 @@ function CatalogLightboxModal({
                     draggable={false}
                     onClick={(e) => e.stopPropagation()}
                     onError={() => handleSlideError(idx, imgUrl)}
-                    className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain select-none"
+                    className="h-full w-full max-h-[72dvh] max-w-[94vw] object-contain select-none"
                   />
                 ) : (
                   <div
@@ -987,7 +990,7 @@ function CatalogLightboxModal({
                   goToIndex(safeIndex - 1);
                 }}
                 aria-label="Foto anterior"
-                className="absolute left-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                className="absolute left-3 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 <ChevronLeft className="h-5 w-5" aria-hidden="true" />
               </button>
@@ -1001,7 +1004,7 @@ function CatalogLightboxModal({
                   goToIndex(safeIndex + 1);
                 }}
                 aria-label="Siguiente foto"
-                className="absolute right-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                className="absolute right-3 top-1/2 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 <ChevronRight className="h-5 w-5" aria-hidden="true" />
               </button>
@@ -1013,10 +1016,10 @@ function CatalogLightboxModal({
       {/* Miniaturas + Barra inferior con Precio y WhatsApp */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="border-t border-white/10 bg-[#060B16]/95 px-4 py-3 sm:px-6 space-y-2.5"
+        className="w-full shrink-0 border-t border-slate-800 bg-[#080E1C] px-4 py-3 space-y-2.5"
       >
         {total > 1 && (
-          <div className="no-scrollbar flex items-center justify-center gap-2 overflow-x-auto pb-1">
+          <div className="no-scrollbar flex w-full items-center justify-center gap-2 overflow-x-auto pb-1">
             {payload.images.map((imgUrl, idx) => {
               const thumbSrc = resolveSlideSrc(idx, imgUrl);
               const isCurrent = idx === safeIndex;
@@ -1047,7 +1050,7 @@ function CatalogLightboxModal({
           </div>
         )}
 
-        <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-3">
+        <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             {payload.priceUsd !== undefined ? (
               <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
@@ -1096,6 +1099,11 @@ function CatalogLightboxModal({
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalNode, document.body);
+  }
+  return modalNode;
 }
 
 function TeamProductSection({
@@ -1247,10 +1255,10 @@ export function PublicCatalogView({
   return (
     <div
       data-testid="public-catalog-storefront"
-      className="min-h-screen w-full max-w-[100vw] overflow-x-clip bg-[#060B16] text-slate-100"
+      className="min-h-screen w-full max-w-full min-w-0 overflow-hidden bg-[#060B16] text-slate-100"
     >
       {/* Barra superior fija con Logo X4SPORT y Tasa vigente (compacta <15% móvil) */}
-      <header className="sticky top-0 z-40 w-full max-w-full overflow-hidden border-b border-slate-800/90 bg-[#060B16]/95 backdrop-blur-md">
+      <header className="sticky top-0 z-40 w-full max-w-full min-w-0 overflow-hidden border-b border-slate-800/90 bg-[#060B16]/95 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-2 px-3 sm:gap-3 sm:px-6">
           <div className="flex items-center gap-2 min-w-0">
             {!logoError ? (
@@ -1338,9 +1346,9 @@ export function PublicCatalogView({
           </div>
         </main>
       ) : (
-        <main className="mx-auto w-full max-w-7xl min-w-0 overflow-hidden space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8">
+        <main className="mx-auto w-full max-w-full min-w-0 overflow-hidden space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8 xl:max-w-7xl">
           {/* Hero compacto + Buscador Inteligente */}
-          <section className="w-full max-w-full min-w-0 space-y-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0D172B] via-[#0B1222] to-[#080D19] p-4 sm:space-y-5 sm:p-7">
+          <section className="w-full max-w-full min-w-0 overflow-hidden space-y-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0D172B] via-[#0B1222] to-[#080D19] p-4 sm:space-y-5 sm:p-7">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div className="min-w-0 space-y-1.5">
                 <h1 className="font-display text-xl font-bold tracking-tight text-white sm:text-3xl text-balance">
@@ -1485,7 +1493,7 @@ export function PublicCatalogView({
               )}
             </section>
           ) : (
-            <div className="w-full max-w-full min-w-0 space-y-7 sm:space-y-9">
+            <div className="w-full max-w-full min-w-0 overflow-hidden space-y-7 sm:space-y-9">
               {individualGroups.map((group) => (
                 <TeamProductSection
                   key={group.team}
