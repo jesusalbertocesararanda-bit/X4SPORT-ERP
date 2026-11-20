@@ -17,22 +17,20 @@ import {
 } from 'lucide-react';
 import type {
   AppState,
-  AuthorizedUser,
   InventoryAuditCrossAlert,
   InventoryAuditSession,
-  InventoryItem,
   TeamCategory,
 } from '../types/erp';
+import type { ERPUser } from '../utils/auth';
 import {
   calculateAuditMetrics,
   detectSizeDiscrepancyCrosses,
-  formatUSD,
   normalizeVersionDisplay,
 } from '../utils/finance';
 
 interface AuditViewProps {
   state: AppState;
-  currentUser?: AuthorizedUser | null;
+  currentUser?: ERPUser | null;
   onSaveProgress: (
     counts: Record<string, number>,
     notes?: string,
@@ -41,7 +39,9 @@ interface AuditViewProps {
     counts: Record<string, number>,
     applyAdjustmentsToInventory: boolean,
     reason?: string,
-  ) => { ok: boolean; error?: string; session?: InventoryAuditSession };
+  ) =>
+    | Promise<{ ok: boolean; error?: string; session?: InventoryAuditSession }>
+    | { ok: boolean; error?: string; session?: InventoryAuditSession };
   onStartNewAuditSession: () => { ok: boolean; error?: string };
   onPerformUncross: (input: {
     sourceSkuId: string;
@@ -49,7 +49,7 @@ interface AuditViewProps {
     quantity: number;
     reason?: string;
     user?: string;
-  }) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
 }
 
 const DEFAULT_TEAM_ORDER = [
@@ -103,6 +103,7 @@ export function AuditView({
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [applyAdjustments, setApplyAdjustments] = useState(true);
   const [closeReason, setCloseReason] = useState('Auditoría física y conteo mensual');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error' | 'info';
     text: string;
@@ -136,8 +137,8 @@ export function AuditView({
 
   // Calculate the 6 exact indicators
   const metrics = useMemo(() => {
-    if (isClosed && activeSession?.summaryMetrics) {
-      return activeSession.summaryMetrics;
+    if (isClosed && activeSession?.summary) {
+      return activeSession.summary;
     }
     return calculateAuditMetrics(state.inventory, parsedNumericCounts);
   }, [activeSession, isClosed, parsedNumericCounts, state.inventory]);
@@ -230,55 +231,71 @@ export function AuditView({
     }
   };
 
-  const handleConfirmClose = () => {
+  const handleConfirmClose = async () => {
+    if (isSubmitting) return;
     setFeedback(null);
-    const res = onCloseAuditSession(parsedNumericCounts, applyAdjustments, closeReason);
-    if (!res.ok) {
-      setFeedback({ type: 'error', text: res.error ?? 'Error al cerrar el recuento.' });
+    setIsSubmitting(true);
+    try {
+      const res = await Promise.resolve(
+        onCloseAuditSession(parsedNumericCounts, applyAdjustments, closeReason),
+      );
+      if (!res.ok) {
+        setFeedback({ type: 'error', text: res.error ?? 'Error al cerrar el recuento.' });
+        setShowCloseModal(false);
+        return;
+      }
       setShowCloseModal(false);
-      return;
+      setFeedback({
+        type: 'success',
+        text: applyAdjustments
+          ? 'Recuento cerrado exitosamente: Se archivaron las métricas y se actualizaron las unidades en inventario.'
+          : 'Recuento cerrado y archivado exitosamente sin modificar el stock de inventario.',
+      });
+    } finally {
+      setIsSubmitting(false);
     }
-    setShowCloseModal(false);
-    setFeedback({
-      type: 'success',
-      text: applyAdjustments
-        ? 'Recuento cerrado exitosamente: Se archivaron las métricas y se actualizaron las unidades en inventario.'
-        : 'Recuento cerrado y archivado exitosamente sin modificar el stock de inventario.',
-    });
   };
 
-  const handleUncrossOneClick = (alert: InventoryAuditCrossAlert) => {
+  const handleUncrossOneClick = async (alert: InventoryAuditCrossAlert) => {
+    if (isSubmitting) return;
     setFeedback(null);
-    const res = onPerformUncross({
-      sourceSkuId: alert.shortageSkuId,
-      targetSkuId: alert.surplusSkuId,
-      quantity: alert.quantity,
-      reason: `Descruce automático 1-Clic: ${alert.model} (${alert.shortageSize} → ${alert.surplusSize})`,
-      user: currentUser?.name ?? 'Auditor',
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await Promise.resolve(
+        onPerformUncross({
+          sourceSkuId: alert.shortageSkuId,
+          targetSkuId: alert.surplusSkuId,
+          quantity: alert.uncrossQuantity,
+          reason: `Descruce automático 1-Clic: ${alert.model} (${alert.shortageSize} → ${alert.surplusSize})`,
+          user: currentUser?.name ?? 'Auditor',
+        }),
+      );
 
-    if (!res.ok) {
-      setFeedback({ type: 'error', text: res.error ?? 'Error al descruzar.' });
-      return;
+      if (!res.ok) {
+        setFeedback({ type: 'error', text: res.error ?? 'Error al descruzar.' });
+        return;
+      }
+
+      // Auto-sync the counts locally so they become reconciled!
+      const shortageItem = state.inventory.find((i) => i.id === alert.shortageSkuId);
+      const surplusItem = state.inventory.find((i) => i.id === alert.surplusSkuId);
+      if (shortageItem && surplusItem) {
+        const newShortageStock = shortageItem.stock - alert.uncrossQuantity;
+        const newSurplusStock = surplusItem.stock + alert.uncrossQuantity;
+        setCounts((prev) => ({
+          ...prev,
+          [alert.shortageSkuId]: String(newShortageStock),
+          [alert.surplusSkuId]: String(newSurplusStock),
+        }));
+      }
+
+      setFeedback({
+        type: 'success',
+        text: `Descruce aplicado: Se transfirieron ${alert.uncrossQuantity} uds de ${alert.shortageSize} a ${alert.surplusSize} en ${alert.model}. Tallas conciliadas.`,
+      });
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Auto-sync the counts locally so they become reconciled!
-    const shortageItem = state.inventory.find((i) => i.id === alert.shortageSkuId);
-    const surplusItem = state.inventory.find((i) => i.id === alert.surplusSkuId);
-    if (shortageItem && surplusItem) {
-      const newShortageStock = shortageItem.stock - alert.quantity;
-      const newSurplusStock = surplusItem.stock + alert.quantity;
-      setCounts((prev) => ({
-        ...prev,
-        [alert.shortageSkuId]: String(newShortageStock),
-        [alert.surplusSkuId]: String(newSurplusStock),
-      }));
-    }
-
-    setFeedback({
-      type: 'success',
-      text: `Descruce aplicado: Se transfirieron ${alert.quantity} uds de ${alert.shortageSize} a ${alert.surplusSize} en ${alert.model}. Tallas conciliadas.`,
-    });
   };
 
   return (
@@ -399,11 +416,11 @@ export function AuditView({
                   <p className="text-slate-300">
                     Posible cruce detectado:{' '}
                     <strong className="text-emerald-400 font-mono-num">
-                      +{alert.quantity} uds en Talla {alert.surplusSize}
+                      +{alert.uncrossQuantity} uds en Talla {alert.surplusSize}
                     </strong>{' '}
                     y{' '}
                     <strong className="text-red-400 font-mono-num">
-                      -{alert.quantity} uds en Talla {alert.shortageSize}
+                      -{alert.uncrossQuantity} uds en Talla {alert.shortageSize}
                     </strong>
                     .
                   </p>
@@ -434,7 +451,7 @@ export function AuditView({
             Tablero Resumen de Conciliación (6 Indicadores)
           </h2>
           <span className="text-xs text-slate-400 font-mono-num">
-            Total en Sistema: {metrics.totalSystemItems} SKUs · {metrics.totalSystemUnits} uds
+            Total en Sistema: {metrics.totalItems} SKUs · {metrics.totalSystemUnits} uds
           </span>
         </div>
 
@@ -450,7 +467,7 @@ export function AuditView({
               <span className="text-xs font-normal text-slate-400">SKUs</span>
             </p>
             <span className="inline-block rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono-num text-[11px] font-bold text-emerald-300">
-              {metrics.reconciledItemsPercent.toFixed(1)}%
+              {metrics.reconciledItemsPct.toFixed(1)}%
             </span>
           </div>
 
@@ -465,7 +482,7 @@ export function AuditView({
               <span className="text-xs font-normal text-slate-400">SKUs</span>
             </p>
             <span className="inline-block rounded bg-amber-500/20 px-1.5 py-0.5 font-mono-num text-[11px] font-bold text-amber-300">
-              {metrics.unreconciledItemsPercent.toFixed(1)}%
+              {metrics.unreconciledItemsPct.toFixed(1)}%
             </span>
           </div>
 
@@ -480,7 +497,7 @@ export function AuditView({
               <span className="text-xs font-normal text-slate-400">SKUs</span>
             </p>
             <span className="inline-block rounded bg-slate-800 px-1.5 py-0.5 font-mono-num text-[11px] font-bold text-slate-300">
-              {metrics.uncountedItemsPercent.toFixed(1)}%
+              {metrics.uncountedItemsPct.toFixed(1)}%
             </span>
           </div>
 
@@ -495,7 +512,7 @@ export function AuditView({
               <span className="text-xs font-normal text-slate-400">uds</span>
             </p>
             <span className="inline-block rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono-num text-[11px] font-bold text-emerald-300">
-              {metrics.reconciledUnitsPercent.toFixed(1)}%
+              {metrics.reconciledUnitsPct.toFixed(1)}%
             </span>
           </div>
 
@@ -510,7 +527,7 @@ export function AuditView({
               <span className="text-xs font-normal text-slate-400">uds</span>
             </p>
             <span className="inline-block rounded bg-red-500/20 px-1.5 py-0.5 font-mono-num text-[11px] font-bold text-red-300">
-              {metrics.unreconciledUnitsPercent.toFixed(1)}%
+              {metrics.unreconciledUnitsPct.toFixed(1)}%
             </span>
           </div>
 
@@ -525,7 +542,7 @@ export function AuditView({
               <span className="text-xs font-normal text-slate-400">uds</span>
             </p>
             <span className="inline-block rounded bg-slate-800 px-1.5 py-0.5 font-mono-num text-[11px] font-bold text-slate-300">
-              {metrics.uncountedUnitsPercent.toFixed(1)}%
+              {metrics.uncountedUnitsPct.toFixed(1)}%
             </span>
           </div>
         </div>
@@ -580,11 +597,11 @@ export function AuditView({
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-800/80 pb-3">
                     <div>
                       <p className="font-semibold text-white">
-                        Auditoría #{session.id.slice(-6)} · {session.reason || 'Sin motivo'}
+                        Auditoría #{session.id.slice(-6)} · {session.notes || 'Sin observaciones'}
                       </p>
                       <p className="text-xs text-slate-400 font-mono-num">
                         Cerrada el{' '}
-                        {new Date(session.closedAt || session.createdAt).toLocaleString('es-VE', {
+                        {new Date(session.closedAt || session.updatedAt || session.startedAt).toLocaleString('es-VE', {
                           dateStyle: 'medium',
                           timeStyle: 'short',
                         })}{' '}
@@ -596,42 +613,42 @@ export function AuditView({
                     </span>
                   </div>
 
-                  {session.summaryMetrics && (
+                  {session.summary && (
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6 text-xs font-mono-num">
                       <div className="p-2 rounded bg-[#0D1526]">
                         <span className="block text-[10px] text-slate-400">Ítems Conciliados</span>
                         <span className="font-bold text-emerald-400">
-                          {session.summaryMetrics.reconciledItems} ({session.summaryMetrics.reconciledItemsPercent.toFixed(1)}%)
+                          {session.summary.reconciledItems} ({session.summary.reconciledItemsPct.toFixed(1)}%)
                         </span>
                       </div>
                       <div className="p-2 rounded bg-[#0D1526]">
                         <span className="block text-[10px] text-slate-400">Ítems No Conciliados</span>
                         <span className="font-bold text-amber-300">
-                          {session.summaryMetrics.unreconciledItems} ({session.summaryMetrics.unreconciledItemsPercent.toFixed(1)}%)
+                          {session.summary.unreconciledItems} ({session.summary.unreconciledItemsPct.toFixed(1)}%)
                         </span>
                       </div>
                       <div className="p-2 rounded bg-[#0D1526]">
                         <span className="block text-[10px] text-slate-400">Ítems No Contados</span>
                         <span className="font-bold text-slate-300">
-                          {session.summaryMetrics.uncountedItems} ({session.summaryMetrics.uncountedItemsPercent.toFixed(1)}%)
+                          {session.summary.uncountedItems} ({session.summary.uncountedItemsPct.toFixed(1)}%)
                         </span>
                       </div>
                       <div className="p-2 rounded bg-[#0D1526]">
                         <span className="block text-[10px] text-slate-400">Uds Conciliadas</span>
                         <span className="font-bold text-emerald-400">
-                          {session.summaryMetrics.reconciledUnits} ({session.summaryMetrics.reconciledUnitsPercent.toFixed(1)}%)
+                          {session.summary.reconciledUnits} ({session.summary.reconciledUnitsPct.toFixed(1)}%)
                         </span>
                       </div>
                       <div className="p-2 rounded bg-[#0D1526]">
                         <span className="block text-[10px] text-slate-400">Uds No Conciliadas</span>
                         <span className="font-bold text-red-400">
-                          {session.summaryMetrics.unreconciledUnits} ({session.summaryMetrics.unreconciledUnitsPercent.toFixed(1)}%)
+                          {session.summary.unreconciledUnits} ({session.summary.unreconciledUnitsPct.toFixed(1)}%)
                         </span>
                       </div>
                       <div className="p-2 rounded bg-[#0D1526]">
                         <span className="block text-[10px] text-slate-400">Uds No Contadas</span>
                         <span className="font-bold text-slate-300">
-                          {session.summaryMetrics.uncountedUnits} ({session.summaryMetrics.uncountedUnitsPercent.toFixed(1)}%)
+                          {session.summary.uncountedUnits} ({session.summary.uncountedUnitsPct.toFixed(1)}%)
                         </span>
                       </div>
                     </div>
@@ -938,22 +955,22 @@ export function AuditView({
               <p className="font-semibold text-white">Resumen de Conciliación:</p>
               <div className="grid grid-cols-2 gap-2 font-mono-num">
                 <span className="text-emerald-300">
-                  Ítems conciliados: {metrics.reconciledItems} ({metrics.reconciledItemsPercent.toFixed(1)}%)
+                  Ítems conciliados: {metrics.reconciledItems} ({metrics.reconciledItemsPct.toFixed(1)}%)
                 </span>
                 <span className="text-emerald-300">
-                  Unidades conciliadas: {metrics.reconciledUnits} ({metrics.reconciledUnitsPercent.toFixed(1)}%)
+                  Unidades conciliadas: {metrics.reconciledUnits} ({metrics.reconciledUnitsPct.toFixed(1)}%)
                 </span>
                 <span className="text-amber-300">
-                  Ítems no conciliados: {metrics.unreconciledItems} ({metrics.unreconciledItemsPercent.toFixed(1)}%)
+                  Ítems no conciliados: {metrics.unreconciledItems} ({metrics.unreconciledItemsPct.toFixed(1)}%)
                 </span>
                 <span className="text-red-400">
-                  Unidades no conciliadas: {metrics.unreconciledUnits} ({metrics.unreconciledUnitsPercent.toFixed(1)}%)
+                  Unidades no conciliadas: {metrics.unreconciledUnits} ({metrics.unreconciledUnitsPct.toFixed(1)}%)
                 </span>
                 <span className="text-slate-400">
-                  Ítems no contados: {metrics.uncountedItems} ({metrics.uncountedItemsPercent.toFixed(1)}%)
+                  Ítems no contados: {metrics.uncountedItems} ({metrics.uncountedItemsPct.toFixed(1)}%)
                 </span>
                 <span className="text-slate-400">
-                  Unidades no contadas: {metrics.uncountedUnits} ({metrics.uncountedUnitsPercent.toFixed(1)}%)
+                  Unidades no contadas: {metrics.uncountedUnits} ({metrics.uncountedUnitsPct.toFixed(1)}%)
                 </span>
               </div>
             </div>

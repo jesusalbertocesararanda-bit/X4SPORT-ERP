@@ -746,9 +746,29 @@ export default function App() {
     unitCost?: number;
   }) => {
     const opKey = `adj-${input.skuId}-${Date.now()}`;
-    return runAtomicErpOperation(opKey, (current) =>
-      registerManualInventoryAdjustment(current, input),
-    );
+    return runAtomicErpOperation(opKey, (current) => {
+      if (input.adjustmentType === 'descruce') {
+        if (!input.targetSkuId) {
+          return {
+            ok: false,
+            error: 'Selecciona una franela destino para realizar el descruce.',
+            state: current,
+          };
+        }
+        return performInventoryUncross(current, {
+          sourceSkuId: input.skuId,
+          targetSkuId: input.targetSkuId,
+          quantity: input.quantity,
+          reason: input.reason,
+        });
+      }
+      return registerManualInventoryAdjustment(current, {
+        type: input.adjustmentType,
+        skuId: input.skuId,
+        quantity: input.quantity,
+        reason: input.reason,
+      });
+    });
   };
 
   const handlePerformInventoryUncross = (input: {
@@ -760,7 +780,12 @@ export default function App() {
   }) => {
     const opKey = `uncross-${input.sourceSkuId}-${input.targetSkuId}-${Date.now()}`;
     return runAtomicErpOperation(opKey, (current) =>
-      performInventoryUncross(current, input),
+      performInventoryUncross(current, {
+        sourceSkuId: input.sourceSkuId,
+        targetSkuId: input.targetSkuId,
+        quantity: input.quantity,
+        reason: input.reason ?? '',
+      }),
     );
   };
 

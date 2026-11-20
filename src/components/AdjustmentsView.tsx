@@ -11,10 +11,10 @@ import {
 } from 'lucide-react';
 import type {
   AppState,
-  AuthorizedUser,
   InventoryAdjustmentType,
   InventoryItem,
 } from '../types/erp';
+import type { ERPUser } from '../utils/auth';
 import {
   formatUSD,
   normalizeVersionDisplay,
@@ -23,7 +23,7 @@ import {
 
 interface AdjustmentsViewProps {
   state: AppState;
-  currentUser?: AuthorizedUser | null;
+  currentUser?: ERPUser | null;
   onRegisterAdjustment: (input: {
     adjustmentType: 'entrada' | 'salida' | 'descruce';
     skuId: string;
@@ -32,14 +32,14 @@ interface AdjustmentsViewProps {
     user?: string;
     targetSkuId?: string;
     unitCost?: number;
-  }) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onPerformUncross: (input: {
     sourceSkuId: string;
     targetSkuId: string;
     quantity: number;
     reason?: string;
     user?: string;
-  }) => { ok: boolean; error?: string };
+  }) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
 }
 
 const REASON_PRESETS_ENTRADA = [
@@ -98,6 +98,7 @@ export function AdjustmentsView({
   >('all');
 
   // Feedback banner
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -134,8 +135,9 @@ export function AdjustmentsView({
   }, [activeTab, quantityInput, selectedItem]);
 
   // Handle single movement submit (entrada / salida)
-  const handleSubmitSingleAdjustment = (e: React.FormEvent) => {
+  const handleSubmitSingleAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setFeedback(null);
 
     if (!selectedItem) {
@@ -172,34 +174,42 @@ export function AdjustmentsView({
       return;
     }
 
-    const res = onRegisterAdjustment({
-      adjustmentType: activeTab,
-      skuId: selectedItem.id,
-      quantity: qty,
-      reason: cleanReason,
-      user: currentUser?.name ?? 'Admin',
-      unitCost: parsedCost,
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await Promise.resolve(
+        onRegisterAdjustment({
+          adjustmentType: activeTab,
+          skuId: selectedItem.id,
+          quantity: qty,
+          reason: cleanReason,
+          user: currentUser?.name ?? 'Admin',
+          unitCost: parsedCost,
+        }),
+      );
 
-    if (!res.ok) {
-      setFeedback({ type: 'error', text: res.error ?? 'Error al registrar el ajuste.' });
-      return;
+      if (!res.ok) {
+        setFeedback({ type: 'error', text: res.error ?? 'Error al registrar el ajuste.' });
+        return;
+      }
+
+      setFeedback({
+        type: 'success',
+        text: `Ajuste registrado exitosamente: ${
+          activeTab === 'entrada' ? '+' : '-'
+        }${qty} uds a ${selectedItem.model} (${selectedItem.version} · ${selectedItem.size}). Motivo: "${cleanReason}".`,
+      });
+      setQuantityInput('1');
+      setReasonInput('');
+      setUnitCostInput('');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setFeedback({
-      type: 'success',
-      text: `Ajuste registrado exitosamente: ${
-        activeTab === 'entrada' ? '+' : '-'
-      }${qty} uds a ${selectedItem.model} (${selectedItem.version} · ${selectedItem.size}). Motivo: "${cleanReason}".`,
-    });
-    setQuantityInput('1');
-    setReasonInput('');
-    setUnitCostInput('');
   };
 
   // Handle descruce submit
-  const handleSubmitDescruce = (e: React.FormEvent) => {
+  const handleSubmitDescruce = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setFeedback(null);
 
     if (!sourceItem || !targetItem) {
@@ -238,25 +248,32 @@ export function AdjustmentsView({
       return;
     }
 
-    const res = onPerformUncross({
-      sourceSkuId: sourceItem.id,
-      targetSkuId: targetItem.id,
-      quantity: qty,
-      reason: cleanReason,
-      user: currentUser?.name ?? 'Admin',
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await Promise.resolve(
+        onPerformUncross({
+          sourceSkuId: sourceItem.id,
+          targetSkuId: targetItem.id,
+          quantity: qty,
+          reason: cleanReason,
+          user: currentUser?.name ?? 'Admin',
+        }),
+      );
 
-    if (!res.ok) {
-      setFeedback({ type: 'error', text: res.error ?? 'Error al descruzar la mercancía.' });
-      return;
+      if (!res.ok) {
+        setFeedback({ type: 'error', text: res.error ?? 'Error al descruzar la mercancía.' });
+        return;
+      }
+
+      setFeedback({
+        type: 'success',
+        text: `Descruce completado exitosamente: Se movieron ${qty} uds de ${sourceItem.model} (${sourceItem.size}) a ${targetItem.model} (${targetItem.size}). Total en bodega intacto.`,
+      });
+      setUncrossQtyInput('1');
+      setUncrossReasonInput('');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setFeedback({
-      type: 'success',
-      text: `Descruce completado exitosamente: Se movieron ${qty} uds de ${sourceItem.model} (${sourceItem.size}) a ${targetItem.model} (${targetItem.size}). Total en bodega intacto.`,
-    });
-    setUncrossQtyInput('1');
-    setUncrossReasonInput('');
   };
 
   // Filtered adjustments history
@@ -273,7 +290,7 @@ export function AdjustmentsView({
         adj.modelLabel.toLowerCase().includes(q) ||
         adj.size.toLowerCase().includes(q) ||
         adj.reason.toLowerCase().includes(q) ||
-        (adj.user && adj.user.toLowerCase().includes(q)) ||
+        (adj.userName && adj.userName.toLowerCase().includes(q)) ||
         (adj.targetModelLabel && adj.targetModelLabel.toLowerCase().includes(q))
       );
     });
@@ -891,7 +908,7 @@ export function AdjustmentsView({
                           {adj.reason}
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
-                          {adj.user || 'Admin'}
+                          {adj.userName || 'Admin'}
                         </td>
                       </tr>
                     );
@@ -954,7 +971,7 @@ export function AdjustmentsView({
                     </div>
                     <div className="flex items-center justify-between text-slate-400 border-t border-slate-800/60 pt-1.5">
                       <span className="truncate">{adj.reason}</span>
-                      <span className="shrink-0 text-slate-500">{adj.user || 'Admin'}</span>
+                      <span className="shrink-0 text-slate-500">{adj.userName || 'Admin'}</span>
                     </div>
                   </div>
                 );
