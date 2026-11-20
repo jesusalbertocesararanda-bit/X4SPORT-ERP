@@ -405,7 +405,7 @@ function CatalogProductCard({
             </span>
           </div>
 
-          <h3 className="line-clamp-2 min-h-[2.25rem] font-display text-xs font-semibold leading-snug text-white sm:min-h-[2.75rem] sm:text-base">
+          <h3 className="min-h-[3.15rem] sm:min-h-[3.4rem] font-display text-[12px] sm:text-[15px] font-semibold leading-[1.3] text-white break-words">
             {product.model}
           </h3>
 
@@ -554,7 +554,7 @@ function CatalogTransitCard({
             </span>
           </div>
 
-          <h3 className="line-clamp-2 min-h-[2.25rem] font-display text-xs font-semibold leading-snug text-white sm:min-h-[2.75rem] sm:text-base">
+          <h3 className="min-h-[3.15rem] sm:min-h-[3.4rem] font-display text-[12px] sm:text-[15px] font-semibold leading-[1.3] text-white break-words">
             {card.model}
           </h3>
 
@@ -904,7 +904,7 @@ function CatalogLightboxModal({
               </span>
             )}
           </div>
-          <h2 className="truncate font-display text-sm font-bold text-white sm:text-lg">
+          <h2 className="font-display text-sm font-bold leading-snug text-white break-words sm:text-lg">
             {payload.model}
           </h2>
         </div>
