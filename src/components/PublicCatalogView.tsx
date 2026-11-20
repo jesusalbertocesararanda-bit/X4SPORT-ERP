@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
   Calendar,
@@ -7,6 +7,7 @@ import {
   Clock,
   MessageCircle,
   Search,
+  Shield,
   ShoppingBag,
   X,
 } from 'lucide-react';
@@ -51,6 +52,14 @@ type SizeFilter = 'Todas' | JerseySize;
 const VERSION_FILTERS: VersionFilter[] = ['Todas', 'Player', 'Fans', 'Retro'];
 
 type SlideLoadStage = 'primary' | 'thumbnail' | 'failed';
+
+const SWIMLANE_CARD_SIZE_CLASSES =
+  'w-[46.5%] min-w-[162px] max-w-[210px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
+
+function isPriorityCatalogTeam(team: TeamCategory): boolean {
+  const normalized = team.trim().toLowerCase();
+  return normalized === 'barcelona' || normalized === 'real madrid';
+}
 
 function ProductImageGallery({
   images,
@@ -155,7 +164,9 @@ function ProductImageGallery({
   return (
     <div
       data-testid="product-image-gallery"
-      className="relative aspect-[4/5] w-full overflow-hidden bg-[#070D19] touch-pan-y select-none"
+      className={`relative aspect-[4/5] w-full overflow-hidden bg-[#070D19] select-none ${
+        total > 1 ? 'touch-pan-y' : 'touch-pan-x touch-pan-y'
+      }`}
       onTouchStart={(e) => {
         const t = e.touches[0];
         if (t) beginSwipe(t.clientX, t.clientY);
@@ -214,7 +225,7 @@ function ProductImageGallery({
       {total > 0 && (
         <span
           data-testid="gallery-counter"
-          className="font-mono-num pointer-events-none absolute right-2.5 top-2.5 z-10 rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm"
+          className="font-mono-num pointer-events-none absolute right-2 top-2 z-10 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm sm:right-2.5 sm:top-2.5 sm:px-2 sm:text-[11px]"
         >
           {safeIndex + 1} / {total}
         </span>
@@ -228,9 +239,9 @@ function ProductImageGallery({
               type="button"
               onClick={() => goToIndex(safeIndex - 1)}
               aria-label="Foto anterior"
-              className="absolute left-2 top-1/2 z-10 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              className="absolute left-1.5 top-1/2 z-10 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:left-2 sm:h-9 sm:w-9"
             >
-              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              <ChevronLeft className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             </button>
           )}
           {safeIndex < total - 1 && (
@@ -238,16 +249,16 @@ function ProductImageGallery({
               type="button"
               onClick={() => goToIndex(safeIndex + 1)}
               aria-label="Siguiente foto"
-              className="absolute right-2 top-1/2 z-10 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              className="absolute right-1.5 top-1/2 z-10 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:right-2 sm:h-9 sm:w-9"
             >
-              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             </button>
           )}
         </>
       )}
 
       <div
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[#0D1526] to-transparent"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#0D1526] to-transparent sm:h-12"
         aria-hidden="true"
       />
     </div>
@@ -285,7 +296,7 @@ function CatalogProductCard({
   return (
     <article
       data-testid={`catalog-card-${product.key}`}
-      className="flex w-full min-w-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#0D1526] transition-transform duration-150 hover:-translate-y-0.5 hover:border-blue-500/45"
+      className={`flex ${SWIMLANE_CARD_SIZE_CLASSES} flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#0D1526] transition-transform duration-150 hover:-translate-y-0.5 hover:border-blue-500/45`}
     >
       <ProductImageGallery
         images={product.images}
@@ -296,25 +307,25 @@ function CatalogProductCard({
       />
 
       {/* Cuerpo */}
-      <div className="flex flex-1 flex-col justify-between p-4 pt-2.5 space-y-3">
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-slate-400">
-            <span className="truncate">
+      <div className="flex flex-1 flex-col justify-between space-y-2 p-2.5 sm:space-y-3 sm:p-4 sm:pt-2.5">
+        <div className="space-y-1.5 sm:space-y-2">
+          <div className="flex items-center justify-between gap-1.5 text-[10px] font-medium text-slate-400 sm:gap-2 sm:text-[11px]">
+            <span className="min-w-0 truncate">
               {product.version} · {product.team}
             </span>
-            <span className="font-mono-num text-slate-500 shrink-0">
+            <span className="font-mono-num shrink-0 text-slate-500">
               {product.totalStock} uds
             </span>
           </div>
 
-          <h3 className="line-clamp-2 min-h-[2.75rem] font-display text-base font-semibold leading-snug text-white">
+          <h3 className="line-clamp-2 min-h-[2.25rem] font-display text-xs font-semibold leading-snug text-white sm:min-h-[2.75rem] sm:text-base">
             {product.model}
           </h3>
 
           {/* Selector interactivo de tallas disponibles */}
           <div>
             <span className="sr-only">Tallas disponibles</span>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1 sm:gap-1.5">
               {product.sizes.map((szOption) => {
                 const isSelected = szOption.size === currentSizeLabel;
                 return (
@@ -324,7 +335,7 @@ function CatalogProductCard({
                     data-testid={`size-btn-${product.key}-${szOption.size}`}
                     aria-pressed={isSelected}
                     onClick={() => setSelectedSize(szOption.size)}
-                    className={`min-h-[34px] min-w-[38px] rounded-md border px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+                    className={`min-h-[30px] min-w-[32px] rounded-md border px-1.5 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:min-h-[34px] sm:min-w-[38px] sm:px-2 sm:text-xs ${
                       isSelected
                         ? 'border-blue-500 bg-blue-600 text-white'
                         : 'border-slate-700 bg-[#080E1C] text-slate-300 hover:border-slate-500 hover:text-white'
@@ -339,35 +350,37 @@ function CatalogProductCard({
         </div>
 
         {/* Urgencia, Precio y CTA WhatsApp */}
-        <div className="space-y-3 border-t border-slate-800/80 pt-3">
+        <div className="space-y-2 border-t border-slate-800/80 pt-2 sm:space-y-3 sm:pt-3">
           <p
             data-testid="catalog-stock-badge"
-            className={`text-xs font-semibold ${
+            className={`text-[11px] font-semibold sm:text-xs ${
               currentStock <= 5 ? 'text-amber-300' : 'text-emerald-300'
             }`}
           >
             ¡Quedan {currentStock} en stock!
           </p>
 
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-1.5 gap-y-0.5 sm:gap-2">
             <span
               data-testid="catalog-price-usd"
-              className="font-mono-num text-xl font-bold text-white"
+              className="font-mono-num text-base font-bold text-white sm:text-xl"
             >
               {formatUSD(currentPrice)}{' '}
-              <span className="text-xs font-semibold text-slate-400">USDT</span>
+              <span className="text-[10px] font-semibold text-slate-400 sm:text-xs">
+                USDT
+              </span>
             </span>
             {calculateCatalogBsPrice(currentPrice, usdtRate) !== null ? (
               <span
                 data-testid="catalog-price-bs"
-                className="font-mono-num text-xs font-semibold text-blue-300"
+                className="font-mono-num text-[11px] font-semibold text-blue-300 sm:text-xs"
               >
                 {formatVES(calculateCatalogBsPrice(currentPrice, usdtRate)!)}
               </span>
             ) : (
               <span
                 data-testid="catalog-price-bs-updating"
-                className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300 border border-amber-500/25"
+                className="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 sm:px-2 sm:text-[11px]"
                 title="Tasa de cambio no disponible o en actualización"
               >
                 Precio en Bs en actualización
@@ -383,10 +396,11 @@ function CatalogProductCard({
             data-advisor={advisor.name}
             data-wa-number={advisor.waNumber}
             onClick={onWhatsAppClick}
-            className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap"
+            className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap sm:min-h-[44px] sm:gap-2 sm:px-4 sm:py-2 sm:text-sm"
           >
-            <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            Comprar por WhatsApp
+            <MessageCircle className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+            <span className="sm:hidden">Comprar</span>
+            <span className="hidden sm:inline">Comprar por WhatsApp</span>
           </a>
         </div>
       </div>
@@ -416,7 +430,7 @@ function CatalogTransitCard({
   return (
     <article
       data-testid={`transit-card-${card.key}`}
-      className="flex w-full min-w-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#0D1526] transition-transform duration-150 hover:-translate-y-0.5 hover:border-amber-500/40"
+      className={`flex ${SWIMLANE_CARD_SIZE_CLASSES} flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#0D1526] transition-transform duration-150 hover:-translate-y-0.5 hover:border-amber-500/40`}
     >
       <ProductImageGallery
         images={card.images}
@@ -427,23 +441,23 @@ function CatalogTransitCard({
         isTransit
       />
 
-      <div className="flex flex-1 flex-col justify-between p-4 pt-2.5 space-y-3">
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-amber-300">
-            <span className="inline-flex items-center gap-1 truncate">
+      <div className="flex flex-1 flex-col justify-between space-y-2 p-2.5 sm:space-y-3 sm:p-4 sm:pt-2.5">
+        <div className="space-y-1.5 sm:space-y-2">
+          <div className="flex items-center justify-between gap-1.5 text-[10px] font-medium text-amber-300 sm:gap-2 sm:text-[11px]">
+            <span className="inline-flex min-w-0 items-center gap-1 truncate">
               <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
-              En camino · {card.shippingType}
+              <span className="truncate">En camino · {card.shippingType}</span>
             </span>
-            <span className="font-mono-num text-slate-400 shrink-0">
+            <span className="font-mono-num shrink-0 text-slate-400">
               {card.totalIncomingUnits} uds
             </span>
           </div>
 
-          <h3 className="line-clamp-2 min-h-[2.75rem] font-display text-base font-semibold leading-snug text-white">
+          <h3 className="line-clamp-2 min-h-[2.25rem] font-display text-xs font-semibold leading-snug text-white sm:min-h-[2.75rem] sm:text-base">
             {card.model}
           </h3>
 
-          <p className="text-xs text-slate-400">
+          <p className="text-[11px] text-slate-400 sm:text-xs">
             {card.version} · Tallas:{' '}
             <strong className="font-mono-num text-slate-200">
               {card.sizes.map((s) => `${s.size} (${s.incomingQty})`).join(', ')}
@@ -453,43 +467,45 @@ function CatalogTransitCard({
           <div className="space-y-1">
             <p
               data-testid="transit-eta-days"
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-300"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 sm:gap-1.5 sm:text-xs"
             >
-              <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <Clock className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
               {card.estimatedArrivalLabel}
             </p>
             {(card.estimatedArrivalDate || card.entryDate) && (
-              <p className="flex items-center gap-1.5 text-[11px] text-blue-300">
+              <p className="flex items-center gap-1 text-[10px] text-blue-300 sm:gap-1.5 sm:text-[11px]">
                 <Calendar className="h-3 w-3 shrink-0" aria-hidden="true" />
                 {card.estimatedArrivalDate
-                  ? `Llegada estimada: ${card.estimatedArrivalDate}`
-                  : `Despacho registrado: ${card.entryDate}`}
+                  ? `Llegada: ${card.estimatedArrivalDate}`
+                  : `Despacho: ${card.entryDate}`}
               </p>
             )}
           </div>
         </div>
 
-        <div className="space-y-3 border-t border-slate-800/80 pt-3">
+        <div className="space-y-2 border-t border-slate-800/80 pt-2 sm:space-y-3 sm:pt-3">
           {card.salePrice ? (
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-1.5 gap-y-0.5 sm:gap-2">
               <span
                 data-testid="transit-price-usd"
-                className="font-mono-num text-lg font-bold text-white"
+                className="font-mono-num text-base font-bold text-white sm:text-lg"
               >
                 {formatUSD(card.salePrice)}{' '}
-                <span className="text-xs font-semibold text-slate-400">USDT</span>
+                <span className="text-[10px] font-semibold text-slate-400 sm:text-xs">
+                  USDT
+                </span>
               </span>
               {calculateCatalogBsPrice(card.salePrice, usdtRate) !== null ? (
                 <span
                   data-testid="transit-price-bs"
-                  className="font-mono-num text-xs font-semibold text-blue-300"
+                  className="font-mono-num text-[11px] font-semibold text-blue-300 sm:text-xs"
                 >
                   {formatVES(calculateCatalogBsPrice(card.salePrice, usdtRate)!)}
                 </span>
               ) : (
                 <span
                   data-testid="transit-price-bs-updating"
-                  className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300 border border-amber-500/25"
+                  className="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 sm:px-2 sm:text-[11px]"
                   title="Tasa de cambio no disponible o en actualización"
                 >
                   Precio en Bs en actualización
@@ -497,7 +513,9 @@ function CatalogTransitCard({
               )}
             </div>
           ) : (
-            <p className="text-xs text-slate-400">Precio referencial al llegar</p>
+            <p className="text-[11px] text-slate-400 sm:text-xs">
+              Precio referencial al llegar
+            </p>
           )}
 
           <a
@@ -508,14 +526,125 @@ function CatalogTransitCard({
             data-advisor={advisor.name}
             data-wa-number={advisor.waNumber}
             onClick={onWhatsAppClick}
-            className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-amber-500/45 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-200 transition-colors hover:bg-amber-500/25 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap"
+            className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-lg border border-amber-500/45 bg-amber-500/15 px-2.5 py-1.5 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/25 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap sm:min-h-[44px] sm:gap-2 sm:px-4 sm:py-2 sm:text-sm"
           >
-            <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            Apartar por WhatsApp
+            <MessageCircle className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+            <span className="sm:hidden">Apartar</span>
+            <span className="hidden sm:inline">Apartar por WhatsApp</span>
           </a>
         </div>
       </div>
     </article>
+  );
+}
+
+function SwimlaneSection({
+  headingId,
+  testId,
+  icon,
+  title,
+  subtitle,
+  itemCount,
+  className = '',
+  emptyState,
+  children,
+}: {
+  headingId: string;
+  testId: string;
+  icon?: ReactNode;
+  title: string;
+  subtitle: ReactNode;
+  itemCount: number;
+  className?: string;
+  emptyState?: ReactNode;
+  children: ReactNode;
+}) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(itemCount > 2);
+
+  const syncScrollBounds = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    syncScrollBounds();
+    const handleResize = () => syncScrollBounds();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [itemCount, syncScrollBounds]);
+
+  const handleStepScroll = (direction: -1 | 1) => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const step = Math.max(260, Math.round(el.clientWidth * 0.78));
+    el.scrollBy({ left: direction * step, behavior: 'smooth' });
+  };
+
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid={testId}
+      className={`w-full max-w-full min-w-0 space-y-3 ${className}`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {icon}
+          <div className="min-w-0">
+            <h2
+              id={headingId}
+              className="truncate font-display text-lg font-bold tracking-tight text-white sm:text-xl"
+            >
+              {title}
+            </h2>
+            <p className="text-xs text-slate-400">{subtitle}</p>
+          </div>
+        </div>
+
+        {itemCount > 2 && (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap sm:hidden">
+              Desliza →
+            </span>
+            <div className="hidden items-center gap-1.5 sm:flex">
+              <button
+                type="button"
+                onClick={() => handleStepScroll(-1)}
+                disabled={!canScrollLeft}
+                aria-label={`Desplazar ${title} a la izquierda`}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-800 bg-[#0D1526] text-slate-300 transition-colors hover:border-slate-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStepScroll(1)}
+                disabled={!canScrollRight}
+                aria-label={`Desplazar ${title} a la derecha`}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-800 bg-[#0D1526] text-slate-300 transition-colors hover:border-slate-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {itemCount === 0 && emptyState ? (
+        emptyState
+      ) : (
+        <div
+          ref={scrollerRef}
+          onScroll={syncScrollBounds}
+          className="no-scrollbar flex flex-nowrap gap-3 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-2 touch-pan-x touch-pan-y sm:gap-4"
+        >
+          {children}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -531,44 +660,32 @@ function TeamProductSection({
   onWhatsAppClick: () => void;
 }) {
   return (
-    <section
-      aria-labelledby={`team-row-${group.team}`}
-      data-testid={`catalog-team-row-${group.team}`}
-      className="w-full max-w-full min-w-0 space-y-3"
+    <SwimlaneSection
+      headingId={`team-row-${group.team}`}
+      testId={`catalog-team-row-${group.team}`}
+      icon={<TeamCrest team={group.team} className="h-8 w-8 shrink-0" />}
+      title={group.team}
+      subtitle={
+        <>
+          {group.products.length}{' '}
+          {group.products.length === 1 ? 'modelo' : 'modelos'} ·{' '}
+          <span className="font-mono-num text-slate-300">
+            {group.totalUnits} disponibles
+          </span>
+        </>
+      }
+      itemCount={group.products.length}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <TeamCrest team={group.team} className="h-8 w-8 shrink-0" />
-          <div className="min-w-0">
-            <h2
-              id={`team-row-${group.team}`}
-              className="truncate font-display text-lg font-bold tracking-tight text-white sm:text-xl"
-            >
-              {group.team}
-            </h2>
-            <p className="text-xs text-slate-400">
-              {group.products.length}{' '}
-              {group.products.length === 1 ? 'modelo' : 'modelos'} ·{' '}
-              <span className="font-mono-num text-slate-300">
-                {group.totalUnits} disponibles
-              </span>
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid w-full min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {group.products.map((product) => (
-          <CatalogProductCard
-            key={product.key}
-            product={product}
-            usdtRate={usdtRate}
-            waTurnIndex={waTurnIndex}
-            onWhatsAppClick={onWhatsAppClick}
-          />
-        ))}
-      </div>
-    </section>
+      {group.products.map((product) => (
+        <CatalogProductCard
+          key={product.key}
+          product={product}
+          usdtRate={usdtRate}
+          waTurnIndex={waTurnIndex}
+          onWhatsAppClick={onWhatsAppClick}
+        />
+      ))}
+    </SwimlaneSection>
   );
 }
 
@@ -624,6 +741,27 @@ export function PublicCatalogView({
       ),
     [searchQuery, sizeFilter, teamGroups, versionFilter],
   );
+
+  const { individualGroups, otherTeamsProducts, otherTeamsTotalUnits } = useMemo(() => {
+    const individual: PublicCatalogTeamGroup[] = [];
+    const otherProducts: PublicCatalogProduct[] = [];
+    let otherUnits = 0;
+
+    for (const group of filteredGroups) {
+      if (isPriorityCatalogTeam(group.team) || group.products.length >= 3) {
+        individual.push(group);
+      } else {
+        otherProducts.push(...group.products);
+        otherUnits += group.totalUnits;
+      }
+    }
+
+    return {
+      individualGroups: individual,
+      otherTeamsProducts: otherProducts,
+      otherTeamsTotalUnits: otherUnits,
+    };
+  }, [filteredGroups]);
 
   const filteredTransitCards = useMemo(
     () =>
@@ -865,7 +1003,7 @@ export function PublicCatalogView({
             </div>
           </section>
 
-          {/* Secciones por Equipo (Grid responsivo 1 col móvil, 2–4 cols desktop) */}
+          {/* Secciones por Equipo: carruseles horizontales apilados verticalmente */}
           {filteredGroups.length === 0 ? (
             <section className="w-full max-w-full rounded-xl border border-slate-800 bg-[#0D1526] p-8 text-center space-y-3">
               <p className="text-base font-semibold text-white">
@@ -893,8 +1031,8 @@ export function PublicCatalogView({
               )}
             </section>
           ) : (
-            <div className="w-full max-w-full min-w-0 space-y-9">
-              {filteredGroups.map((group) => (
+            <div className="w-full max-w-full min-w-0 space-y-7 sm:space-y-9">
+              {individualGroups.map((group) => (
                 <TeamProductSection
                   key={group.team}
                   group={group}
@@ -903,47 +1041,71 @@ export function PublicCatalogView({
                   onWhatsAppClick={handleAdvanceWhatsAppTurn}
                 />
               ))}
+
+              {otherTeamsProducts.length > 0 && (
+                <SwimlaneSection
+                  headingId="team-row-otros-equipos"
+                  testId="catalog-team-row-otros"
+                  icon={
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-blue-500/40 bg-blue-500/15 text-blue-300"
+                      aria-hidden="true"
+                    >
+                      <Shield className="h-4 w-4" />
+                    </div>
+                  }
+                  title="Otros Equipos y Selecciones"
+                  subtitle={
+                    <>
+                      {otherTeamsProducts.length}{' '}
+                      {otherTeamsProducts.length === 1 ? 'modelo' : 'modelos'} ·{' '}
+                      <span className="font-mono-num text-slate-300">
+                        {otherTeamsTotalUnits} disponibles
+                      </span>
+                    </>
+                  }
+                  itemCount={otherTeamsProducts.length}
+                >
+                  {otherTeamsProducts.map((product) => (
+                    <CatalogProductCard
+                      key={product.key}
+                      product={product}
+                      usdtRate={usdtRate}
+                      waTurnIndex={waTurnIndex}
+                      onWhatsAppClick={handleAdvanceWhatsAppTurn}
+                    />
+                  ))}
+                </SwimlaneSection>
+              )}
             </div>
           )}
 
           {/* Sección separada: Próximamente / En Camino (Lotes en Tránsito) */}
-          <section
-            aria-labelledby="upcoming-transit-heading"
-            data-testid="catalog-upcoming-section"
-            className="w-full max-w-full min-w-0 space-y-4 border-t border-slate-800/90 pt-8"
-          >
-            <div>
-              <h2
-                id="upcoming-transit-heading"
-                className="font-display text-xl font-bold tracking-tight text-white sm:text-2xl"
-              >
-                Próximamente / En Camino
-              </h2>
-              <p className="mt-0.5 text-xs sm:text-sm text-slate-400">
-                Modelos de próximos envíos internacionales listos para apartar por WhatsApp antes de que lleguen a bodega.
-              </p>
-            </div>
-
-            {filteredTransitCards.length === 0 ? (
+          <SwimlaneSection
+            headingId="upcoming-transit-heading"
+            testId="catalog-upcoming-section"
+            title="Próximamente / En Camino"
+            subtitle="Modelos de próximos envíos internacionales listos para apartar por WhatsApp antes de que lleguen a bodega."
+            itemCount={filteredTransitCards.length}
+            className="border-t border-slate-800/90 pt-8"
+            emptyState={
               <div className="rounded-xl border border-dashed border-slate-800 bg-[#0D1526]/60 p-6 text-center text-xs text-slate-400">
                 {transitCards.length === 0
                   ? 'No hay envíos en tránsito pendientes por llegar en este momento.'
                   : 'Ningún modelo en camino coincide con el filtro actual.'}
               </div>
-            ) : (
-              <div className="grid w-full min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {filteredTransitCards.map((card) => (
-                  <CatalogTransitCard
-                    key={card.key}
-                    card={card}
-                    usdtRate={usdtRate}
-                    waTurnIndex={waTurnIndex}
-                    onWhatsAppClick={handleAdvanceWhatsAppTurn}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
+            }
+          >
+            {filteredTransitCards.map((card) => (
+              <CatalogTransitCard
+                key={card.key}
+                card={card}
+                usdtRate={usdtRate}
+                waTurnIndex={waTurnIndex}
+                onWhatsAppClick={handleAdvanceWhatsAppTurn}
+              />
+            ))}
+          </SwimlaneSection>
 
           <footer className="border-t border-slate-800/80 pt-6 pb-8 text-center text-xs text-slate-500">
             X4SPORT · Indumentaria Deportiva · Guacara, Carabobo, Venezuela
