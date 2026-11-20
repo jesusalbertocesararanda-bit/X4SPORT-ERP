@@ -10,6 +10,7 @@ import {
   Shield,
   ShoppingBag,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import type { AppState, JerseySize, JerseyVersion, TeamCategory } from '../types/erp';
 import {
@@ -91,8 +92,17 @@ function ProductImageGallery({
   const [dragOffsetPx, setDragOffsetPx] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [slideStages, setSlideStages] = useState<Record<number, SlideLoadStage>>({});
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [zoomOrigin, setZoomOrigin] = useState<{ x: number; y: number }>({
+    x: 50,
+    y: 50,
+  });
 
+  const galleryRef = useRef<HTMLDivElement | null>(null);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const tapStartRef = useRef<{ x: number; y: number } | null>(null);
+  const tapMovedRef = useRef(false);
+  const lastTouchTimeRef = useRef(0);
   const safeIndex = clampCatalogCarouselIndex(activeIndex, total);
 
   const resolveSlideSrc = (index: number, baseUrl: string): string | null => {
@@ -103,6 +113,42 @@ function ProductImageGallery({
     }
     return normalizarUrlImagen(baseUrl);
   };
+
+  const currentSrc =
+    total > 0 && normalizedImages[safeIndex]
+      ? resolveSlideSrc(safeIndex, normalizedImages[safeIndex])
+      : null;
+
+  useEffect(() => {
+    setIsZoomed(false);
+  }, [model, version, photoUrl, safeIndex]);
+
+  useEffect(() => {
+    if (!isZoomed) return;
+    const handleScrollReset = () => {
+      setIsZoomed(false);
+    };
+    window.addEventListener('scroll', handleScrollReset, {
+      passive: true,
+      capture: true,
+    });
+    return () => {
+      window.removeEventListener('scroll', handleScrollReset, {
+        capture: true,
+      });
+    };
+  }, [isZoomed]);
+
+  const computeOriginFromPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      const rect = galleryRef.current?.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+      const x = Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+      const y = Math.min(100, Math.max(0, ((clientY - rect.top) / rect.height) * 100));
+      return { x, y };
+    },
+    [],
+  );
 
   const handleSlideError = (index: number, baseUrl: string) => {
     setSlideStages((prev) => {
@@ -118,6 +164,7 @@ function ProductImageGallery({
   };
 
   const goToIndex = (nextIdx: number) => {
+    setIsZoomed(false);
     setActiveIndex(clampCatalogCarouselIndex(nextIdx, total));
   };
 
@@ -163,20 +210,102 @@ function ProductImageGallery({
 
   return (
     <div
+      ref={galleryRef}
       data-testid="product-image-gallery"
+      data-zoomed={isZoomed ? 'true' : 'false'}
       className={`relative aspect-[4/5] w-full overflow-hidden bg-[#070D19] select-none ${
-        total > 1 ? 'touch-pan-y' : 'touch-pan-x touch-pan-y'
+        isZoomed && currentSrc
+          ? 'touch-none cursor-zoom-out'
+          : `${total > 1 ? 'touch-pan-y' : 'touch-pan-x touch-pan-y'} ${
+              currentSrc ? 'cursor-zoom-in' : ''
+            }`
       }`}
+      onMouseMove={(e) => {
+        if (!currentSrc) return;
+        if (Date.now() - lastTouchTimeRef.current < 600) return;
+        const origin = computeOriginFromPoint(e.clientX, e.clientY);
+        if (origin) {
+          setZoomOrigin(origin);
+          if (!isZoomed) setIsZoomed(true);
+        }
+      }}
+      onMouseLeave={() => {
+        if (Date.now() - lastTouchTimeRef.current < 600) return;
+        setIsZoomed(false);
+      }}
       onTouchStart={(e) => {
         const t = e.touches[0];
-        if (t) beginSwipe(t.clientX, t.clientY);
+        if (!t) return;
+        lastTouchTimeRef.current = Date.now();
+        tapStartRef.current = { x: t.clientX, y: t.clientY };
+        tapMovedRef.current = false;
+        if (isZoomed && currentSrc) {
+          e.stopPropagation();
+          return;
+        }
+        beginSwipe(t.clientX, t.clientY);
       }}
       onTouchMove={(e) => {
         const t = e.touches[0];
-        if (t) moveSwipe(t.clientX, t.clientY);
+        if (!t) return;
+        lastTouchTimeRef.current = Date.now();
+        if (tapStartRef.current) {
+          const dist = Math.hypot(
+            t.clientX - tapStartRef.current.x,
+            t.clientY - tapStartRef.current.y,
+          );
+          if (dist >= 8) {
+            tapMovedRef.current = true;
+          }
+        }
+        if (isZoomed && currentSrc) {
+          e.stopPropagation();
+          const origin = computeOriginFromPoint(t.clientX, t.clientY);
+          if (origin) setZoomOrigin(origin);
+          return;
+        }
+        moveSwipe(t.clientX, t.clientY);
       }}
-      onTouchEnd={endSwipe}
-      onTouchCancel={endSwipe}
+      onTouchEnd={(e) => {
+        lastTouchTimeRef.current = Date.now();
+        const isCleanTap = Boolean(tapStartRef.current && !tapMovedRef.current);
+        const startPt = tapStartRef.current;
+        tapStartRef.current = null;
+        tapMovedRef.current = false;
+
+        if (isZoomed && currentSrc) {
+          e.stopPropagation();
+          if (isCleanTap) {
+            setIsZoomed(false);
+          }
+          return;
+        }
+
+        endSwipe();
+
+        if (isCleanTap && currentSrc) {
+          const changed = e.changedTouches[0];
+          const px = changed?.clientX ?? startPt?.x;
+          const py = changed?.clientY ?? startPt?.y;
+          if (px !== undefined && py !== undefined) {
+            const origin = computeOriginFromPoint(px, py);
+            if (origin) setZoomOrigin(origin);
+          }
+          setIsZoomed(true);
+        }
+      }}
+      onTouchCancel={() => {
+        tapStartRef.current = null;
+        tapMovedRef.current = false;
+        endSwipe();
+      }}
+      onClick={(e) => {
+        if (!currentSrc) return;
+        if (Date.now() - lastTouchTimeRef.current < 600) return;
+        const origin = computeOriginFromPoint(e.clientX, e.clientY);
+        if (origin) setZoomOrigin(origin);
+        setIsZoomed((prev) => !prev);
+      }}
     >
       {total === 0 ? (
         <JerseyShowcaseFallback team={team} model={model} version={version} />
@@ -191,6 +320,9 @@ function ProductImageGallery({
         >
           {normalizedImages.map((imgUrl, idx) => {
             const resolvedSrc = resolveSlideSrc(idx, imgUrl);
+            const isSlideZoomed = Boolean(
+              isZoomed && idx === safeIndex && resolvedSrc,
+            );
             return (
               <div
                 key={`${imgUrl}-${idx}`}
@@ -204,9 +336,14 @@ function ProductImageGallery({
                     loading="lazy"
                     draggable={false}
                     onError={() => handleSlideError(idx, imgUrl)}
-                    className={`h-full w-full object-contain p-1.5 sm:p-2 ${
-                      isTransit ? 'opacity-90' : ''
-                    }`}
+                    style={{
+                      transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                    }}
+                    className={`h-full w-full object-contain p-1.5 sm:p-2 transition-transform ease-out ${
+                      isSlideZoomed
+                        ? 'duration-75 scale-[2.35]'
+                        : 'duration-200 scale-100'
+                    } ${isTransit ? 'opacity-90' : ''}`}
                   />
                 ) : (
                   <JerseyShowcaseFallback
@@ -231,12 +368,55 @@ function ProductImageGallery({
         </span>
       )}
 
+      {/* Indicador / botón discreto de lupa en la esquina inferior izquierda (solo fotos reales) */}
+      {currentSrc && (
+        <button
+          type="button"
+          data-testid="gallery-zoom-btn"
+          aria-label={isZoomed ? 'Desactivar lupa' : 'Activar lupa'}
+          aria-pressed={isZoomed}
+          onTouchStart={(e) => {
+            e.stopPropagation();
+            lastTouchTimeRef.current = Date.now();
+          }}
+          onTouchEnd={(e) => {
+            e.stopPropagation();
+            lastTouchTimeRef.current = Date.now();
+            if (isZoomed) {
+              setIsZoomed(false);
+            } else {
+              setZoomOrigin({ x: 50, y: 50 });
+              setIsZoomed(true);
+            }
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (Date.now() - lastTouchTimeRef.current < 600) return;
+            if (isZoomed) {
+              setIsZoomed(false);
+            } else {
+              setZoomOrigin({ x: 50, y: 50 });
+              setIsZoomed(true);
+            }
+          }}
+          className={`absolute bottom-2 left-2 z-20 inline-flex items-center justify-center rounded-full p-1.5 backdrop-blur-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+            isZoomed
+              ? 'bg-blue-600/90 border border-blue-400 text-white'
+              : 'bg-slate-950/75 border border-slate-700/80 text-slate-200 hover:border-slate-500 hover:text-white'
+          }`}
+        >
+          <ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
+
       {/* Controles prev / next estrictamente limitados a [0, N-1] */}
       {total > 1 && (
         <>
           {safeIndex > 0 && (
             <button
               type="button"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchEnd={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 goToIndex(safeIndex - 1);
@@ -250,6 +430,8 @@ function ProductImageGallery({
           {safeIndex < total - 1 && (
             <button
               type="button"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchEnd={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 goToIndex(safeIndex + 1);
