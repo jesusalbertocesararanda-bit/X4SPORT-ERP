@@ -16,7 +16,13 @@
   body {
     background-color: #060b16;
     color: #f1f5f9;
-    overflow-x: hidden;
+  }
+
+  html,
+  body,
+  #root {
+    max-width: 100vw;
+    overflow-x: clip;
   }
 }
 

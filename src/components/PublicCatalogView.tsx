@@ -54,7 +54,18 @@ const VERSION_FILTERS: VersionFilter[] = ['Todas', 'Player', 'Fans', 'Retro'];
 type SlideLoadStage = 'primary' | 'thumbnail' | 'failed';
 
 const SWIMLANE_CARD_SIZE_CLASSES =
-  'w-[46.5%] min-w-[162px] max-w-[210px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
+  'w-[44vw] min-w-[156px] max-w-[210px] shrink-0 snap-start sm:w-[225px] sm:max-w-none lg:w-[255px]';
+
+interface CatalogLightboxPayload {
+  model: string;
+  version: JerseyVersion;
+  team: TeamCategory;
+  images: string[];
+  initialIndex: number;
+  size: JerseySize;
+  priceUsd?: number;
+  isTransit: boolean;
+}
 
 function isPriorityCatalogTeam(team: TeamCategory): boolean {
   const normalized = team.trim().toLowerCase();
@@ -68,6 +79,7 @@ function ProductImageGallery({
   model,
   version,
   isTransit = false,
+  onOpenLightbox,
 }: {
   images?: string[];
   photoUrl?: string;
@@ -75,6 +87,7 @@ function ProductImageGallery({
   model: string;
   version: JerseyVersion;
   isTransit?: boolean;
+  onOpenLightbox?: (normalizedImages: string[], activeIndex: number) => void;
 }) {
   const normalizedImages = useMemo(() => {
     const rawList =
@@ -93,6 +106,8 @@ function ProductImageGallery({
   const [slideStages, setSlideStages] = useState<Record<number, SlideLoadStage>>({});
 
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const tapStartRef = useRef<{ x: number; y: number } | null>(null);
+  const didDragRef = useRef(false);
   const safeIndex = clampCatalogCarouselIndex(activeIndex, total);
 
   const resolveSlideSrc = (index: number, baseUrl: string): string | null => {
@@ -122,6 +137,8 @@ function ProductImageGallery({
   };
 
   const beginSwipe = (clientX: number, clientY: number) => {
+    tapStartRef.current = { x: clientX, y: clientY };
+    didDragRef.current = false;
     if (total <= 1) {
       swipeStartRef.current = null;
       return;
@@ -131,6 +148,15 @@ function ProductImageGallery({
   };
 
   const moveSwipe = (clientX: number, clientY: number) => {
+    if (tapStartRef.current) {
+      const dist = Math.hypot(
+        clientX - tapStartRef.current.x,
+        clientY - tapStartRef.current.y,
+      );
+      if (dist > 8) {
+        didDragRef.current = true;
+      }
+    }
     if (!swipeStartRef.current || total <= 1) return;
     const dx = clientX - swipeStartRef.current.x;
     const dy = clientY - swipeStartRef.current.y;
@@ -143,6 +169,7 @@ function ProductImageGallery({
   };
 
   const endSwipe = () => {
+    tapStartRef.current = null;
     if (!swipeStartRef.current) {
       setIsDragging(false);
       setDragOffsetPx(0);
@@ -161,6 +188,16 @@ function ProductImageGallery({
     setDragOffsetPx(0);
   };
 
+  const handleTriggerLightbox = () => {
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
+    if (total > 0 && onOpenLightbox) {
+      onOpenLightbox(normalizedImages, safeIndex);
+    }
+  };
+
   return (
     <div
       data-testid="product-image-gallery"
@@ -177,6 +214,29 @@ function ProductImageGallery({
       }}
       onTouchEnd={endSwipe}
       onTouchCancel={endSwipe}
+      onPointerDown={(e) => {
+        if (e.pointerType === 'mouse') {
+          tapStartRef.current = { x: e.clientX, y: e.clientY };
+          didDragRef.current = false;
+        }
+      }}
+      onPointerMove={(e) => {
+        if (e.pointerType === 'mouse' && tapStartRef.current) {
+          if (
+            Math.hypot(
+              e.clientX - tapStartRef.current.x,
+              e.clientY - tapStartRef.current.y,
+            ) > 8
+          ) {
+            didDragRef.current = true;
+          }
+        }
+      }}
+      onPointerUp={(e) => {
+        if (e.pointerType === 'mouse') {
+          tapStartRef.current = null;
+        }
+      }}
     >
       {total === 0 ? (
         <JerseyShowcaseFallback team={team} model={model} version={version} />
@@ -197,17 +257,24 @@ function ProductImageGallery({
                 className="h-full w-full shrink-0 overflow-hidden bg-[#070D19]"
               >
                 {resolvedSrc ? (
-                  <img
-                    src={resolvedSrc}
-                    alt={`${model} (${version})${isTransit ? ' en camino' : ''} · foto ${idx + 1} de ${total}`}
-                    referrerPolicy="no-referrer"
-                    loading="lazy"
-                    draggable={false}
-                    onError={() => handleSlideError(idx, imgUrl)}
-                    className={`h-full w-full object-cover ${
-                      isTransit ? 'opacity-90' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={handleTriggerLightbox}
+                    aria-label={`Ampliar foto ${idx + 1} de ${model}`}
+                    className="flex h-full w-full cursor-zoom-in items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400"
+                  >
+                    <img
+                      src={resolvedSrc}
+                      alt={`${model} (${version})${isTransit ? ' en camino' : ''} · foto ${idx + 1} de ${total}`}
+                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      draggable={false}
+                      onError={() => handleSlideError(idx, imgUrl)}
+                      className={`h-full w-full object-contain p-1.5 sm:p-2 ${
+                        isTransit ? 'opacity-90' : ''
+                      }`}
+                    />
+                  </button>
                 ) : (
                   <JerseyShowcaseFallback
                     team={team}
@@ -237,9 +304,12 @@ function ProductImageGallery({
           {safeIndex > 0 && (
             <button
               type="button"
-              onClick={() => goToIndex(safeIndex - 1)}
+              onClick={(e) => {
+                e.stopPropagation();
+                goToIndex(safeIndex - 1);
+              }}
               aria-label="Foto anterior"
-              className="absolute left-1.5 top-1/2 z-10 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:left-2 sm:h-9 sm:w-9"
+              className="absolute left-1.5 top-1/2 z-20 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:left-2 sm:h-9 sm:w-9"
             >
               <ChevronLeft className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             </button>
@@ -247,9 +317,12 @@ function ProductImageGallery({
           {safeIndex < total - 1 && (
             <button
               type="button"
-              onClick={() => goToIndex(safeIndex + 1)}
+              onClick={(e) => {
+                e.stopPropagation();
+                goToIndex(safeIndex + 1);
+              }}
               aria-label="Siguiente foto"
-              className="absolute right-1.5 top-1/2 z-10 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:right-2 sm:h-9 sm:w-9"
+              className="absolute right-1.5 top-1/2 z-20 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition-colors hover:bg-black/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 sm:right-2 sm:h-9 sm:w-9"
             >
               <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             </button>
@@ -258,7 +331,7 @@ function ProductImageGallery({
       )}
 
       <div
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#0D1526] to-transparent sm:h-12"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#0D1526]/70 to-transparent sm:h-8"
         aria-hidden="true"
       />
     </div>
@@ -270,11 +343,13 @@ function CatalogProductCard({
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
+  onOpenLightbox,
 }: {
   product: PublicCatalogProduct;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
+  onOpenLightbox: (payload: CatalogLightboxPayload) => void;
 }) {
   const [selectedSize, setSelectedSize] = useState<JerseySize>(
     product.sizes[0]?.size ?? 'M',
@@ -304,6 +379,18 @@ function CatalogProductCard({
         team={product.team}
         model={product.model}
         version={product.version}
+        onOpenLightbox={(imgs, idx) =>
+          onOpenLightbox({
+            model: product.model,
+            version: product.version,
+            team: product.team,
+            images: imgs,
+            initialIndex: idx,
+            size: currentSizeLabel,
+            priceUsd: currentPrice,
+            isTransit: false,
+          })
+        }
       />
 
       {/* Cuerpo */}
@@ -413,11 +500,13 @@ function CatalogTransitCard({
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
+  onOpenLightbox,
 }: {
   card: PublicTransitCard;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
+  onOpenLightbox: (payload: CatalogLightboxPayload) => void;
 }) {
   const firstSize = card.sizes[0]?.size ?? 'M';
   const { advisor, href } = buildCatalogWhatsAppHref(waTurnIndex, {
@@ -439,6 +528,18 @@ function CatalogTransitCard({
         model={card.model}
         version={card.version}
         isTransit
+        onOpenLightbox={(imgs, idx) =>
+          onOpenLightbox({
+            model: card.model,
+            version: card.version,
+            team: card.team,
+            images: imgs,
+            initialIndex: idx,
+            size: firstSize,
+            priceUsd: card.salePrice,
+            isTransit: true,
+          })
+        }
       />
 
       <div className="flex flex-1 flex-col justify-between space-y-2 p-2.5 sm:space-y-3 sm:p-4 sm:pt-2.5">
@@ -588,7 +689,7 @@ function SwimlaneSection({
     <section
       aria-labelledby={headingId}
       data-testid={testId}
-      className={`w-full max-w-full min-w-0 space-y-3 ${className}`}
+      className={`w-full max-w-full min-w-0 overflow-hidden space-y-3 ${className}`}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
@@ -639,7 +740,7 @@ function SwimlaneSection({
         <div
           ref={scrollerRef}
           onScroll={syncScrollBounds}
-          className="no-scrollbar flex flex-nowrap gap-3 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-2 touch-pan-x touch-pan-y sm:gap-4"
+          className="no-scrollbar flex w-full max-w-full min-w-0 flex-nowrap gap-3 overflow-x-auto overscroll-x-contain touch-pan-x touch-pan-y snap-x snap-mandatory scroll-smooth pb-2 sm:gap-4"
         >
           {children}
         </div>
@@ -648,16 +749,367 @@ function SwimlaneSection({
   );
 }
 
+function CatalogLightboxModal({
+  payload,
+  usdtRate,
+  waTurnIndex,
+  onWhatsAppClick,
+  onClose,
+}: {
+  payload: CatalogLightboxPayload;
+  usdtRate: number;
+  waTurnIndex: number;
+  onWhatsAppClick: () => void;
+  onClose: () => void;
+}) {
+  const total = payload.images.length;
+  const [activeIndex, setActiveIndex] = useState(() =>
+    clampCatalogCarouselIndex(payload.initialIndex, total),
+  );
+  const [dragOffsetPx, setDragOffsetPx] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [slideStages, setSlideStages] = useState<Record<number, SlideLoadStage>>({});
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const safeIndex = clampCatalogCarouselIndex(activeIndex, total);
+
+  useEffect(() => {
+    setActiveIndex(clampCatalogCarouselIndex(payload.initialIndex, total));
+    setSlideStages({});
+    setDragOffsetPx(0);
+  }, [payload, total]);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'ArrowLeft' && total > 1) {
+        setActiveIndex((prev) => clampCatalogCarouselIndex(prev - 1, total));
+      } else if (e.key === 'ArrowRight' && total > 1) {
+        setActiveIndex((prev) => clampCatalogCarouselIndex(prev + 1, total));
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, total]);
+
+  const resolveSlideSrc = (index: number, baseUrl: string): string | null => {
+    const stage = slideStages[index] ?? 'primary';
+    if (stage === 'failed') return null;
+    if (stage === 'thumbnail') {
+      return obtenerFallbackUrlImagen(baseUrl);
+    }
+    return normalizarUrlImagen(baseUrl);
+  };
+
+  const handleSlideError = (index: number, baseUrl: string) => {
+    setSlideStages((prev) => {
+      const current = prev[index] ?? 'primary';
+      if (current === 'primary') {
+        const thumbFallback = obtenerFallbackUrlImagen(baseUrl);
+        if (thumbFallback) {
+          return { ...prev, [index]: 'thumbnail' };
+        }
+      }
+      return { ...prev, [index]: 'failed' };
+    });
+  };
+
+  const goToIndex = (nextIdx: number) => {
+    setActiveIndex(clampCatalogCarouselIndex(nextIdx, total));
+  };
+
+  const beginSwipe = (clientX: number, clientY: number) => {
+    if (total <= 1) {
+      swipeStartRef.current = null;
+      return;
+    }
+    swipeStartRef.current = { x: clientX, y: clientY };
+    setIsDragging(true);
+  };
+
+  const moveSwipe = (clientX: number, clientY: number) => {
+    if (!swipeStartRef.current || total <= 1) return;
+    const dx = clientX - swipeStartRef.current.x;
+    const dy = clientY - swipeStartRef.current.y;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dragOffsetPx) < 4) {
+      return;
+    }
+    setDragOffsetPx(computeClampedSwipeOffset(dx, safeIndex, total));
+  };
+
+  const endSwipe = () => {
+    if (!swipeStartRef.current) {
+      setIsDragging(false);
+      setDragOffsetPx(0);
+      return;
+    }
+    if (total > 1) {
+      const threshold = 45;
+      if (dragOffsetPx <= -threshold && safeIndex < total - 1) {
+        goToIndex(safeIndex + 1);
+      } else if (dragOffsetPx >= threshold && safeIndex > 0) {
+        goToIndex(safeIndex - 1);
+      }
+    }
+    swipeStartRef.current = null;
+    setIsDragging(false);
+    setDragOffsetPx(0);
+  };
+
+  const { advisor, href } = buildCatalogWhatsAppHref(waTurnIndex, {
+    model: payload.model,
+    version: payload.version,
+    size: payload.size,
+    isTransit: payload.isTransit,
+  });
+
+  const bsPrice =
+    payload.priceUsd !== undefined
+      ? calculateCatalogBsPrice(payload.priceUsd, usdtRate)
+      : null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Vista ampliada de ${payload.model}`}
+      data-testid="catalog-photo-lightbox"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col justify-between bg-black/95 backdrop-blur-md"
+    >
+      {/* Barra superior del visor */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex items-center justify-between gap-3 border-b border-white/10 bg-black/60 px-4 py-3 sm:px-6"
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
+            <span className="truncate">
+              {payload.version} · {payload.team}
+            </span>
+            {total > 0 && (
+              <span
+                data-testid="lightbox-counter"
+                className="font-mono-num shrink-0 rounded bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white"
+              >
+                {safeIndex + 1} / {total}
+              </span>
+            )}
+          </div>
+          <h2 className="truncate font-display text-sm font-bold text-white sm:text-lg">
+            {payload.model}
+          </h2>
+        </div>
+
+        <button
+          type="button"
+          data-testid="lightbox-close-btn"
+          onClick={onClose}
+          aria-label="Cerrar visor"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        >
+          <X className="h-5 w-5" aria-hidden="true" />
+        </button>
+      </div>
+
+      {/* Escenario central con foto 100% completa + flechas + swipe */}
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 py-2 sm:px-10"
+        onTouchStart={(e) => {
+          const t = e.touches[0];
+          if (t) beginSwipe(t.clientX, t.clientY);
+        }}
+        onTouchMove={(e) => {
+          const t = e.touches[0];
+          if (t) moveSwipe(t.clientX, t.clientY);
+        }}
+        onTouchEnd={endSwipe}
+        onTouchCancel={endSwipe}
+      >
+        <div
+          className={`flex h-full w-full items-center ${
+            isDragging ? '' : 'transition-transform duration-200 ease-out'
+          }`}
+          style={{
+            transform: `translateX(calc(-${safeIndex * 100}% + ${dragOffsetPx}px))`,
+          }}
+        >
+          {payload.images.map((imgUrl, idx) => {
+            const resolvedSrc = resolveSlideSrc(idx, imgUrl);
+            return (
+              <div
+                key={`lb-${imgUrl}-${idx}`}
+                className="flex h-full w-full shrink-0 items-center justify-center"
+              >
+                {resolvedSrc ? (
+                  <img
+                    src={resolvedSrc}
+                    alt={`${payload.model} (${payload.version}) · foto ampliada ${idx + 1} de ${total}`}
+                    referrerPolicy="no-referrer"
+                    draggable={false}
+                    onClick={(e) => e.stopPropagation()}
+                    onError={() => handleSlideError(idx, imgUrl)}
+                    className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain select-none"
+                  />
+                ) : (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="h-72 w-60 overflow-hidden rounded-xl border border-slate-800"
+                  >
+                    <JerseyShowcaseFallback
+                      team={payload.team}
+                      model={payload.model}
+                      version={payload.version}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {total > 1 && (
+          <>
+            {safeIndex > 0 && (
+              <button
+                type="button"
+                data-testid="lightbox-prev-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToIndex(safeIndex - 1);
+                }}
+                aria-label="Foto anterior"
+                className="absolute left-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+              </button>
+            )}
+            {safeIndex < total - 1 && (
+              <button
+                type="button"
+                data-testid="lightbox-next-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToIndex(safeIndex + 1);
+                }}
+                aria-label="Siguiente foto"
+                className="absolute right-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white backdrop-blur-sm transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                <ChevronRight className="h-5 w-5" aria-hidden="true" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Miniaturas + Barra inferior con Precio y WhatsApp */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="border-t border-white/10 bg-[#060B16]/95 px-4 py-3 sm:px-6 space-y-2.5"
+      >
+        {total > 1 && (
+          <div className="no-scrollbar flex items-center justify-center gap-2 overflow-x-auto pb-1">
+            {payload.images.map((imgUrl, idx) => {
+              const thumbSrc = resolveSlideSrc(idx, imgUrl);
+              const isCurrent = idx === safeIndex;
+              return (
+                <button
+                  key={`thumb-${imgUrl}-${idx}`}
+                  type="button"
+                  onClick={() => goToIndex(idx)}
+                  aria-label={`Ver foto ${idx + 1}`}
+                  aria-current={isCurrent ? 'true' : undefined}
+                  className={`h-12 w-10 shrink-0 overflow-hidden rounded-md border-2 bg-[#0D1526] transition-all ${
+                    isCurrent
+                      ? 'border-blue-500 ring-2 ring-blue-400/50'
+                      : 'border-white/15 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  {thumbSrc ? (
+                    <img
+                      src={thumbSrc}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="h-full w-full object-contain p-0.5"
+                    />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            {payload.priceUsd !== undefined ? (
+              <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                <span className="font-mono-num text-lg font-bold text-white sm:text-xl">
+                  {formatUSD(payload.priceUsd)}{' '}
+                  <span className="text-xs font-semibold text-slate-400">
+                    USDT
+                  </span>
+                </span>
+                {bsPrice !== null ? (
+                  <span className="font-mono-num text-xs font-semibold text-blue-300 sm:text-sm">
+                    {formatVES(bsPrice)}
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-medium text-amber-300">
+                    Precio en Bs en actualización
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="text-xs text-slate-300">
+                Precio referencial al llegar · Talla {payload.size}
+              </span>
+            )}
+            <p className="text-[11px] text-slate-400">
+              Talla seleccionada: <strong className="text-slate-200">{payload.size}</strong>
+            </p>
+          </div>
+
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="lightbox-buy-btn"
+            data-advisor={advisor.name}
+            data-wa-number={advisor.waNumber}
+            onClick={onWhatsAppClick}
+            className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap sm:flex-initial"
+          >
+            <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>
+              {payload.isTransit ? 'Apartar por WhatsApp' : 'Comprar por WhatsApp'}
+            </span>
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TeamProductSection({
   group,
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
+  onOpenLightbox,
 }: {
   group: PublicCatalogTeamGroup;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
+  onOpenLightbox: (payload: CatalogLightboxPayload) => void;
 }) {
   return (
     <SwimlaneSection
@@ -683,6 +1135,7 @@ function TeamProductSection({
           usdtRate={usdtRate}
           waTurnIndex={waTurnIndex}
           onWhatsAppClick={onWhatsAppClick}
+          onOpenLightbox={onOpenLightbox}
         />
       ))}
     </SwimlaneSection>
@@ -698,6 +1151,7 @@ export function PublicCatalogView({
   const [versionFilter, setVersionFilter] = useState<VersionFilter>('Todas');
   const [sizeFilter, setSizeFilter] = useState<SizeFilter>('Todas');
   const [logoError, setLogoError] = useState(false);
+  const [lightboxPayload, setLightboxPayload] = useState<CatalogLightboxPayload | null>(null);
   const [waTurnIndex, setWaTurnIndex] = useState<number>(() =>
     getCurrentWhatsAppTurnIndex(),
   );
@@ -793,7 +1247,7 @@ export function PublicCatalogView({
   return (
     <div
       data-testid="public-catalog-storefront"
-      className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#060B16] text-slate-100"
+      className="min-h-screen w-full max-w-[100vw] overflow-x-clip bg-[#060B16] text-slate-100"
     >
       {/* Barra superior fija con Logo X4SPORT y Tasa vigente (compacta <15% móvil) */}
       <header className="sticky top-0 z-40 w-full max-w-full overflow-hidden border-b border-slate-800/90 bg-[#060B16]/95 backdrop-blur-md">
@@ -884,7 +1338,7 @@ export function PublicCatalogView({
           </div>
         </main>
       ) : (
-        <main className="mx-auto w-full max-w-7xl min-w-0 space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8">
+        <main className="mx-auto w-full max-w-7xl min-w-0 overflow-hidden space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8">
           {/* Hero compacto + Buscador Inteligente */}
           <section className="w-full max-w-full min-w-0 space-y-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0D172B] via-[#0B1222] to-[#080D19] p-4 sm:space-y-5 sm:p-7">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -1039,6 +1493,7 @@ export function PublicCatalogView({
                   usdtRate={usdtRate}
                   waTurnIndex={waTurnIndex}
                   onWhatsAppClick={handleAdvanceWhatsAppTurn}
+                  onOpenLightbox={setLightboxPayload}
                 />
               ))}
 
@@ -1073,6 +1528,7 @@ export function PublicCatalogView({
                       usdtRate={usdtRate}
                       waTurnIndex={waTurnIndex}
                       onWhatsAppClick={handleAdvanceWhatsAppTurn}
+                      onOpenLightbox={setLightboxPayload}
                     />
                   ))}
                 </SwimlaneSection>
@@ -1103,6 +1559,7 @@ export function PublicCatalogView({
                 usdtRate={usdtRate}
                 waTurnIndex={waTurnIndex}
                 onWhatsAppClick={handleAdvanceWhatsAppTurn}
+                onOpenLightbox={setLightboxPayload}
               />
             ))}
           </SwimlaneSection>
@@ -1111,6 +1568,16 @@ export function PublicCatalogView({
             X4SPORT · Indumentaria Deportiva · Guacara, Carabobo, Venezuela
           </footer>
         </main>
+      )}
+
+      {lightboxPayload && (
+        <CatalogLightboxModal
+          payload={lightboxPayload}
+          usdtRate={usdtRate}
+          waTurnIndex={waTurnIndex}
+          onWhatsAppClick={handleAdvanceWhatsAppTurn}
+          onClose={() => setLightboxPayload(null)}
+        />
       )}
     </div>
   );
