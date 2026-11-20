@@ -8,6 +8,7 @@ import {
   Download,
   FileSpreadsheet,
   Filter,
+  PackageCheck,
   RotateCcw,
   Search,
   ShoppingBag,
@@ -21,6 +22,7 @@ import {
   countActiveReportFilters,
   DEFAULT_REPORT_FILTERS,
   filterAdjustmentsReportRows,
+  filterAvailableStockReportRows,
   filterBulkImportsReportRows,
   filterCustomersReportRows,
   filterPurchasesReportRows,
@@ -189,6 +191,16 @@ const REPORT_TABS: ReportTabMeta[] = [
     totalUsdLabel: 'Volumen Importado (USDT)',
     totalUnitsLabel: 'Unidades Procesadas',
   },
+  {
+    id: 'inventario',
+    label: 'Stock Disponible',
+    shortLabel: 'Stock Disponible',
+    icon: PackageCheck,
+    description: 'Franelas disponibles en stock (> 0 uds) desglosadas por talla, PVP y valor FIFO.',
+    applicableFilters: ['search', 'size', 'version', 'amountMin', 'amountMax'],
+    totalUsdLabel: 'Valor Inventario FIFO (USDT)',
+    totalUnitsLabel: 'Total Disponible (uds)',
+  },
 ];
 
 const STANDARD_SIZES = ['S', 'M', 'L', 'XL', 'XXL'] as const;
@@ -237,7 +249,7 @@ export function ReportsView({ state }: ReportsViewProps) {
     };
   }, [state.customers, state.sales, state.receivables]);
 
-  // Filtered datasets for each of the 7 views
+  // Filtered datasets for each of the 8 views
   const salesResult = useMemo(
     () => filterSalesReportRows(state, filters),
     [state, filters],
@@ -266,6 +278,10 @@ export function ReportsView({ state }: ReportsViewProps) {
     () => filterBulkImportsReportRows(state, filters),
     [state, filters],
   );
+  const availableStockResult = useMemo(
+    () => filterAvailableStockReportRows(state, filters),
+    [state, filters],
+  );
 
   const activeTotals: ReportSummaryTotals = useMemo(() => {
     switch (reportType) {
@@ -283,6 +299,8 @@ export function ReportsView({ state }: ReportsViewProps) {
         return movementsResult.totals;
       case 'cargas':
         return bulkImportsResult.totals;
+      case 'inventario':
+        return availableStockResult.totals;
     }
   }, [
     reportType,
@@ -293,6 +311,7 @@ export function ReportsView({ state }: ReportsViewProps) {
     adjustmentsResult.totals,
     movementsResult.totals,
     bulkImportsResult.totals,
+    availableStockResult.totals,
   ]);
 
   const updateFilter = <K extends keyof ReportFilters>(
@@ -382,11 +401,11 @@ export function ReportsView({ state }: ReportsViewProps) {
         </div>
       )}
 
-      {/* 1. Selector de Tipo de Reporte (7 Vistas Unificadas) */}
+      {/* 1. Selector de Tipo de Reporte (8 Vistas Unificadas) */}
       <div
         role="tablist"
         aria-label="Selector de tipo de reporte"
-        className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-800 bg-[#080E1C] p-2 sm:grid-cols-4 lg:grid-cols-7"
+        className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-800 bg-[#080E1C] p-2 sm:grid-cols-4 xl:grid-cols-8"
       >
         {REPORT_TABS.map((tab) => {
           const Icon = tab.icon;
@@ -1290,6 +1309,87 @@ export function ReportsView({ state }: ReportsViewProps) {
                         <div className="text-[10px] text-slate-400">
                           USDT {b.usdtRate.toFixed(2)} · BCV {b.bcvRate.toFixed(2)}
                         </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 8) STOCK DISPONIBLE (Franelas con Stock > 0 por Talla y Valor FIFO) */}
+      {reportType === 'inventario' && (
+        <div className="rounded-2xl border border-slate-800 bg-[#0D1526] p-5 shadow-xl">
+          <div className="overflow-x-auto">
+            <table
+              data-testid="report-available-stock-table"
+              className="w-full text-left text-xs"
+            >
+              <thead className="border-b border-slate-800 bg-[#070D19] uppercase tracking-wider text-slate-400">
+                <tr>
+                  <th className="p-3">Equipo</th>
+                  <th className="p-3">Modelo / Versión</th>
+                  <th className="p-3 text-center">S</th>
+                  <th className="p-3 text-center">M</th>
+                  <th className="p-3 text-center">L</th>
+                  <th className="p-3 text-center">XL</th>
+                  <th className="p-3 text-center">XXL</th>
+                  <th className="p-3">Otras Tallas</th>
+                  <th className="p-3 text-right">Total</th>
+                  <th className="p-3 text-right">PVP (USDT / Bs)</th>
+                  <th className="p-3 text-right">Valor FIFO (USDT)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {availableStockResult.rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="p-8 text-center text-slate-500">
+                      No hay franelas disponibles en stock con la combinación de filtros actual.
+                    </td>
+                  </tr>
+                ) : (
+                  availableStockResult.rows.map((r) => (
+                    <tr key={r.key} className="hover:bg-slate-800/40">
+                      <td className="p-3 font-medium text-blue-300 whitespace-nowrap">
+                        {r.team}
+                      </td>
+                      <td className="p-3">
+                        <div className="font-semibold text-white">{r.model}</div>
+                        <div className="text-[10px] text-slate-400">{r.version}</div>
+                      </td>
+                      <td className="p-3 text-center font-mono-num text-slate-200">
+                        {r.sizes.S}
+                      </td>
+                      <td className="p-3 text-center font-mono-num text-slate-200">
+                        {r.sizes.M}
+                      </td>
+                      <td className="p-3 text-center font-mono-num text-slate-200">
+                        {r.sizes.L}
+                      </td>
+                      <td className="p-3 text-center font-mono-num text-slate-200">
+                        {r.sizes.XL}
+                      </td>
+                      <td className="p-3 text-center font-mono-num text-slate-200">
+                        {r.sizes.XXL}
+                      </td>
+                      <td className="p-3 font-mono-num text-slate-400 whitespace-nowrap">
+                        {r.extraSizesText}
+                      </td>
+                      <td className="p-3 text-right font-mono-num font-bold text-white whitespace-nowrap">
+                        {r.totalStock}
+                      </td>
+                      <td className="p-3 text-right font-mono-num whitespace-nowrap">
+                        <div className="font-semibold text-emerald-400">
+                          {formatUSD(r.salePrice)}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Bs {r.salePriceBs.toFixed(2)}
+                        </div>
+                      </td>
+                      <td className="p-3 text-right font-mono-num font-bold text-blue-300 whitespace-nowrap">
+                        {formatUSD(r.totalFifoValue)}
                       </td>
                     </tr>
                   ))

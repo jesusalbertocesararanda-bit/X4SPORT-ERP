@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  CheckCircle2,
+  Download,
   LayoutGrid,
   List,
   Search,
@@ -15,6 +17,7 @@ import {
   getTotalUnits,
   normalizeVersionDisplay,
 } from '../utils/finance';
+import { buildAvailableStockExcelPayload } from '../utils/reports';
 
 interface InventoryViewProps {
   state: AppState;
@@ -41,6 +44,10 @@ export function InventoryView({
   const [query, setQuery] = useState('');
   const [teamFilter, setTeamFilter] = useState<'Todos' | TeamCategory>('Todos');
   const [onlyLowStock, setOnlyLowStock] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   const teamFilters = useMemo(() => {
     const present = new Set(state.inventory.map((i) => i.team));
@@ -93,6 +100,45 @@ export function InventoryView({
       ? filteredMatrixRows.reduce((sum, r) => sum + r.totalStock, 0)
       : filteredItems.reduce((sum, i) => sum + i.stock, 0);
 
+  const handleExportAvailableExcel = () => {
+    setExportFeedback(null);
+    if (typeof window === 'undefined' || !window.XLSX) {
+      setExportFeedback({
+        type: 'error',
+        text: 'La librería SheetJS (xlsx) aún está cargando o no está disponible sin conexión.',
+      });
+      return;
+    }
+
+    const availableRows = filteredMatrixRows.filter((row) => row.totalStock > 0);
+    if (availableRows.length === 0) {
+      setExportFeedback({
+        type: 'error',
+        text: 'No hay franelas disponibles en stock (> 0 unidades) con los filtros actuales.',
+      });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const payload = buildAvailableStockExcelPayload(
+      availableRows,
+      state.exchangeRates.usdt,
+      today,
+    );
+
+    const XLSX = window.XLSX;
+    const sheetData = [payload.headers, ...payload.rows, payload.totalsRow];
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, payload.sheetName);
+    XLSX.writeFile(wb, payload.fileName);
+
+    setExportFeedback({
+      type: 'success',
+      text: `Excel "${payload.fileName}" descargado (${payload.rows.length} modelos disponibles + fila de totales).`,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -135,8 +181,35 @@ export function InventoryView({
               </span>
             </>
           )}
+          <button
+            type="button"
+            data-testid="btn-download-available-inventory-excel"
+            onClick={handleExportAvailableExcel}
+            className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          >
+            <Download className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            Descargar Disponibles (.xlsx)
+          </button>
         </div>
       </div>
+
+      {exportFeedback && (
+        <div
+          role={exportFeedback.type === 'error' ? 'alert' : 'status'}
+          className={`flex items-center gap-2.5 rounded-xl px-4 py-3 text-xs font-medium ${
+            exportFeedback.type === 'error'
+              ? 'border border-red-500/35 bg-red-500/10 text-red-200'
+              : 'border border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+          }`}
+        >
+          {exportFeedback.type === 'error' ? (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+          )}
+          <span>{exportFeedback.text}</span>
+        </div>
+      )}
 
       <section className="rounded-xl border border-slate-800 bg-[#0D1526] p-4 sm:p-5 space-y-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

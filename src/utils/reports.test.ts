@@ -4,10 +4,12 @@ import { createInitialState } from '../data/initialState';
 import type { AppState } from '../types/erp';
 import { calculateFourLayerMatrixConsolidated } from './finance';
 import {
+  buildAvailableStockExcelPayload,
   buildReportExcelSheetData,
   countActiveReportFilters,
   DEFAULT_REPORT_FILTERS,
   filterAdjustmentsReportRows,
+  filterAvailableStockReportRows,
   filterBulkImportsReportRows,
   filterCustomersReportRows,
   filterPurchasesReportRows,
@@ -487,4 +489,192 @@ test('countActiveReportFilters cuenta correctamente los filtros activos aplicabl
     }),
     3,
   );
+});
+
+test('Stock Disponible: filtra totalStock > 0, ordena por equipo/modelo y genera Excel de 13 columnas con TOTALES', () => {
+  const base = makeRichTestState();
+  const state: AppState = {
+    ...base,
+    exchangeRates: {
+      ...base.exchangeRates,
+      usdt: 55,
+    },
+    inventory: [
+      {
+        id: 'inv-rma-m',
+        team: 'Real Madrid',
+        model: 'Real Madrid Local 25/26',
+        version: 'Player',
+        size: 'M',
+        stock: 4,
+        cogs: 7.5,
+        salePrice: 25,
+        fifoBatches: [
+          {
+            batchId: 'b1',
+            batchName: 'Lote Prueba',
+            entryDate: '2026-11-01',
+            initialQuantity: 4,
+            remainingQuantity: 4,
+            unitCost: 7.5,
+          },
+        ],
+      },
+      {
+        id: 'inv-rma-xxxl',
+        team: 'Real Madrid',
+        model: 'Real Madrid Local 25/26',
+        version: 'Player',
+        size: 'XXXL',
+        stock: 2,
+        cogs: 7.5,
+        salePrice: 25,
+        fifoBatches: [
+          {
+            batchId: 'b1',
+            batchName: 'Lote Prueba',
+            entryDate: '2026-11-01',
+            initialQuantity: 2,
+            remainingQuantity: 2,
+            unitCost: 7.5,
+          },
+        ],
+      },
+      {
+        id: 'inv-fcb-s',
+        team: 'Barcelona',
+        model: 'Barcelona Local 25/26',
+        version: 'Fans',
+        size: 'S',
+        stock: 3,
+        cogs: 6,
+        salePrice: 20,
+        fifoBatches: [],
+      },
+      {
+        id: 'inv-fcb-l',
+        team: 'Barcelona',
+        model: 'Barcelona Local 25/26',
+        version: 'Fans',
+        size: 'L',
+        stock: 5,
+        cogs: 6,
+        salePrice: 20,
+        fifoBatches: [],
+      },
+      {
+        id: 'inv-psg-0',
+        team: 'PSG',
+        model: 'PSG Visitante Agotada',
+        version: 'Fans',
+        size: 'M',
+        stock: 0,
+        cogs: 6,
+        salePrice: 20,
+        fifoBatches: [],
+      },
+    ],
+  };
+
+  // Sin filtros: excluye PSG (stock 0) y ordena Barcelona antes de Real Madrid
+  const allRes = filterAvailableStockReportRows(state, DEFAULT_REPORT_FILTERS);
+  assert.equal(allRes.rows.length, 2);
+  assert.equal(allRes.rows[0].team, 'Barcelona');
+  assert.equal(allRes.rows[0].extraSizesText, '—');
+  assert.equal(allRes.rows[1].team, 'Real Madrid');
+  assert.equal(allRes.rows[1].extraSizesText, 'XXXL: 2');
+  assert.equal(allRes.totals.totalUnits, 14); // (3+5) + (4+2)
+  assert.equal(allRes.totals.totalUsd, 93); // (8*6) + (6*7.5) = 48 + 45
+
+  // Filtro por talla M: solo debe incluir Real Madrid (Barcelona no tiene talla M disponible)
+  const sizeMRes = filterAvailableStockReportRows(state, {
+    ...DEFAULT_REPORT_FILTERS,
+    size: 'M',
+  });
+  assert.equal(sizeMRes.rows.length, 1);
+  assert.equal(sizeMRes.rows[0].team, 'Real Madrid');
+
+  // Exportación Excel desde buildReportExcelSheetData('inventario', ...)
+  const payload = buildReportExcelSheetData(
+    'inventario',
+    state,
+    DEFAULT_REPORT_FILTERS,
+  );
+  assert.equal(payload.sheetName, 'Franelas Disponibles');
+  assert.match(
+    payload.fileName,
+    /^X4SPORT_Franelas_Disponibles_\d{4}-\d{2}-\d{2}\.xlsx$/,
+  );
+  assert.deepEqual(payload.headers, [
+    'Equipo',
+    'Modelo',
+    'Versión',
+    'S',
+    'M',
+    'L',
+    'XL',
+    'XXL',
+    'Otras Tallas',
+    'Total Disponible',
+    'Precio Venta (USDT)',
+    'Precio Ref. (Bs)',
+    'Valor Inventario FIFO (USDT)',
+  ]);
+  assert.equal(payload.rows.length, 2);
+  // Fila 1: Barcelona
+  assert.deepEqual(payload.rows[0], [
+    'Barcelona',
+    'Barcelona Local 25/26',
+    'Fans',
+    3,
+    0,
+    5,
+    0,
+    0,
+    '—',
+    8,
+    20,
+    1100,
+    48,
+  ]);
+  // Fila 2: Real Madrid con talla extra XXXL: 2
+  assert.deepEqual(payload.rows[1], [
+    'Real Madrid',
+    'Real Madrid Local 25/26',
+    'Player',
+    0,
+    4,
+    0,
+    0,
+    0,
+    'XXXL: 2',
+    6,
+    25,
+    1375,
+    45,
+  ]);
+  // Fila TOTALES
+  assert.deepEqual(payload.totalsRow, [
+    'TOTALES',
+    '2 modelos',
+    '',
+    3,
+    4,
+    5,
+    0,
+    0,
+    '',
+    14,
+    '',
+    '',
+    93,
+  ]);
+
+  // Direct call helper check with explicit date
+  const directPayload = buildAvailableStockExcelPayload(
+    allRes.rows,
+    55,
+    '2026-11-20',
+  );
+  assert.equal(directPayload.fileName, 'X4SPORT_Franelas_Disponibles_2026-11-20.xlsx');
 });

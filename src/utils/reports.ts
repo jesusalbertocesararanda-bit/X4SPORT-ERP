@@ -9,8 +9,14 @@ import type {
   SaleRecord,
   SellerName,
   ShippingType,
+  TeamCategory,
 } from '../types/erp';
-import { isUnassignedSeller, round2 } from './finance';
+import {
+  getInventorySizeMatrix,
+  isUnassignedSeller,
+  round2,
+  type InventorySizeMatrixRow,
+} from './finance';
 
 export type ReportType =
   | 'ventas'
@@ -19,7 +25,8 @@ export type ReportType =
   | 'devoluciones'
   | 'ajustes'
   | 'movimientos'
-  | 'cargas';
+  | 'cargas'
+  | 'inventario';
 
 export interface ReportFilters {
   dateFrom: string;
@@ -206,6 +213,23 @@ export interface BulkImportReportRow {
   usdtRate: number;
   bcvRate: number;
   notes: string;
+}
+
+export interface AvailableStockReportRow {
+  key: string;
+  team: TeamCategory;
+  model: string;
+  version: 'Fans' | 'Player' | 'Retro';
+  sizes: InventorySizeMatrixRow['sizes'];
+  trackedSizes: InventorySizeMatrixRow['trackedSizes'];
+  extraSizes: InventorySizeMatrixRow['extraSizes'];
+  extraSizesText: string;
+  totalStock: number;
+  salePrice: number;
+  salePriceBs: number;
+  avgCogs: number;
+  totalFifoValue: number;
+  isLowStock: boolean;
 }
 
 export interface ReportSummaryTotals {
@@ -1459,6 +1483,194 @@ export function filterBulkImportsReportRows(
 }
 
 // ---------------------------------------------------------------------------
+// 8) STOCK DISPONIBLE (Franelas con Stock > 0 por Talla y Valor FIFO)
+// ---------------------------------------------------------------------------
+
+export function formatExtraSizesSummary(
+  extraSizes: InventorySizeMatrixRow['extraSizes'],
+): string {
+  const positive = extraSizes.filter((e) => e.stock > 0);
+  if (positive.length === 0) return '—';
+  return positive.map((e) => `${e.size}: ${e.stock}`).join(', ');
+}
+
+export function buildAvailableStockReportRows(
+  state: AppState,
+): AvailableStockReportRow[] {
+  const usdtRate = Number(state.exchangeRates?.usdt) || 0;
+  const matrix = getInventorySizeMatrix(state.inventory ?? []);
+
+  return matrix
+    .filter((row) => row.totalStock > 0)
+    .map((row) => ({
+      key: row.key,
+      team: row.team,
+      model: row.model,
+      version: row.version,
+      sizes: row.sizes,
+      trackedSizes: row.trackedSizes,
+      extraSizes: row.extraSizes,
+      extraSizesText: formatExtraSizesSummary(row.extraSizes),
+      totalStock: row.totalStock,
+      salePrice: round2(row.salePrice),
+      salePriceBs: round2(row.salePrice * usdtRate),
+      avgCogs: round2(row.avgCogs),
+      totalFifoValue: round2(row.totalFifoValue),
+      isLowStock: row.isLowStock,
+    }))
+    .sort(
+      (a, b) =>
+        a.team.localeCompare(b.team) ||
+        a.model.localeCompare(b.model) ||
+        a.version.localeCompare(b.version),
+    );
+}
+
+export function filterAvailableStockReportRows(
+  state: AppState,
+  filters: ReportFilters,
+): { rows: AvailableStockReportRow[]; totals: ReportSummaryTotals } {
+  const all = buildAvailableStockReportRows(state);
+  const rows = all.filter((r) => {
+    if (
+      !matchesTextQuery(filters.search, [
+        r.team,
+        r.model,
+        r.version,
+        r.extraSizesText,
+      ])
+    ) {
+      return false;
+    }
+    if (!matchesVersionFilter(r.version, filters.version)) return false;
+    if (filters.size && filters.size !== 'ALL') {
+      const targetSize = filters.size.trim().toUpperCase();
+      if (targetSize in r.sizes) {
+        if ((r.sizes[targetSize as keyof typeof r.sizes] ?? 0) <= 0) {
+          return false;
+        }
+      } else {
+        const hasExtra = r.extraSizes.some(
+          (ex) => ex.size.trim().toUpperCase() === targetSize && ex.stock > 0,
+        );
+        if (!hasExtra) return false;
+      }
+    }
+    if (
+      !matchesAmountBounds(
+        [r.salePrice, r.totalFifoValue],
+        filters.amountMin,
+        filters.amountMax,
+      )
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const sumS = rows.reduce((s, r) => s + r.sizes.S, 0);
+  const sumM = rows.reduce((s, r) => s + r.sizes.M, 0);
+  const sumL = rows.reduce((s, r) => s + r.sizes.L, 0);
+  const sumXL = rows.reduce((s, r) => s + r.sizes.XL, 0);
+  const sumXXL = rows.reduce((s, r) => s + r.sizes.XXL, 0);
+  const totalUnits = rows.reduce((s, r) => s + r.totalStock, 0);
+  const totalUsd = round2(rows.reduce((s, r) => s + r.totalFifoValue, 0));
+
+  return {
+    rows,
+    totals: {
+      filteredCount: rows.length,
+      totalUnits,
+      totalUsd,
+      extraNote: `S: ${sumS} · M: ${sumM} · L: ${sumL} · XL: ${sumXL} · XXL: ${sumXXL}`,
+    },
+  };
+}
+
+export function buildAvailableStockExcelPayload(
+  matrixRows: Pick<
+    InventorySizeMatrixRow,
+    'team' | 'model' | 'version' | 'sizes' | 'extraSizes' | 'totalStock' | 'salePrice' | 'totalFifoValue'
+  >[],
+  usdtRate: number,
+  dateIso: string = new Date().toISOString().slice(0, 10),
+): ExcelSheetPayload {
+  const safeRate = Number.isFinite(usdtRate) && usdtRate > 0 ? usdtRate : 0;
+  const availableRows = matrixRows.filter((row) => row.totalStock > 0);
+
+  const headers = [
+    'Equipo',
+    'Modelo',
+    'Versión',
+    'S',
+    'M',
+    'L',
+    'XL',
+    'XXL',
+    'Otras Tallas',
+    'Total Disponible',
+    'Precio Venta (USDT)',
+    'Precio Ref. (Bs)',
+    'Valor Inventario FIFO (USDT)',
+  ];
+
+  const body = availableRows.map((row) => {
+    const salePrice = round2(row.salePrice);
+    const salePriceBs = round2(salePrice * safeRate);
+    const fifoValue = round2(row.totalFifoValue);
+    return [
+      row.team,
+      row.model,
+      row.version,
+      row.sizes.S,
+      row.sizes.M,
+      row.sizes.L,
+      row.sizes.XL,
+      row.sizes.XXL,
+      formatExtraSizesSummary(row.extraSizes),
+      row.totalStock,
+      salePrice,
+      salePriceBs,
+      fifoValue,
+    ];
+  });
+
+  const sumS = availableRows.reduce((s, r) => s + r.sizes.S, 0);
+  const sumM = availableRows.reduce((s, r) => s + r.sizes.M, 0);
+  const sumL = availableRows.reduce((s, r) => s + r.sizes.L, 0);
+  const sumXL = availableRows.reduce((s, r) => s + r.sizes.XL, 0);
+  const sumXXL = availableRows.reduce((s, r) => s + r.sizes.XXL, 0);
+  const sumTotal = availableRows.reduce((s, r) => s + r.totalStock, 0);
+  const sumFifo = round2(
+    availableRows.reduce((s, r) => s + r.totalFifoValue, 0),
+  );
+
+  const totalsRow: (string | number)[] = [
+    'TOTALES',
+    `${availableRows.length} modelos`,
+    '',
+    sumS,
+    sumM,
+    sumL,
+    sumXL,
+    sumXXL,
+    '',
+    sumTotal,
+    '',
+    '',
+    sumFifo,
+  ];
+
+  return {
+    sheetName: 'Franelas Disponibles',
+    fileName: `X4SPORT_Franelas_Disponibles_${dateIso}.xlsx`,
+    headers,
+    rows: body,
+    totalsRow,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // CONSTRUCCIÓN EXACTA PARA EXPORTACIÓN EXCEL (.XLSX) CON FILA DE TOTALES
 // ---------------------------------------------------------------------------
 
@@ -1468,6 +1680,15 @@ export function buildReportExcelSheetData(
   filters: ReportFilters,
 ): ExcelSheetPayload {
   const today = new Date().toISOString().slice(0, 10);
+
+  if (reportType === 'inventario') {
+    const { rows } = filterAvailableStockReportRows(state, filters);
+    return buildAvailableStockExcelPayload(
+      rows,
+      state.exchangeRates?.usdt ?? 0,
+      today,
+    );
+  }
 
   if (reportType === 'ventas') {
     const { rows, totals } = filterSalesReportRows(state, filters);
