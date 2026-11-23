@@ -15,7 +15,7 @@ import {
   parseExcelFileWithSheetJS,
 } from '../utils/excelImport';
 import type { ExcelImportPreview } from '../utils/excelImport';
-import { formatUSD, formatUSDT } from '../utils/finance';
+import { formatUSD, formatUSDT, getTodayLocalDateIso } from '../utils/finance';
 
 export type BulkImportMetaPayload = Omit<
   BulkImportRecord,
@@ -119,7 +119,7 @@ export function ExcelImportModal({
       const importMeta: BulkImportMetaPayload | undefined = preview
         ? {
             fileName: selectedFileName || 'Respaldo_X4SPORT.xlsx',
-            importDate: new Date().toISOString().slice(0, 10),
+            importDate: getTodayLocalDateIso(),
             sheetsDetected: preview.detectedSheets.allSheets,
             comprasRows: preview.comprasRowsParsed,
             comprasUnits: preview.comprasUnitsTotal,

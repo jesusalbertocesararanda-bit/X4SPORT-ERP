@@ -38,6 +38,7 @@ import {
   calculateElapsedTransitDays,
   extractTeamFromModel,
   formatUSD,
+  getTodayLocalDateIso,
   getTransitAlertStatus,
   getTransitCapitalSummary,
   round2,
@@ -134,7 +135,7 @@ export function PurchasesView({
   onRegisterImportBatch,
   onReceiveImportBatch,
 }: PurchasesViewProps) {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayLocalDateIso();
 
   const [subView, setSubView] = useState<PurchasesSubView>(activeSection ?? 'all');
 
@@ -767,7 +768,7 @@ export function PurchasesView({
       (distinctPrices.size > 1 ? 'per-item' : 'uniform');
 
     setReceivingBatch(batch);
-    setReceiveDate(new Date().toISOString().slice(0, 10));
+    setReceiveDate(getTodayLocalDateIso());
     setActualFreightInput(
       (batch.estimatedFreightCost ?? batch.totalFreightCost).toFixed(2),
     );

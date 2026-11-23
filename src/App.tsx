@@ -918,6 +918,7 @@ export default function App() {
         quantity: input.quantity,
         reason: input.reason,
         actorName,
+        unitCost: input.unitCost,
       });
     });
   };

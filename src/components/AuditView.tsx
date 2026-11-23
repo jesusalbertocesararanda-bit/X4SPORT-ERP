@@ -278,22 +278,9 @@ export function AuditView({
         return;
       }
 
-      // Auto-sync the counts locally so they become reconciled!
-      const shortageItem = state.inventory.find((i) => i.id === alert.shortageSkuId);
-      const surplusItem = state.inventory.find((i) => i.id === alert.surplusSkuId);
-      if (shortageItem && surplusItem) {
-        const newShortageStock = shortageItem.stock - alert.uncrossQuantity;
-        const newSurplusStock = surplusItem.stock + alert.uncrossQuantity;
-        setCounts((prev) => ({
-          ...prev,
-          [alert.shortageSkuId]: String(newShortageStock),
-          [alert.surplusSkuId]: String(newSurplusStock),
-        }));
-      }
-
       setFeedback({
         type: 'success',
-        text: `Descruce aplicado: Se transfirieron ${alert.uncrossQuantity} uds de ${alert.shortageSize} a ${alert.surplusSize} en ${alert.model}. Tallas conciliadas.`,
+        text: `Descruce aplicado: Se transfirieron ${alert.uncrossQuantity} uds de ${alert.shortageSize} a ${alert.surplusSize} en ${alert.model}. Stock del sistema actualizado frente al conteo físico.`,
       });
     } finally {
       setIsSubmitting(false);

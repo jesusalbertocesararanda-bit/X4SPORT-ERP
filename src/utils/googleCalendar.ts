@@ -278,12 +278,14 @@ export function buildSaleCalendarEvent(
   sale: SaleRecord,
   fallbackDate?: string,
 ): GoogleCalendarEventInput {
-  const createdIso = sale.createdAt.slice(0, 10);
+  const baseIso = isValidIsoDate(sale.saleDate)
+    ? sale.saleDate!.trim()
+    : sale.createdAt.slice(0, 10);
   const targetDate = isValidIsoDate(sale.deliveryDate)
     ? sale.deliveryDate!.trim()
     : isValidIsoDate(fallbackDate)
       ? fallbackDate!.trim()
-      : addDaysToIsoDate(createdIso, 1);
+      : addDaysToIsoDate(baseIso, 1);
 
   const items =
     sale.items && sale.items.length > 0
@@ -308,7 +310,12 @@ export function buildSaleCalendarEvent(
   const invoiceDisplay = sale.invoiceNumber || sale.id;
 
   const isPending = sale.paymentStatus === 'Pendiente';
-  const pendingAmount = isPending ? sale.finalPrice : 0;
+  const returnedAmount = Math.max(0, sale.returnedAmount ?? 0);
+  const netTotal = Math.max(0, Number((sale.finalPrice - returnedAmount).toFixed(2)));
+  const paidAmount = Math.max(0, sale.paidAmount ?? 0);
+  const pendingAmount = isPending
+    ? Math.max(0, Number((netTotal - paidAmount).toFixed(2)))
+    : 0;
   const paymentMethodLabel = sale.paymentMethod ?? 'Efectivo ($)';
   const summary = `⚽ Cobro / Entrega: ${customerDisplay}`;
 
@@ -331,6 +338,12 @@ export function buildSaleCalendarEvent(
     `Factura: ${invoiceDisplay}`,
     `Estatus: ${isPending ? 'Pendiente / Crédito' : 'Cobrado'}`,
     `Monto pendiente: $${pendingAmount.toFixed(2)} USDT`,
+    ...(isPending && paidAmount > 0
+      ? [`Abono inicial: $${paidAmount.toFixed(2)} USDT`]
+      : []),
+    ...(returnedAmount > 0
+      ? [`Devolución aplicada: -$${returnedAmount.toFixed(2)} USDT (Neto: $${netTotal.toFixed(2)} USDT)`]
+      : []),
     `Monto total: $${sale.finalPrice.toFixed(2)} USDT (${paymentMethodLabel})`,
     `Vendedor: ${sale.seller}`,
     '',

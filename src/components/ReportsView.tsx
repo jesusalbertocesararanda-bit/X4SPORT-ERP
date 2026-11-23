@@ -226,6 +226,23 @@ export function ReportsView({ state }: ReportsViewProps) {
     [filters, activeTabMeta],
   );
 
+  const availableSizes = useMemo(() => {
+    const sizeSet = new Set<string>(STANDARD_SIZES);
+    (state.inventory ?? []).forEach((item) => {
+      if (item.size?.trim()) sizeSet.add(item.size.trim());
+    });
+    (state.sales ?? []).forEach((sale) => {
+      if (sale.size?.trim()) sizeSet.add(sale.size.trim());
+      (sale.items ?? []).forEach((li) => {
+        if (li.size?.trim()) sizeSet.add(li.size.trim());
+      });
+    });
+    const extraSizes = Array.from(sizeSet)
+      .filter((s) => !(STANDARD_SIZES as readonly string[]).includes(s))
+      .sort((a, b) => a.localeCompare(b));
+    return [...STANDARD_SIZES, ...extraSizes];
+  }, [state.inventory, state.sales]);
+
   // Suggestions for Ciudad & Cliente datalists
   const { knownCustomers, knownCities } = useMemo(() => {
     const custSet = new Set<string>();
@@ -546,7 +563,7 @@ export function ReportsView({ state }: ReportsViewProps) {
                 className="w-full min-h-[38px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 text-xs text-white focus:border-blue-500 focus:outline-none"
               >
                 <option value="ALL">Todas las tallas</option>
-                {STANDARD_SIZES.map((s) => (
+                {availableSizes.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>

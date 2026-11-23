@@ -18,6 +18,7 @@ import type {
 } from '../types/erp';
 import {
   formatUSD,
+  getTodayLocalDateIso,
   getTotalInventoryCostValue,
   getTotalReceivables,
   getTotalUnits,
@@ -49,7 +50,7 @@ const CHART_TEAMS: TeamCategory[] = [
 const SELLERS: PartnerName[] = ['Jesús', 'Josué', 'Gabriel'];
 
 export function StatsView({ state }: StatsViewProps) {
-  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayIso = useMemo(() => getTodayLocalDateIso(), []);
   const currentMonthIso = useMemo(() => todayIso.slice(0, 7), [todayIso]);
 
   // Existing chart refs

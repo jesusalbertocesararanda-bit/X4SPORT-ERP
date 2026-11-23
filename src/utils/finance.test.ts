@@ -2794,11 +2794,53 @@ test('finance operations record explicit actorName without depending on stored b
   assert.equal(auditRes.state.activeAuditSession?.closedBy, 'Gabriel');
 });
 
+test('Manual inventory entry honors custom unitCost and uncross preserves draft audit physical counts', () => {
+  let state = createDemoSeedState();
+  const skuA = state.inventory[0];
+  const skuB = state.inventory[1];
 
+  const customEntry = registerManualInventoryAdjustment(state, {
+    type: 'entrada',
+    skuId: skuA.id,
+    quantity: 3,
+    reason: 'Lote especial proveedor',
+    unitCost: 11.25,
+  });
+  assert.equal(customEntry.ok, true);
+  state = customEntry.state;
 
+  const updatedSkuA = state.inventory.find((i) => i.id === skuA.id)!;
+  const latestBatch = updatedSkuA.fifoBatches?.[updatedSkuA.fifoBatches.length - 1];
+  assert.equal(latestBatch?.unitCost, 11.25);
+  assert.equal(latestBatch?.remainingQuantity, 3);
 
+  // Start a draft audit with physical counts showing a 1-unit cross between skuA (shortage) and skuB (surplus)
+  const expectedCountA = updatedSkuA.stock - 1;
+  const expectedCountB = skuB.stock + 1;
+  const savedDraft = saveAuditProgress(
+    state,
+    {
+      [skuA.id]: expectedCountA,
+      [skuB.id]: expectedCountB,
+    },
+    'Conteo previo al descruce',
+  );
+  assert.equal(savedDraft.ok, true);
+  state = savedDraft.state;
 
+  const uncross = performInventoryUncross(state, {
+    sourceSkuId: skuA.id,
+    targetSkuId: skuB.id,
+    quantity: 1,
+    reason: 'Descruce 1-clic',
+  });
+  assert.equal(uncross.ok, true);
 
-
-
-
+  const skuAAfter = uncross.state.inventory.find((i) => i.id === skuA.id)!;
+  const skuBAfter = uncross.state.inventory.find((i) => i.id === skuB.id)!;
+  assert.equal(skuAAfter.stock, expectedCountA);
+  assert.equal(skuBAfter.stock, expectedCountB);
+  // Physical counts stored in activeAuditSession must NOT be shifted away from reality
+  assert.equal(uncross.state.activeAuditSession?.counts[skuA.id], expectedCountA);
+  assert.equal(uncross.state.activeAuditSession?.counts[skuB.id], expectedCountB);
+});

@@ -264,3 +264,46 @@ test('createGoogleCalendarEvent handles missing token and posts to Calendar v3 A
     globalThis.fetch = originalFetch;
   }
 });
+
+test('buildSaleCalendarEvent uses saleDate fallback and calculates net pendingAmount minus paidAmount & returnedAmount', () => {
+  const event = buildSaleCalendarEvent({
+    id: 'sale-ret-1',
+    invoiceNumber: '#0099',
+    saleDate: '2026-10-15',
+    createdAt: '2026-11-20T23:30:00.000Z',
+    skuId: 'sku-rm-local-l',
+    modelLabel: 'Real Madrid Local 25/26',
+    team: 'Real Madrid',
+    version: 'Fans',
+    size: 'L',
+    quantity: 3,
+    unitCogs: 10,
+    finalPrice: 90,
+    paidAmount: 20,
+    returnedAmount: 30,
+    seller: 'Jesús',
+    paymentStatus: 'Pendiente',
+    paymentMethod: 'Efectivo ($)',
+    customerName: 'Pedro Gómez',
+    breakdown: {
+      grossRevenue: 90,
+      layer1CostRecovery: 30,
+      grossProfit: 60,
+      layer2Commission: 12,
+      netProfit: 48,
+      layer3OperatingFund: 12,
+      remainingNetProfit: 36,
+      layer4GrowthReinvestment: 28.8,
+      layer4TotalDividends: 7.2,
+      partnerSplits: { Jesús: 2.4, Josué: 2.4, Gabriel: 2.4 },
+    },
+  });
+
+  // Fallback date is saleDate + 1 day (2026-10-16), not createdAt + 1 day
+  assert.equal(event.start.dateTime, '2026-10-16T09:00:00-04:00');
+  // Net = 90 - 30 = 60, minus 20 paidAmount = 40.00 pending
+  assert.ok(event.description.includes('Monto pendiente: $40.00 USDT'));
+  assert.ok(event.description.includes('Abono inicial: $20.00 USDT'));
+  assert.ok(event.description.includes('Devolución aplicada: -$30.00 USDT (Neto: $60.00 USDT)'));
+});
+

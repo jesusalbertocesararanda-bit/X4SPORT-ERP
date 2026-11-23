@@ -66,6 +66,11 @@ import {
 
 export const MAX_RECENT_MOVEMENTS = 300;
 
+export function getTodayLocalDateIso(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   'Logística/Producción',
   'Comercialización/Publicidad',
@@ -3545,6 +3550,7 @@ export interface RegisterManualAdjustmentInput {
   quantity: number;
   reason: string;
   actorName?: string;
+  unitCost?: number;
 }
 
 export interface RegisterUncrossAdjustmentInput {
@@ -3663,7 +3669,13 @@ export function registerManualInventoryAdjustment(
 
   // Entrada manual (+quantity)
   const newStock = target.stock + quantity;
-  const unitCost = getNextFifoUnitCost(target);
+  const hasCustomUnitCost =
+    input.unitCost !== undefined &&
+    Number.isFinite(input.unitCost) &&
+    input.unitCost >= 0;
+  const unitCost = hasCustomUnitCost
+    ? round2(input.unitCost!)
+    : getNextFifoUnitCost(target);
   const adjustmentBatch: FifoBatch = {
     batchId: `fifo-adj-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     batchName: `Entrada Manual (${cleanReason})`,
@@ -3864,22 +3876,7 @@ export function performInventoryUncross(
     createdAt: now,
   };
 
-  let nextAuditSession = state.activeAuditSession;
-  if (nextAuditSession && nextAuditSession.status === 'draft') {
-    const counts = { ...nextAuditSession.counts };
-    if (counts[sourceItem.id] !== null && counts[sourceItem.id] !== undefined) {
-      counts[sourceItem.id] = Math.max(0, Math.floor(counts[sourceItem.id]!) - quantity);
-    }
-    if (counts[targetItem.id] !== null && counts[targetItem.id] !== undefined) {
-      counts[targetItem.id] = Math.floor(counts[targetItem.id]!) + quantity;
-    }
-    nextAuditSession = {
-      ...nextAuditSession,
-      counts,
-      updatedAt: now,
-    };
-  }
-
+  // Preserve physical audit session counts unchanged: uncross adjusts system stock to match physical reality
   return {
     ok: true,
     state: {
@@ -3889,7 +3886,6 @@ export function performInventoryUncross(
         adjustmentRecord,
         ...(state.inventoryAdjustments ?? []),
       ],
-      activeAuditSession: nextAuditSession,
       movements: [
         {
           id: `mov-${Date.now()}`,

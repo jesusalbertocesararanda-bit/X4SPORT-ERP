@@ -119,7 +119,9 @@ export async function renderSaleReceiptJpgDataUrl(
         ];
 
   const isCreditSale = sale.paymentStatus === 'Pendiente';
-  const netFinalPrice = round2(Math.max(0, sale.finalPrice - (sale.returnedAmount ?? 0)));
+  const returnedAmount = round2(Math.max(0, sale.returnedAmount ?? 0));
+  const hasReturn = returnedAmount > 0;
+  const netFinalPrice = round2(Math.max(0, sale.finalPrice - returnedAmount));
   const paidAmount = round2(
     sale.paidAmount !== undefined
       ? sale.paidAmount
@@ -132,29 +134,40 @@ export async function renderSaleReceiptJpgDataUrl(
     : 0;
 
   const width = 920;
-  const rowHeight = 72;
-  const rowsHeight = lineItems.length * rowHeight;
-  const splitExtraHeight =
-    sale.paymentMethod === 'Pago Mixto' && sale.paymentSplits?.length
-      ? sale.paymentSplits.length * 24 + 24
-      : 0;
-  const creditExtraHeight = isCreditSale ? 64 : 0;
-  const height = Math.max(980, 680 + rowsHeight + splitExtraHeight + creditExtraHeight);
+  const pad = 40;
+  const innerW = width - pad * 2;
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
-  canvas.height = height;
+  canvas.height = 980;
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     throw new Error('No se pudo inicializar el lienzo para generar el comprobante JPG.');
   }
 
+  // Pre-measure wrapped item titles before locking final canvas height
+  ctx.font = '700 16px system-ui, -apple-system, sans-serif';
+  const measuredRows = lineItems.map((item) => {
+    const lines = wrapLines(ctx, item.modelLabel, innerW * 0.44).slice(0, 2);
+    const rowH = lines.length > 1 ? 90 : 72;
+    return { item, lines, rowH };
+  });
+  const rowsHeight = measuredRows.reduce((sum, r) => sum + r.rowH, 0);
+  const splitExtraHeight =
+    sale.paymentMethod === 'Pago Mixto' && sale.paymentSplits?.length
+      ? sale.paymentSplits.length * 24 + 24
+      : 0;
+  const returnExtraHeight = hasReturn ? 28 : 0;
+  const creditExtraHeight = isCreditSale ? 64 : 0;
+  const height = Math.max(
+    980,
+    680 + rowsHeight + splitExtraHeight + returnExtraHeight + creditExtraHeight,
+  );
+  canvas.height = height;
+
   // Solid pure white background optimized for WhatsApp & printing
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, width, height);
-
-  const pad = 40;
-  const innerW = width - pad * 2;
 
   // Crisp subtle outer frame on white
   drawRoundedRect(ctx, 20, 20, width - 40, height - 40, 20);
@@ -337,7 +350,7 @@ export async function renderSaleReceiptJpgDataUrl(
   cursorY += 48;
 
   // Item Rows (USD-only, zero COGS wording)
-  lineItems.forEach((item, index) => {
+  measuredRows.forEach(({ item, lines, rowH }, index) => {
     if (index > 0) {
       ctx.strokeStyle = '#E2E8F0';
       ctx.lineWidth = 1;
@@ -350,34 +363,37 @@ export async function renderSaleReceiptJpgDataUrl(
     ctx.textAlign = 'left';
     ctx.fillStyle = '#0F172A';
     ctx.font = '700 16px system-ui, -apple-system, sans-serif';
-    const wrappedTitle = wrapLines(ctx, item.modelLabel, innerW * 0.44);
-    ctx.fillText(wrappedTitle[0], colItemX, cursorY + 28);
+    lines.forEach((lineText, lineIdx) => {
+      ctx.fillText(lineText, colItemX, cursorY + 26 + lineIdx * 20);
+    });
 
+    const subMetaY = lines.length > 1 ? cursorY + 68 : cursorY + 50;
     ctx.fillStyle = '#64748B';
     ctx.font = '500 13px system-ui, -apple-system, sans-serif';
     const verLabel = item.version === 'Fan' ? 'Fans' : item.version;
     const subMeta = `${verLabel}${item.discountLabel ? ` · ${item.discountLabel}` : ''}`;
-    ctx.fillText(subMeta, colItemX, cursorY + 50);
+    ctx.fillText(subMeta, colItemX, subMetaY);
 
+    const midY = cursorY + Math.round(rowH / 2) + 4;
     ctx.textAlign = 'center';
     ctx.fillStyle = '#0F172A';
     ctx.font = '700 15px system-ui, -apple-system, sans-serif';
-    ctx.fillText(item.size, colSizeX, cursorY + 38);
+    ctx.fillText(item.size, colSizeX, midY);
 
     ctx.textAlign = 'right';
     ctx.fillStyle = '#334155';
     ctx.font = '700 16px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(String(item.quantity), colQtyX, cursorY + 38);
+    ctx.fillText(String(item.quantity), colQtyX, midY);
 
     ctx.fillStyle = '#475569';
     ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(formatUSD(item.unitPrice), colUnitX, cursorY + 38);
+    ctx.fillText(formatUSD(item.unitPrice), colUnitX, midY);
 
     ctx.fillStyle = '#0F172A';
     ctx.font = '800 17px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(formatUSD(item.subtotal), colSubX, cursorY + 38);
+    ctx.fillText(formatUSD(item.subtotal), colSubX, midY);
 
-    cursorY += rowHeight;
+    cursorY += rowH;
   });
 
   // Payment Splits if Pago Mixto (USD-only clean breakdown)
@@ -407,7 +423,8 @@ export async function renderSaleReceiptJpgDataUrl(
 
   // Totals Summary Box
   cursorY += 16;
-  const totalBoxH = isCreditSale ? 148 : 96;
+  const totalBoxH =
+    96 + (hasReturn ? 28 : 0) + (isCreditSale ? 52 : 0);
   drawRoundedRect(ctx, pad + 4, cursorY, innerW - 8, totalBoxH, 14);
   ctx.fillStyle = '#F8FAFC';
   ctx.fill();
@@ -418,7 +435,11 @@ export async function renderSaleReceiptJpgDataUrl(
   ctx.textAlign = 'left';
   ctx.fillStyle = '#475569';
   ctx.font = '700 13px system-ui, -apple-system, sans-serif';
-  ctx.fillText('TOTAL DE LA COMPRA (USD)', pad + 26, cursorY + 38);
+  ctx.fillText(
+    hasReturn ? 'TOTAL NETO DE LA COMPRA (USD)' : 'TOTAL DE LA COMPRA (USD)',
+    pad + 26,
+    cursorY + 38,
+  );
 
   ctx.fillStyle = '#64748B';
   ctx.font = '500 14px system-ui, -apple-system, sans-serif';
@@ -431,20 +452,37 @@ export async function renderSaleReceiptJpgDataUrl(
   ctx.textAlign = 'right';
   ctx.fillStyle = '#0F172A';
   ctx.font = '800 34px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx.fillText(`${formatUSD(sale.finalPrice)} USD`, width - pad - 26, cursorY + 56);
+  ctx.fillText(
+    `${formatUSD(hasReturn ? netFinalPrice : sale.finalPrice)} USD`,
+    width - pad - 26,
+    cursorY + 56,
+  );
+
+  let nextSummaryY = cursorY + 84;
+  if (hasReturn) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#B45309';
+    ctx.font = '600 13px system-ui, -apple-system, sans-serif';
+    ctx.fillText(
+      `Subtotal original: ${formatUSD(sale.finalPrice)} · Devolución aplicada: -${formatUSD(returnedAmount)}`,
+      pad + 26,
+      nextSummaryY + 4,
+    );
+    nextSummaryY += 28;
+  }
 
   if (isCreditSale) {
     ctx.strokeStyle = '#E2E8F0';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(pad + 26, cursorY + 84);
-    ctx.lineTo(width - pad - 26, cursorY + 84);
+    ctx.moveTo(pad + 26, nextSummaryY);
+    ctx.lineTo(width - pad - 26, nextSummaryY);
     ctx.stroke();
 
     ctx.textAlign = 'left';
     ctx.fillStyle = '#047857';
     ctx.font = '700 15px system-ui, -apple-system, sans-serif';
-    ctx.fillText(`Abono inicial: ${formatUSD(paidAmount)}`, pad + 26, cursorY + 118);
+    ctx.fillText(`Abono inicial: ${formatUSD(paidAmount)}`, pad + 26, nextSummaryY + 32);
 
     ctx.textAlign = 'right';
     ctx.fillStyle = '#B45309';
@@ -452,7 +490,7 @@ export async function renderSaleReceiptJpgDataUrl(
     ctx.fillText(
       `Saldo pendiente: ${formatUSD(pendingBalance)}`,
       width - pad - 26,
-      cursorY + 118,
+      nextSummaryY + 32,
     );
   }
 
