@@ -788,3 +788,119 @@ export function isAdminUser(user: ERPUser | null | undefined): boolean {
   if (!user) return false;
   return user.role === 'admin' || isProtectedAdminEmail(user.email);
 }
+
+export function changeOwnUserPassword(params: {
+  email: string;
+  currentPassword: string;
+  newPassword: string;
+  stateUsers?: AuthorizedUserRecord[];
+}): { ok: boolean; updatedUsers?: AuthorizedUserRecord[]; error?: string } {
+  const cleanEmail = params.email.trim().toLowerCase();
+  if (!cleanEmail) {
+    return {
+      ok: false,
+      error: 'No se encontró el correo del usuario autenticado.',
+    };
+  }
+
+  const allUsers = getMergedAuthorizedUsers(params.stateUsers);
+  const record = allUsers.find((u) => u.email.toLowerCase() === cleanEmail);
+  if (!record) {
+    return {
+      ok: false,
+      error: 'Usuario no encontrado en los registros autorizados.',
+    };
+  }
+
+  const cleanCurrent = params.currentPassword.trim();
+  if (!cleanCurrent) {
+    return { ok: false, error: 'Ingresa tu contraseña actual.' };
+  }
+
+  const currentMatches =
+    verifyUserPassword(params.currentPassword, record) ||
+    verifyUserPassword(cleanCurrent, record);
+  if (!currentMatches) {
+    return { ok: false, error: 'La contraseña actual es incorrecta.' };
+  }
+
+  const cleanNew = params.newPassword.trim();
+  if (!cleanNew || cleanNew.length < 4) {
+    return {
+      ok: false,
+      error: 'La nueva contraseña debe tener al menos 4 caracteres.',
+    };
+  }
+
+  const passwordHash = hashPasswordSha256Sync(cleanNew);
+  const updatedUsers: AuthorizedUserRecord[] = allUsers.map((u) => {
+    if (u.email.toLowerCase() === cleanEmail) {
+      const { password: _legacyPassword, ...rest } = u;
+      return {
+        ...rest,
+        passwordHash,
+        firstLoginPending: false,
+      };
+    }
+    return u;
+  });
+
+  saveAuthorizedUsersToStorage(updatedUsers);
+  return { ok: true, updatedUsers };
+}
+
+export function adminResetUserPassword(params: {
+  adminUser: ERPUser | null | undefined;
+  targetEmail: string;
+  newPassword: string;
+  stateUsers?: AuthorizedUserRecord[];
+}): { ok: boolean; updatedUsers?: AuthorizedUserRecord[]; error?: string } {
+  if (!canAccessConfiguration(params.adminUser)) {
+    return {
+      ok: false,
+      error:
+        'Acceso denegado: solo el Administrador Principal puede reiniciar contraseñas.',
+    };
+  }
+
+  const cleanTarget = params.targetEmail.trim().toLowerCase();
+  if (!cleanTarget) {
+    return { ok: false, error: 'Indica el correo electrónico del usuario.' };
+  }
+
+  const allUsers = getMergedAuthorizedUsers(params.stateUsers);
+  const targetRecord = allUsers.find(
+    (u) => u.email.toLowerCase() === cleanTarget,
+  );
+  if (!targetRecord) {
+    return {
+      ok: false,
+      error: 'El usuario indicado no está registrado en el sistema.',
+    };
+  }
+
+  const cleanNew = params.newPassword.trim();
+  if (!cleanNew || cleanNew.length < 4) {
+    return {
+      ok: false,
+      error: 'La nueva contraseña debe tener al menos 4 caracteres.',
+    };
+  }
+
+  const passwordHash = hashPasswordSha256Sync(cleanNew);
+  const updatedUsers: AuthorizedUserRecord[] = allUsers.map((u) => {
+    if (u.email.toLowerCase() === cleanTarget) {
+      const { password: _legacyPassword, ...rest } = u;
+      return {
+        ...rest,
+        passwordHash,
+        firstLoginPending: false,
+      };
+    }
+    return u;
+  });
+
+  saveAuthorizedUsersToStorage(updatedUsers);
+  return { ok: true, updatedUsers };
+}
+

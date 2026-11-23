@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ACTIVE_USER_STORAGE_KEY,
+  adminResetUserPassword,
   authenticateByPassword,
   canAccessConfiguration,
+  changeOwnUserPassword,
   clearOtpEntry,
   completeFirstTimeLogin,
   DEFAULT_AUTHORIZED_USERS,
@@ -501,4 +503,237 @@ test('auth: storeActiveUser and getStoredActiveUser enforce 24h timeout and clea
     }
   }
 });
+
+test('auth: changeOwnUserPassword validates current password, updates SHA-256 hash, and persists to storage', () => {
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const storageMap = new Map<string, string>();
+  (globalThis as { window?: unknown }).window = {
+    localStorage: {
+      getItem: (key: string) => storageMap.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storageMap.set(key, String(value));
+      },
+      removeItem: (key: string) => {
+        storageMap.delete(key);
+      },
+    },
+  };
+
+  try {
+    const stateUsers: AuthorizedUserRecord[] = [
+      {
+        id: 'user-partner-test',
+        email: 'socio.clave@x4sport.app',
+        name: 'Socio Prueba',
+        role: 'partner',
+        passwordHash: hashPasswordSha256Sync('claveInicial2026'),
+        firstLoginPending: false,
+        createdAt: '2026-11-20T00:00:00.000Z',
+      },
+    ];
+
+    const wrongCurrent = changeOwnUserPassword({
+      email: 'socio.clave@x4sport.app',
+      currentPassword: 'incorrecta',
+      newPassword: 'nuevaClaveSegura',
+      stateUsers,
+    });
+    assert.equal(wrongCurrent.ok, false);
+    assert.ok(wrongCurrent.error?.includes('incorrecta'));
+
+    const shortNew = changeOwnUserPassword({
+      email: 'socio.clave@x4sport.app',
+      currentPassword: 'claveInicial2026',
+      newPassword: '123',
+      stateUsers,
+    });
+    assert.equal(shortNew.ok, false);
+    assert.ok(shortNew.error?.includes('al menos 4'));
+
+    const missingUser = changeOwnUserPassword({
+      email: 'noexiste@x4sport.app',
+      currentPassword: 'claveInicial2026',
+      newPassword: 'nuevaClaveSegura',
+      stateUsers,
+    });
+    assert.equal(missingUser.ok, false);
+
+    const okRes = changeOwnUserPassword({
+      email: 'socio.clave@x4sport.app',
+      currentPassword: 'claveInicial2026',
+      newPassword: 'nuevaClaveSegura',
+      stateUsers,
+    });
+    assert.equal(okRes.ok, true);
+    assert.ok(okRes.updatedUsers);
+
+    const updatedRecord = okRes.updatedUsers?.find(
+      (u) => u.email === 'socio.clave@x4sport.app',
+    );
+    assert.equal(updatedRecord?.password, undefined);
+    assert.equal(updatedRecord?.firstLoginPending, false);
+    assert.equal(
+      updatedRecord?.passwordHash,
+      hashPasswordSha256Sync('nuevaClaveSegura'),
+    );
+
+    // Verifica que funciona la nueva contraseña y rechaza la anterior
+    assert.equal(
+      authenticateByPassword(
+        'socio.clave@x4sport.app',
+        'nuevaClaveSegura',
+        okRes.updatedUsers,
+      ).ok,
+      true,
+    );
+    assert.equal(
+      authenticateByPassword(
+        'socio.clave@x4sport.app',
+        'claveInicial2026',
+        okRes.updatedUsers,
+      ).ok,
+      false,
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+  }
+});
+
+test('auth: adminResetUserPassword strictly enforces admin permission and updates target user hash', () => {
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const storageMap = new Map<string, string>();
+  (globalThis as { window?: unknown }).window = {
+    localStorage: {
+      getItem: (key: string) => storageMap.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storageMap.set(key, String(value));
+      },
+      removeItem: (key: string) => {
+        storageMap.delete(key);
+      },
+    },
+  };
+
+  try {
+    const mainAdmin: ERPUser = {
+      id: 'user-jesus-main',
+      email: MAIN_ADMIN_EMAIL,
+      name: 'Jesús César',
+      role: 'admin',
+      title: 'Administrador Principal',
+      phone: '',
+      avatarBg: 'bg-blue-600',
+    };
+    const partnerUser: ERPUser = {
+      id: 'user-josue',
+      email: 'josue@x4sport.app',
+      name: 'Josué Ojeda',
+      role: 'partner',
+      title: 'Socio Operativo',
+      phone: '',
+      avatarBg: 'bg-emerald-600',
+    };
+    const unauthorizedAdmin: ERPUser = {
+      id: 'user-other-admin',
+      email: 'otheradmin@x4sport.app',
+      name: 'Otro Admin',
+      role: 'admin',
+      title: 'Administrador',
+      phone: '',
+      avatarBg: 'bg-indigo-600',
+    };
+
+    const stateUsers: AuthorizedUserRecord[] = [
+      {
+        id: 'user-pending',
+        email: 'pendiente@x4sport.app',
+        name: 'Socio Pendiente',
+        role: 'partner',
+        firstLoginPending: true,
+        password: 'legacyPassword',
+        createdAt: '2026-11-20T00:00:00.000Z',
+      },
+    ];
+
+    // Rechaza si quien ejecuta no es Administrador Principal
+    assert.equal(
+      adminResetUserPassword({
+        adminUser: partnerUser,
+        targetEmail: 'pendiente@x4sport.app',
+        newPassword: 'resetPassword2026',
+        stateUsers,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      adminResetUserPassword({
+        adminUser: unauthorizedAdmin,
+        targetEmail: 'pendiente@x4sport.app',
+        newPassword: 'resetPassword2026',
+        stateUsers,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      adminResetUserPassword({
+        adminUser: null,
+        targetEmail: 'pendiente@x4sport.app',
+        newPassword: 'resetPassword2026',
+        stateUsers,
+      }).ok,
+      false,
+    );
+
+    // Rechaza contraseñas menores a 4 caracteres
+    assert.equal(
+      adminResetUserPassword({
+        adminUser: mainAdmin,
+        targetEmail: 'pendiente@x4sport.app',
+        newPassword: 'abc',
+        stateUsers,
+      }).ok,
+      false,
+    );
+
+    // Permite al Administrador Principal reiniciar la contraseña
+    const okRes = adminResetUserPassword({
+      adminUser: mainAdmin,
+      targetEmail: 'pendiente@x4sport.app',
+      newPassword: 'resetPassword2026',
+      stateUsers,
+    });
+    assert.equal(okRes.ok, true);
+    assert.ok(okRes.updatedUsers);
+
+    const updatedTarget = okRes.updatedUsers?.find(
+      (u) => u.email === 'pendiente@x4sport.app',
+    );
+    assert.equal(updatedTarget?.password, undefined);
+    assert.equal(updatedTarget?.firstLoginPending, false);
+    assert.equal(
+      updatedTarget?.passwordHash,
+      hashPasswordSha256Sync('resetPassword2026'),
+    );
+
+    assert.equal(
+      authenticateByPassword(
+        'pendiente@x4sport.app',
+        'resetPassword2026',
+        okRes.updatedUsers,
+      ).ok,
+      true,
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+  }
+});
+
 

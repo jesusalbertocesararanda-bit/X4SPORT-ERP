@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
+  KeyRound,
   Menu,
   Package,
   RotateCcw,
@@ -14,12 +15,14 @@ import {
   X,
 } from 'lucide-react';
 import type { AlertThresholdsConfig, SubModuleId } from '../types/erp';
+import type { ERPUser } from '../utils/auth';
 import type { OperationalAlert } from '../utils/finance';
 import { getUnseenAlertCount } from '../utils/notifications';
 
 interface AppHeaderProps {
   moduleLabel: string;
   subModuleLabel?: string;
+  currentUser?: ERPUser | null;
   alerts: OperationalAlert[];
   alertThresholds: AlertThresholdsConfig;
   seenAlertIds: string[];
@@ -28,11 +31,13 @@ interface AppHeaderProps {
   onOpenMobileSidebar: () => void;
   onStartSale: () => void;
   onNavigateAlert: (alert: OperationalAlert) => void;
+  onOpenChangePassword?: () => void;
 }
 
 export function AppHeader({
   moduleLabel,
   subModuleLabel,
+  currentUser,
   alerts,
   alertThresholds,
   seenAlertIds,
@@ -41,6 +46,7 @@ export function AppHeader({
   onOpenMobileSidebar,
   onStartSale,
   onNavigateAlert,
+  onOpenChangePassword,
 }: AppHeaderProps) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -160,11 +166,25 @@ export function AppHeader({
           </nav>
         </div>
 
-        {/* Derecha: ÚNICAMENTE dos botones: Nueva Venta y Notificaciones */}
+        {/* Derecha: Nueva Venta, Cambiar mi contraseña y Notificaciones */}
         <div
           ref={popoverRef}
-          className="relative flex items-center gap-2.5 shrink-0"
+          className="relative flex items-center gap-2 sm:gap-2.5 shrink-0"
         >
+          {currentUser && onOpenChangePassword && (
+            <button
+              type="button"
+              data-testid="btn-change-own-password"
+              onClick={onOpenChangePassword}
+              title={`Cambiar mi contraseña (${currentUser.email})`}
+              aria-label="Cambiar mi contraseña"
+              className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 sm:px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:border-blue-500/45 hover:bg-slate-800 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+            >
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-400" aria-hidden="true" />
+              <span className="hidden md:inline">Cambiar mi contraseña</span>
+            </button>
+          )}
+
           <button
             type="button"
             data-testid="btn-header-make-sale"

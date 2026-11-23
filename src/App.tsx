@@ -5,6 +5,7 @@ import { AdjustmentsView } from './components/AdjustmentsView';
 import { AuditView } from './components/AuditView';
 import { BulkImportView } from './components/BulkImportView';
 import { CatalogAdminView } from './components/CatalogAdminView';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { ConfigView } from './components/ConfigView';
 import { DashboardView } from './components/DashboardView';
 import {
@@ -174,6 +175,7 @@ export default function App() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [rateSync, setRateSync] = useState<RateSyncInfo>({ status: 'idle' });
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isCatalogPreview, setIsCatalogPreview] = useState(false);
   const [calendarAuth, setCalendarAuth] = useState<GoogleCalendarAuthState>({
     isConnected: false,
@@ -211,6 +213,7 @@ export default function App() {
       if (isSessionExpired(lastActivityMs, nowMs)) {
         storeActiveUser(null);
         setCurrentUser(null);
+        setIsChangePasswordOpen(false);
         setActiveSubModule('dashboard');
         setSessionExpiredNotice(
           'Tu sesión se cerró automáticamente por superar 24 horas de inactividad. Inicia sesión nuevamente.',
@@ -271,6 +274,7 @@ export default function App() {
   const handleLogout = useCallback(() => {
     storeActiveUser(null);
     setCurrentUser(null);
+    setIsChangePasswordOpen(false);
     setSessionExpiredNotice(null);
     setActiveSubModule('dashboard');
   }, []);
@@ -1368,6 +1372,7 @@ export default function App() {
         <AppHeader
           moduleLabel={breadcrumb.moduleLabel}
           subModuleLabel={breadcrumb.subModuleLabel}
+          currentUser={currentUser}
           alerts={activeAlerts}
           alertThresholds={generalConfig.alertThresholds}
           seenAlertIds={effectiveSeenAlertIds}
@@ -1376,6 +1381,7 @@ export default function App() {
           onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
           onStartSale={() => setActiveSubModule('ventas-registrar')}
           onNavigateAlert={handleNavigateAlert}
+          onOpenChangePassword={() => setIsChangePasswordOpen(true)}
         />
 
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
@@ -1574,6 +1580,17 @@ export default function App() {
         onClose={() => setIsExcelModalOpen(false)}
         onApplyImportedState={handleApplyImportedState}
         onPurgeGhostData={handlePurgeGhostData}
+      />
+
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        currentUser={currentUser}
+        stateUsers={state.authorizedUsers}
+        onClose={() => setIsChangePasswordOpen(false)}
+        onUpdateAuthorizedUsers={(users) => {
+          handleUpdateAuthorizedUsers(users);
+          setLoginToast('Tu contraseña ha sido actualizada y sincronizada.');
+        }}
       />
     </div>
   );

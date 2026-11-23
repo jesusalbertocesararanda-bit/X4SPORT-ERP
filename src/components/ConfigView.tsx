@@ -9,7 +9,9 @@ import {
   Download,
   FileSpreadsheet,
   Globe,
+  KeyRound,
   Layers,
+  Lock,
   Mail,
   Plus,
   RefreshCcw,
@@ -31,6 +33,7 @@ import type {
   GeneralConfig,
 } from '../types/erp';
 import {
+  adminResetUserPassword,
   canAccessConfiguration,
   getMergedAuthorizedUsers,
   isProtectedAdminEmail,
@@ -171,6 +174,11 @@ export function ConfigView({
   );
   const [newUserPhone, setNewUserPhone] = useState('');
   const [showAddUserForm, setShowAddUserForm] = useState(false);
+  const [resetTargetUser, setResetTargetUser] =
+    useState<AuthorizedUserRecord | null>(null);
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [resetModalError, setResetModalError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
@@ -661,6 +669,64 @@ export function ConfigView({
     setFeedback({
       type: 'success',
       text: `Usuario con correo "${targetEmail}" eliminado del sistema.`,
+    });
+  };
+
+  const handleOpenResetPasswordModal = (userRecord: AuthorizedUserRecord) => {
+    setResetTargetUser(userRecord);
+    setResetNewPassword('');
+    setResetConfirmPassword('');
+    setResetModalError(null);
+  };
+
+  const handleCloseResetPasswordModal = () => {
+    setResetTargetUser(null);
+    setResetNewPassword('');
+    setResetConfirmPassword('');
+    setResetModalError(null);
+  };
+
+  const handleSubmitAdminResetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetTargetUser) return;
+    setResetModalError(null);
+
+    if (!resetNewPassword.trim() || resetNewPassword.trim().length < 4) {
+      setResetModalError(
+        'La nueva contraseña debe tener al menos 4 caracteres.',
+      );
+      return;
+    }
+
+    if (resetNewPassword.trim() !== resetConfirmPassword.trim()) {
+      setResetModalError('Las contraseñas no coinciden. Verifícalas.');
+      return;
+    }
+
+    const result = adminResetUserPassword({
+      adminUser: currentUser,
+      targetEmail: resetTargetUser.email,
+      newPassword: resetNewPassword,
+      stateUsers: state.authorizedUsers,
+    });
+
+    if (!result.ok || !result.updatedUsers) {
+      setResetModalError(
+        result.error ?? 'No se pudo reiniciar la contraseña del usuario.',
+      );
+      return;
+    }
+
+    if (onUpdateAuthorizedUsers) {
+      onUpdateAuthorizedUsers(result.updatedUsers);
+    }
+
+    const updatedName = resetTargetUser.name;
+    const updatedEmail = resetTargetUser.email;
+    handleCloseResetPasswordModal();
+    setFeedback({
+      type: 'success',
+      text: `Contraseña asignada y sincronizada en Firebase para ${updatedName} (${updatedEmail}).`,
     });
   };
 
@@ -1412,7 +1478,7 @@ export function ConfigView({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
                     {u.firstLoginPending ? (
                       <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
                         Primer ingreso pendiente
@@ -1422,6 +1488,17 @@ export function ConfigView({
                         Activo
                       </span>
                     )}
+
+                    <button
+                      type="button"
+                      data-testid={`btn-reset-password-${u.email}`}
+                      onClick={() => handleOpenResetPasswordModal(u)}
+                      title={`Reiniciar contraseña de ${u.name}`}
+                      className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-blue-500/35 bg-blue-600/15 px-2.5 py-1 text-[11px] font-semibold text-blue-200 hover:bg-blue-600/25 hover:text-white transition-colors"
+                    >
+                      <KeyRound className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      <span>Reiniciar contraseña</span>
+                    </button>
 
                     {!isMainAdmin && (
                       <button
@@ -1684,6 +1761,132 @@ export function ConfigView({
           Versión v2.4 · Remix Maestro (Nov 2026)
         </span>
       </div>
+
+      {/* Modal Admin: Reiniciar / Asignar contraseña de usuario */}
+      {resetTargetUser && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="admin-reset-password-title"
+          data-testid="admin-reset-password-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#040812]/85 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-[#080F1E] p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="rounded-xl border border-blue-500/35 bg-blue-500/15 p-2 text-blue-400">
+                  <KeyRound className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div>
+                  <h2
+                    id="admin-reset-password-title"
+                    className="font-display text-base font-bold text-white"
+                  >
+                    Reiniciar contraseña
+                  </h2>
+                  <p className="text-[11px] text-slate-400 truncate max-w-[260px]">
+                    {resetTargetUser.name} · {resetTargetUser.email}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseResetPasswordModal}
+                aria-label="Cerrar modal de reinicio"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSubmitAdminResetPassword}
+              className="mt-4 space-y-4"
+            >
+              {resetModalError && (
+                <div
+                  role="alert"
+                  data-testid="admin-reset-password-error"
+                  className="flex items-start gap-2 rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-2.5 text-xs text-red-200"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                  <span>{resetModalError}</span>
+                </div>
+              )}
+
+              <div>
+                <label
+                  htmlFor="admin-reset-new-password"
+                  className="block text-xs font-medium text-slate-300 mb-1"
+                >
+                  Nueva contraseña
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <input
+                    id="admin-reset-new-password"
+                    data-testid="input-admin-reset-new-password"
+                    type="password"
+                    required
+                    minLength={4}
+                    placeholder="Mínimo 4 caracteres"
+                    value={resetNewPassword}
+                    onChange={(e) => {
+                      setResetNewPassword(e.target.value);
+                      setResetModalError(null);
+                    }}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-700 bg-[#070D19] pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="admin-reset-confirm-password"
+                  className="block text-xs font-medium text-slate-300 mb-1"
+                >
+                  Confirmar contraseña
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <input
+                    id="admin-reset-confirm-password"
+                    data-testid="input-admin-reset-confirm-password"
+                    type="password"
+                    required
+                    minLength={4}
+                    placeholder="Repite la nueva contraseña"
+                    value={resetConfirmPassword}
+                    onChange={(e) => {
+                      setResetConfirmPassword(e.target.value);
+                      setResetModalError(null);
+                    }}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-700 bg-[#070D19] pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCloseResetPasswordModal}
+                  className="min-h-[40px] rounded-xl border border-slate-700 bg-[#0D1526] px-4 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  data-testid="btn-submit-admin-reset-password"
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500"
+                >
+                  <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Guardar contraseña</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
