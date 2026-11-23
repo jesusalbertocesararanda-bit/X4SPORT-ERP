@@ -238,6 +238,21 @@ function getFirebaseDatabase(): { ref: (path: string) => FirebaseDatabaseRef } {
 }
 
 let pendingSilentAuthPromise: Promise<boolean> | null = null;
+let lastSilentAuthError: string | null = null;
+
+function extractFirebaseAuthErrorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && code.trim()) {
+      return code.trim();
+    }
+  }
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  const str = String(err ?? '').trim();
+  return str || 'auth/unknown-error';
+}
 
 /**
  * Garantiza una sesión anónima silenciosa en Firebase Auth antes de operar sobre
@@ -263,6 +278,7 @@ export async function ensureSilentFirebaseAuth(): Promise<boolean> {
       return false;
     }
     if (authInstance.currentUser) {
+      lastSilentAuthError = null;
       return true;
     }
     if (typeof authInstance.signInAnonymously !== 'function') {
@@ -271,15 +287,25 @@ export async function ensureSilentFirebaseAuth(): Promise<boolean> {
 
     if (!pendingSilentAuthPromise) {
       pendingSilentAuthPromise = Promise.resolve(authInstance.signInAnonymously())
-        .then((cred) => Boolean(cred?.user ?? authInstance.currentUser))
-        .catch(() => false)
+        .then((cred) => {
+          const ok = Boolean(cred?.user ?? authInstance.currentUser);
+          if (ok) {
+            lastSilentAuthError = null;
+          }
+          return ok;
+        })
+        .catch((err: unknown) => {
+          lastSilentAuthError = extractFirebaseAuthErrorCode(err);
+          return false;
+        })
         .finally(() => {
           pendingSilentAuthPromise = null;
         });
     }
 
     return await pendingSilentAuthPromise;
-  } catch {
+  } catch (err: unknown) {
+    lastSilentAuthError = extractFirebaseAuthErrorCode(err);
     return false;
   }
 }
@@ -359,6 +385,28 @@ export function subscribeErpState(
       void fetch(restUrl, { cache: 'no-store' })
         .then(async (resp) => {
           if (!active || receivedRealtimeSnapshot) return;
+          if (resp.status === 401 || resp.status === 403) {
+            clearTimeout(safetyTimer);
+            const currentHost =
+              typeof window !== 'undefined' ? window.location?.hostname : '';
+            if (
+              lastSilentAuthError &&
+              lastSilentAuthError.toLowerCase().includes('unauthorized-domain')
+            ) {
+              onError(
+                `El dominio actual${currentHost ? ` (${currentHost})` : ''} no está autorizado en Firebase Authentication (${lastSilentAuthError}). Agrégalo en Firebase Console > Authentication > Settings > Authorized domains.`,
+              );
+            } else if (lastSilentAuthError) {
+              onError(
+                `Acceso denegado en Firebase Realtime Database (HTTP ${resp.status}). Detalle de Firebase Auth: ${lastSilentAuthError}.`,
+              );
+            } else {
+              onError(
+                `Permiso denegado en Firebase Realtime Database (HTTP ${resp.status}). Verifica las reglas de seguridad o habilita Anonymous Auth en Firebase Authentication.`,
+              );
+            }
+            return;
+          }
           if (!resp.ok) return;
           const data: unknown = await resp.json();
           if (!active || receivedRealtimeSnapshot) return;
@@ -389,9 +437,13 @@ export function subscribeErpState(
                   );
                   const initialPayload = sanitizeForFirebase(initialRecovered);
                   void stateRef
-                    .transaction((current) =>
-                      current === null ? initialPayload : current,
-                    )
+                    .transaction((current) => {
+                      try {
+                        return current === null ? initialPayload : current;
+                      } catch {
+                        return undefined;
+                      }
+                    })
                     .catch((err: unknown) => {
                       if (!active) return;
                       onError(formatFirebaseError(err));
@@ -483,17 +535,22 @@ export async function transactErpState(
     const txResult = await db.ref(RTDB_ERP_PATH).transaction((currentRaw) => {
       rejectedError = undefined;
       lastActionResult = null;
-      const baseState =
-        currentRaw !== null && currentRaw !== undefined
-          ? normalizeAppState(currentRaw)
-          : fallbackState;
-      const res = mutator(baseState);
-      if (!res.ok) {
-        rejectedError = res.error ?? 'Operación rechazada por validación.';
+      try {
+        const baseState =
+          currentRaw !== null && currentRaw !== undefined
+            ? normalizeAppState(currentRaw)
+            : fallbackState;
+        const res = mutator(baseState);
+        if (!res.ok) {
+          rejectedError = res.error ?? 'Operación rechazada por validación.';
+          return undefined;
+        }
+        lastActionResult = res;
+        return sanitizeForFirebase(res.state);
+      } catch (err: unknown) {
+        rejectedError = formatFirebaseError(err);
         return undefined;
       }
-      lastActionResult = res;
-      return sanitizeForFirebase(res.state);
     });
 
     if (rejectedError) {
@@ -705,6 +762,7 @@ export function subscribeGeneralConfig(
 export async function writeGeneralConfig(config: GeneralConfig): Promise<void> {
   const clean = normalizeGeneralConfig(config);
   saveLocalGeneralConfigBackup(clean);
+  await ensureSilentFirebaseAuth();
   const db = getFirebaseDatabase();
   await db.ref(RTDB_CONFIG_PATH).set(sanitizeForFirebase(clean));
 }
@@ -936,6 +994,7 @@ export function saveLocalPublicCatalogBackup(snapshot: PublicCatalogSnapshot): v
 export async function writePublicCatalogSnapshot(state: AppState): Promise<void> {
   const snapshot = buildPublicCatalogSnapshot(state);
   saveLocalPublicCatalogBackup(snapshot);
+  await ensureSilentFirebaseAuth();
   const db = getFirebaseDatabase();
   await db.ref(RTDB_PUBLIC_CATALOG_PATH).set(snapshot);
 }

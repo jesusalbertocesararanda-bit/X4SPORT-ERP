@@ -92,7 +92,7 @@ function ProductImageGallery({
   const [dragOffsetPx, setDragOffsetPx] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [slideStages, setSlideStages] = useState<Record<number, SlideLoadStage>>({});
-  const [isZoomed, setIsZoomed] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState<0 | 1 | 2>(0);
   const [zoomOrigin, setZoomOrigin] = useState<{ x: number; y: number }>({
     x: 50,
     y: 50,
@@ -120,13 +120,13 @@ function ProductImageGallery({
       : null;
 
   useEffect(() => {
-    setIsZoomed(false);
+    setZoomLevel(0);
   }, [model, version, photoUrl, safeIndex]);
 
   useEffect(() => {
-    if (!isZoomed) return;
+    if (zoomLevel === 0) return;
     const handleScrollReset = () => {
-      setIsZoomed(false);
+      setZoomLevel(0);
     };
     window.addEventListener('scroll', handleScrollReset, {
       passive: true,
@@ -137,7 +137,7 @@ function ProductImageGallery({
         capture: true,
       });
     };
-  }, [isZoomed]);
+  }, [zoomLevel]);
 
   const computeOriginFromPoint = useCallback(
     (clientX: number, clientY: number) => {
@@ -164,7 +164,7 @@ function ProductImageGallery({
   };
 
   const goToIndex = (nextIdx: number) => {
-    setIsZoomed(false);
+    setZoomLevel(0);
     setActiveIndex(clampCatalogCarouselIndex(nextIdx, total));
   };
 
@@ -208,14 +208,17 @@ function ProductImageGallery({
     setDragOffsetPx(0);
   };
 
+  const isZoomActive = zoomLevel > 0;
+
   return (
     <div
       ref={galleryRef}
       data-testid="product-image-gallery"
-      data-zoomed={isZoomed ? 'true' : 'false'}
+      data-zoomed={isZoomActive ? 'true' : 'false'}
+      data-zoom-level={String(zoomLevel)}
       className={`relative aspect-[4/5] w-full overflow-hidden bg-[#070D19] select-none ${
-        isZoomed && currentSrc
-          ? 'touch-none cursor-zoom-out'
+        isZoomActive && currentSrc
+          ? `touch-none ${zoomLevel === 2 ? 'cursor-zoom-out' : 'cursor-zoom-in'}`
           : `${total > 1 ? 'touch-pan-y' : 'touch-pan-x touch-pan-y'} ${
               currentSrc ? 'cursor-zoom-in' : ''
             }`
@@ -226,12 +229,12 @@ function ProductImageGallery({
         const origin = computeOriginFromPoint(e.clientX, e.clientY);
         if (origin) {
           setZoomOrigin(origin);
-          if (!isZoomed) setIsZoomed(true);
+          if (zoomLevel === 0) setZoomLevel(1);
         }
       }}
       onMouseLeave={() => {
         if (Date.now() - lastTouchTimeRef.current < 600) return;
-        setIsZoomed(false);
+        setZoomLevel(0);
       }}
       onTouchStart={(e) => {
         const t = e.touches[0];
@@ -239,7 +242,7 @@ function ProductImageGallery({
         lastTouchTimeRef.current = Date.now();
         tapStartRef.current = { x: t.clientX, y: t.clientY };
         tapMovedRef.current = false;
-        if (isZoomed && currentSrc) {
+        if (isZoomActive && currentSrc) {
           e.stopPropagation();
           return;
         }
@@ -258,7 +261,7 @@ function ProductImageGallery({
             tapMovedRef.current = true;
           }
         }
-        if (isZoomed && currentSrc) {
+        if (isZoomActive && currentSrc) {
           e.stopPropagation();
           const origin = computeOriginFromPoint(t.clientX, t.clientY);
           if (origin) setZoomOrigin(origin);
@@ -273,10 +276,21 @@ function ProductImageGallery({
         tapStartRef.current = null;
         tapMovedRef.current = false;
 
-        if (isZoomed && currentSrc) {
+        if (isZoomActive && currentSrc) {
           e.stopPropagation();
           if (isCleanTap) {
-            setIsZoomed(false);
+            if (zoomLevel === 1) {
+              const changed = e.changedTouches[0];
+              const px = changed?.clientX ?? startPt?.x;
+              const py = changed?.clientY ?? startPt?.y;
+              if (px !== undefined && py !== undefined) {
+                const origin = computeOriginFromPoint(px, py);
+                if (origin) setZoomOrigin(origin);
+              }
+              setZoomLevel(2);
+            } else {
+              setZoomLevel(0);
+            }
           }
           return;
         }
@@ -291,7 +305,7 @@ function ProductImageGallery({
             const origin = computeOriginFromPoint(px, py);
             if (origin) setZoomOrigin(origin);
           }
-          setIsZoomed(true);
+          setZoomLevel(1);
         }
       }}
       onTouchCancel={() => {
@@ -304,7 +318,7 @@ function ProductImageGallery({
         if (Date.now() - lastTouchTimeRef.current < 600) return;
         const origin = computeOriginFromPoint(e.clientX, e.clientY);
         if (origin) setZoomOrigin(origin);
-        setIsZoomed((prev) => !prev);
+        setZoomLevel((prev) => (prev === 0 ? 1 : prev === 1 ? 2 : 1));
       }}
     >
       {total === 0 ? (
@@ -320,9 +334,14 @@ function ProductImageGallery({
         >
           {normalizedImages.map((imgUrl, idx) => {
             const resolvedSrc = resolveSlideSrc(idx, imgUrl);
-            const isSlideZoomed = Boolean(
-              isZoomed && idx === safeIndex && resolvedSrc,
-            );
+            const slideZoomLevel: 0 | 1 | 2 =
+              idx === safeIndex && resolvedSrc ? zoomLevel : 0;
+            const slideScaleClass =
+              slideZoomLevel === 2
+                ? 'duration-75 scale-[3.8]'
+                : slideZoomLevel === 1
+                  ? 'duration-75 scale-[2.35]'
+                  : 'duration-200 scale-100';
             return (
               <div
                 key={`${imgUrl}-${idx}`}
@@ -339,11 +358,9 @@ function ProductImageGallery({
                     style={{
                       transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
                     }}
-                    className={`h-full w-full object-contain p-1.5 sm:p-2 transition-transform ease-out ${
-                      isSlideZoomed
-                        ? 'duration-75 scale-[2.35]'
-                        : 'duration-200 scale-100'
-                    } ${isTransit ? 'opacity-90' : ''}`}
+                    className={`h-full w-full object-contain p-1.5 sm:p-2 transition-transform ease-out ${slideScaleClass} ${
+                      isTransit ? 'opacity-90' : ''
+                    }`}
                   />
                 ) : (
                   <JerseyShowcaseFallback
@@ -368,13 +385,19 @@ function ProductImageGallery({
         </span>
       )}
 
-      {/* Indicador / botón discreto de lupa en la esquina inferior izquierda (solo fotos reales) */}
+      {/* Indicador / botón discreto de lupa de 2 niveles en la esquina inferior izquierda (solo fotos reales) */}
       {currentSrc && (
         <button
           type="button"
           data-testid="gallery-zoom-btn"
-          aria-label={isZoomed ? 'Desactivar lupa' : 'Activar lupa'}
-          aria-pressed={isZoomed}
+          aria-label={
+            zoomLevel === 0
+              ? 'Activar lupa (2.3x)'
+              : zoomLevel === 1
+                ? 'Aumentar lupa a 3.8x'
+                : 'Desactivar lupa'
+          }
+          aria-pressed={isZoomActive}
           onTouchStart={(e) => {
             e.stopPropagation();
             lastTouchTimeRef.current = Date.now();
@@ -382,30 +405,50 @@ function ProductImageGallery({
           onTouchEnd={(e) => {
             e.stopPropagation();
             lastTouchTimeRef.current = Date.now();
-            if (isZoomed) {
-              setIsZoomed(false);
-            } else {
-              setZoomOrigin({ x: 50, y: 50 });
-              setIsZoomed(true);
-            }
+            setZoomLevel((prev) => {
+              if (prev === 0) {
+                setZoomOrigin({ x: 50, y: 50 });
+                return 1;
+              }
+              if (prev === 1) {
+                return 2;
+              }
+              return 0;
+            });
           }}
           onClick={(e) => {
             e.stopPropagation();
             if (Date.now() - lastTouchTimeRef.current < 600) return;
-            if (isZoomed) {
-              setIsZoomed(false);
-            } else {
-              setZoomOrigin({ x: 50, y: 50 });
-              setIsZoomed(true);
-            }
+            setZoomLevel((prev) => {
+              if (prev === 0) {
+                setZoomOrigin({ x: 50, y: 50 });
+                return 1;
+              }
+              if (prev === 1) {
+                return 2;
+              }
+              return 0;
+            });
           }}
-          className={`absolute bottom-2 left-2 z-20 inline-flex items-center justify-center rounded-full p-1.5 backdrop-blur-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
-            isZoomed
-              ? 'bg-blue-600/90 border border-blue-400 text-white'
-              : 'bg-slate-950/75 border border-slate-700/80 text-slate-200 hover:border-slate-500 hover:text-white'
+          className={`absolute bottom-2 left-2 z-20 inline-flex items-center justify-center gap-1 rounded-full backdrop-blur-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+            zoomLevel === 2
+              ? 'px-2 py-1 bg-emerald-600/90 border border-emerald-400 text-white'
+              : zoomLevel === 1
+                ? 'px-2 py-1 bg-blue-600/90 border border-blue-400 text-white'
+                : 'p-1.5 bg-slate-950/75 border border-slate-700/80 text-slate-200 hover:border-slate-500 hover:text-white'
           }`}
         >
-          <ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
+          <ZoomIn className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {zoomLevel === 1 && (
+            <span className="font-mono-num text-[10px] font-bold leading-none">
+              2.3x
+            </span>
+          )}
+          {zoomLevel === 2 && (
+            <span className="font-mono-num text-[10px] font-bold leading-none">
+              3.8x
+            </span>
+          )}
         </button>
       )}
 

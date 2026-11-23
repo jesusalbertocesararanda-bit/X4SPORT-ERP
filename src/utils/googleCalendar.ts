@@ -115,19 +115,31 @@ export function initGoogleCalendarAuth(
 
   try {
     const { auth } = getWorkspaceAuth();
-    return onAuthStateChanged(auth, (user: User | null) => {
-      if (user) {
-        if (cachedAccessToken) {
-          onAuthSuccess?.(user, cachedAccessToken);
-        } else if (!isSigningIn) {
+    return onAuthStateChanged(
+      auth,
+      (user: User | null) => {
+        try {
+          if (user) {
+            if (cachedAccessToken) {
+              onAuthSuccess?.(user, cachedAccessToken);
+            } else if (!isSigningIn) {
+              cachedAccessToken = null;
+              onAuthFailure?.();
+            }
+          } else {
+            cachedAccessToken = null;
+            onAuthFailure?.();
+          }
+        } catch {
           cachedAccessToken = null;
           onAuthFailure?.();
         }
-      } else {
+      },
+      () => {
         cachedAccessToken = null;
         onAuthFailure?.();
-      }
-    });
+      },
+    );
   } catch {
     onAuthFailure?.();
     return () => {};

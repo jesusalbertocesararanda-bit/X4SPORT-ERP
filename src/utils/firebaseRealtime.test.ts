@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createInitialState } from '../data/initialState';
-import { registerCapitalInjection } from './finance';
+import { DEFAULT_GENERAL_CONFIG, registerCapitalInjection } from './finance';
 import {
   buildPublicCatalogSnapshot,
   ensureSilentFirebaseAuth,
+  RTDB_CONFIG_PATH,
   RTDB_ERP_PATH,
   RTDB_PUBLIC_CATALOG_PATH,
   subscribeErpState,
   subscribePublicCatalog,
   transactErpState,
   updateErpState,
+  writeGeneralConfig,
   writePublicCatalogSnapshot,
 } from './firebaseRealtime';
 
@@ -598,3 +600,112 @@ test('subscribeErpState y updateErpState autentican silenciosamente antes de acc
     }
   }
 });
+
+test('writeGeneralConfig y writePublicCatalogSnapshot ejecutan ensureSilentFirebaseAuth antes de escribir en db.ref', async () => {
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const sequence: string[] = [];
+
+  const authMock = {
+    currentUser: null as { uid: string } | null,
+    signInAnonymously: async () => {
+      sequence.push('auth:signInAnonymously');
+      authMock.currentUser = { uid: 'anon-uid-writes' };
+      return { user: authMock.currentUser };
+    },
+  };
+
+  (globalThis as { window?: unknown }).window = {
+    firebase: {
+      apps: [{}],
+      initializeApp: () => ({}),
+      app: () => ({}),
+      auth: () => authMock,
+      database: () => ({
+        ref: (path: string) => {
+          sequence.push(`db:ref:${path}`);
+          return {
+            set: async () => {
+              sequence.push(`db:set:${path}`);
+            },
+          };
+        },
+      }),
+    },
+  };
+
+  try {
+    await writeGeneralConfig(DEFAULT_GENERAL_CONFIG);
+    assert.equal(sequence[0], 'auth:signInAnonymously');
+    assert.equal(sequence[1], `db:ref:${RTDB_CONFIG_PATH}`);
+    assert.equal(sequence[2], `db:set:${RTDB_CONFIG_PATH}`);
+
+    authMock.currentUser = null;
+    await writePublicCatalogSnapshot(createInitialState());
+    assert.equal(sequence[3], 'auth:signInAnonymously');
+    assert.equal(sequence[4], `db:ref:${RTDB_PUBLIC_CATALOG_PATH}`);
+    assert.equal(sequence[5], `db:set:${RTDB_PUBLIC_CATALOG_PATH}`);
+  } finally {
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+  }
+});
+
+test('subscribeErpState reporta inmediatamente el error de dominio no autorizado si signInAnonymously falla y REST devuelve 401/403', async () => {
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () =>
+    ({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Permission denied' }),
+    }) as Response) as typeof fetch;
+
+  (globalThis as { window?: unknown }).window = {
+    location: { hostname: 'ais-dev-example.run.app' },
+    firebase: {
+      apps: [{}],
+      initializeApp: () => ({}),
+      app: () => ({}),
+      auth: () => ({
+        currentUser: null,
+        signInAnonymously: async () => {
+          const err = new Error('Domain not authorized') as Error & { code: string };
+          err.code = 'auth/unauthorized-domain';
+          throw err;
+        },
+      }),
+      database: () => ({
+        ref: () => ({
+          on: () => () => {},
+          off: () => {},
+        }),
+      }),
+    },
+  };
+
+  try {
+    const errors: string[] = [];
+    const unsubscribe = subscribeErpState(
+      () => {},
+      (msg) => errors.push(msg),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    unsubscribe();
+
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].includes('ais-dev-example.run.app'));
+    assert.ok(errors[0].includes('auth/unauthorized-domain'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+  }
+});
+
