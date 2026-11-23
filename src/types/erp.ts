@@ -193,6 +193,8 @@ export interface SaleRecord {
   unitCogs: number;
   finalPrice: number;
   paidAmount?: number; // Monto pagado al momento de registrar la venta
+  returnedAmount?: number; // Monto acumulado devuelto / acreditado por devoluciones
+  returnStatus?: 'Parcial' | 'Total'; // Indica si la factura tuvo devolución parcial o total
   items?: SaleLineItem[];
   customerName: string;
   customerCity?: string;
@@ -472,6 +474,7 @@ export interface AuthorizedUserRecord {
   title?: string;
   phone?: string;
   password?: string;
+  passwordHash?: string;
   firstLoginPending: boolean;
   avatarBg?: string;
   createdAt: string;

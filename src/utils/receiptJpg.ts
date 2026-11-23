@@ -119,15 +119,16 @@ export async function renderSaleReceiptJpgDataUrl(
         ];
 
   const isCreditSale = sale.paymentStatus === 'Pendiente';
+  const netFinalPrice = round2(Math.max(0, sale.finalPrice - (sale.returnedAmount ?? 0)));
   const paidAmount = round2(
     sale.paidAmount !== undefined
       ? sale.paidAmount
       : isCreditSale
         ? 0
-        : sale.finalPrice,
+        : netFinalPrice,
   );
   const pendingBalance = isCreditSale
-    ? round2(Math.max(0, sale.finalPrice - paidAmount))
+    ? round2(Math.max(0, netFinalPrice - paidAmount))
     : 0;
 
   const width = 920;

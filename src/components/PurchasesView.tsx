@@ -785,10 +785,19 @@ export function PurchasesView({
       0,
       round2(Number(actualFreightInput) || 0),
     );
-    const totalReceivedUnits = receivingBatch.items.reduce((sum, _, idx) => {
+    let totalReceivedUnits = 0;
+    let arrivedFactoryCostRaw = 0;
+    receivingBatch.items.forEach((item, idx) => {
       const q = Math.max(0, Math.floor(Number(receivedQtys[idx]) || 0));
-      return sum + q;
-    }, 0);
+      totalReceivedUnits += q;
+      arrivedFactoryCostRaw += q * item.factoryUnitCost;
+    });
+    const arrivedFactoryCost = round2(arrivedFactoryCostRaw);
+    const factoryShortageUsd = round2(
+      Math.max(0, receivingBatch.totalFactoryCost - arrivedFactoryCost),
+    );
+    const shortagePerUnitExact =
+      totalReceivedUnits > 0 ? factoryShortageUsd / totalReceivedUnits : 0;
     const freightPerUnitExact =
       totalReceivedUnits > 0 ? parsedActualFreight / totalReceivedUnits : 0;
     const estimatedFreight =
@@ -801,6 +810,10 @@ export function PurchasesView({
     return {
       parsedActualFreight,
       totalReceivedUnits,
+      arrivedFactoryCost,
+      factoryShortageUsd,
+      shortagePerUnitExact,
+      shortagePerUnitDisplay: round2(shortagePerUnitExact),
       freightPerUnitExact,
       freightPerUnitDisplay: round2(freightPerUnitExact),
       estimatedFreight,
@@ -2822,6 +2835,7 @@ export function PurchasesView({
                         ? round2(
                             round4(
                               item.factoryUnitCost +
+                                modalAuditPreview.shortagePerUnitExact +
                                 modalAuditPreview.freightPerUnitExact,
                             ),
                           )
@@ -2932,6 +2946,20 @@ export function PurchasesView({
                     {modalAuditPreview.elapsedDays === 1 ? 'día' : 'días'}
                   </span>
                 </div>
+
+                {modalAuditPreview.factoryShortageUsd > 0 && (
+                  <div
+                    data-testid="receive-factory-shortage"
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="text-slate-400">
+                      Faltante de fábrica ({formatUSD(modalAuditPreview.factoryShortageUsd)})
+                    </span>
+                    <span className="font-mono-num font-semibold text-amber-300 text-right">
+                      Prorrateado +{formatUSD(modalAuditPreview.shortagePerUnitDisplay)}/ud (sin devolución a caja)
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">

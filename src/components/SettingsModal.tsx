@@ -44,7 +44,10 @@ interface SettingsModalProps {
   onClose: () => void;
   onOpenExcelImport: () => void;
   onSyncRatesFromApi: () => Promise<{ ok: boolean; error?: string }>;
-  onUpdateRates: (bcv: number, usdt: number) => { ok: boolean; error?: string };
+  onUpdateRates: (
+    bcv: number,
+    usdt: number,
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onResetDemoData: () => void;
   onUpdateAuthorizedUsers?: (users: AuthorizedUserRecord[]) => void;
 }
@@ -71,6 +74,8 @@ export function SettingsModal({
   const [downloadingHtml, setDownloadingHtml] = useState(false);
   const [confirmDemoReset, setConfirmDemoReset] = useState(false);
   const [copiedCatalogUrl, setCopiedCatalogUrl] = useState(false);
+  const [isSavingRates, setIsSavingRates] = useState(false);
+  const [ratesError, setRatesError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -164,21 +169,40 @@ export function SettingsModal({
 
   const authorizedUsersList = getMergedAuthorizedUsers(state.authorizedUsers);
 
-  const handleSaveRates = (e: React.FormEvent) => {
+  const handleSaveRates = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingRates) return;
     setFeedback(null);
-    const res = onUpdateRates(Number(bcvInput), Number(usdtInput));
-    if (!res.ok) {
+    setRatesError(null);
+    setIsSavingRates(true);
+    try {
+      const res = await onUpdateRates(Number(bcvInput), Number(usdtInput));
+      if (!res.ok) {
+        const msg = res.error ?? 'Error al guardar las tasas.';
+        setRatesError(msg);
+        setFeedback({
+          type: 'error',
+          text: msg,
+        });
+        return;
+      }
+      setFeedback({
+        type: 'success',
+        text: 'Tasas BCV / USDT actualizadas en Firebase Realtime Database.',
+      });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Error al guardar las tasas en Firebase.';
+      setRatesError(msg);
       setFeedback({
         type: 'error',
-        text: res.error ?? 'Error al guardar las tasas.',
+        text: msg,
       });
-      return;
+    } finally {
+      setIsSavingRates(false);
     }
-    setFeedback({
-      type: 'success',
-      text: 'Tasas BCV / USDT actualizadas en Firebase Realtime Database.',
-    });
   };
 
   const handleDownloadStandaloneHtml = async () => {
@@ -657,7 +681,10 @@ export function SettingsModal({
                 step="0.01"
                 min="0.01"
                 value={bcvInput}
-                onChange={(e) => setBcvInput(e.target.value)}
+                onChange={(e) => {
+                  setBcvInput(e.target.value);
+                  setRatesError(null);
+                }}
                 className="font-mono-num mt-1 w-full min-h-[42px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
               />
             </div>
@@ -675,16 +702,28 @@ export function SettingsModal({
                 step="0.01"
                 min="0.01"
                 value={usdtInput}
-                onChange={(e) => setUsdtInput(e.target.value)}
+                onChange={(e) => {
+                  setUsdtInput(e.target.value);
+                  setRatesError(null);
+                }}
                 className="font-mono-num mt-1 w-full min-h-[42px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
               />
             </div>
+
+            {ratesError && (
+              <p
+                role="alert"
+                className="sm:col-span-2 rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-300"
+              >
+                {ratesError}
+              </p>
+            )}
 
             <div className="sm:col-span-2 flex flex-wrap gap-2.5 pt-1">
               <button
                 type="button"
                 onClick={() => void onSyncRatesFromApi()}
-                disabled={rateSync.status === 'loading'}
+                disabled={rateSync.status === 'loading' || isSavingRates}
                 className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-700 bg-[#0D1526] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-60"
               >
                 <Globe className="h-4 w-4" aria-hidden="true" />
@@ -692,10 +731,14 @@ export function SettingsModal({
               </button>
               <button
                 type="submit"
-                className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500"
+                disabled={isSavingRates}
+                className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60"
               >
-                <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                Guardar Tasas
+                <RefreshCw
+                  className={`h-4 w-4 ${isSavingRates ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                {isSavingRates ? 'Sincronizando...' : 'Guardar Tasas'}
               </button>
             </div>
           </form>

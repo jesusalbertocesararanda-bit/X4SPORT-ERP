@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Check,
   Copy,
   ExternalLink,
@@ -248,6 +249,27 @@ export function CatalogAdminView({
     (m) => m.inTransitUnits > 0,
   ).length;
 
+  const catalogPhotosWeight = useMemo(() => {
+    const encoder = new TextEncoder();
+    let totalBytes = 0;
+    let localUploadsCount = 0;
+    for (const val of Object.values(state.catalogPhotos ?? {})) {
+      if (typeof val !== 'string') continue;
+      totalBytes += encoder.encode(val).length;
+      if (val.startsWith('data:image/')) {
+        localUploadsCount += 1;
+      }
+    }
+    const totalKb = totalBytes / 1024;
+    const isOverLimit = totalKb >= 300;
+    return {
+      totalKb,
+      totalKbLabel: totalKb < 10 ? totalKb.toFixed(1) : Math.round(totalKb).toString(),
+      localUploadsCount,
+      isOverLimit,
+    };
+  }, [state.catalogPhotos]);
+
   return (
     <div className="space-y-6">
       {/* Header + Interruptor Principal */}
@@ -418,18 +440,33 @@ export function CatalogAdminView({
 
       {/* Gestor de Fotos y Palabras Clave */}
       <section className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="font-display text-lg font-semibold text-white flex items-center gap-2">
-              <ImagePlus className="h-5 w-5 text-blue-400" aria-hidden="true" />
-              Gestión de Fotos y Etiquetas de Búsqueda
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Sube fotos desde tu teléfono/PC o pega un enlace de Google Drive / URL directa para cada modelo.
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="font-display text-lg font-semibold text-white flex items-center gap-2">
+                <ImagePlus className="h-5 w-5 text-blue-400" aria-hidden="true" />
+                Gestión de Fotos y Etiquetas de Búsqueda
+              </h2>
+              <span
+                data-testid="catalog-photos-weight-badge"
+                className={`font-mono-num inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
+                  catalogPhotosWeight.isOverLimit
+                    ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                    : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
+                }`}
+              >
+                {catalogPhotosWeight.isOverLimit && (
+                  <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+                )}
+                Peso fotos en BD: {catalogPhotosWeight.totalKbLabel} KB / 300 KB
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              Pega un enlace de Google Drive o URL directa (0 KB en BD) o, como alternativa, sube una foto comprimida desde tu teléfono/PC.
             </p>
           </div>
 
-          <div className="relative w-full sm:w-72">
+          <div className="relative w-full sm:w-72 shrink-0">
             <Search
               className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
               aria-hidden="true"
@@ -444,6 +481,23 @@ export function CatalogAdminView({
             />
           </div>
         </div>
+
+        {catalogPhotosWeight.isOverLimit && (
+          <div
+            role="alert"
+            data-testid="catalog-photos-weight-warning"
+            className="flex items-start gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
+            <span>
+              El peso total de las fotos ({catalogPhotosWeight.totalKbLabel} KB) supera los 300 KB recomendados
+              {catalogPhotosWeight.localUploadsCount > 0
+                ? ` (${catalogPhotosWeight.localUploadsCount} foto(s) guardada(s) localmente).`
+                : '.'}{' '}
+              Reemplaza las fotos locales por enlaces de Google Drive para mantener el catálogo ultrarrápido en datos móviles.
+            </span>
+          </div>
+        )}
 
         {filteredModels.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-700 bg-[#080E1C] p-8 text-center text-xs text-slate-400">
@@ -533,27 +587,16 @@ export function CatalogAdminView({
                       )}
                     </div>
 
-                    {/* Subida desde dispositivo móvil / PC */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <label className="inline-flex min-h-[34px] cursor-pointer items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/15 px-3 py-1 text-[11px] font-semibold text-blue-200 hover:bg-blue-600/25 hover:text-white">
-                        <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                        {isUploading ? 'Procesando...' : 'Subir foto (Móvil/PC)'}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="sr-only"
-                          disabled={isUploading}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            void handleUploadDevicePhoto(entry.key, entry.model, f);
-                            e.target.value = '';
-                          }}
-                        />
-                      </label>
-                    </div>
-
-                    {/* Enlace Google Drive o URL */}
-                    <div className="space-y-1">
+                    {/* 1. Enlace Google Drive o URL directa (Prioritario) */}
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="text-[11px] font-medium text-slate-300">
+                          Enlace de Google Drive o URL directa
+                        </span>
+                        <span className="inline-flex items-center rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                          Recomendado · 0 KB en BD
+                        </span>
+                      </div>
                       <div className="flex gap-1.5">
                         <input
                           type="text"
@@ -579,6 +622,25 @@ export function CatalogAdminView({
                       <p className="text-[10px] text-slate-400">
                         Soporta enlaces de Google Drive (<span className="text-slate-300 font-mono">file/d/...</span>, <span className="text-slate-300 font-mono">open?id=...</span>, <span className="text-slate-300 font-mono">uc?id=...</span>) con conversión a <span className="text-slate-300 font-mono">=w1000</span> y respaldo automático.
                       </p>
+                    </div>
+
+                    {/* 2. Alternativa secundaria: subida desde dispositivo móvil / PC */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex min-h-[32px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:border-slate-500 hover:text-white transition-colors">
+                        <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                        {isUploading ? 'Procesando...' : 'Subir foto desde dispositivo (Móvil/PC)'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="sr-only"
+                          disabled={isUploading}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            void handleUploadDevicePhoto(entry.key, entry.model, f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
                     </div>
 
                     {/* Etiquetas / jugadores para buscador */}

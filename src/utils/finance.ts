@@ -9,7 +9,7 @@ import {
   INITIAL_RECEIVABLES,
   PARTNER_SHARES,
 } from '../data/initialState';
-import { getMergedAuthorizedUsers, getStoredActiveUser } from './auth';
+import { getMergedAuthorizedUsers } from './auth';
 import type {
   AlertThresholdsConfig,
   AppState,
@@ -63,6 +63,8 @@ import {
   normalizeCustomerText,
   normalizePhoneDigits,
 } from './customers';
+
+export const MAX_RECENT_MOVEMENTS = 300;
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   'Logística/Producción',
@@ -995,6 +997,57 @@ function applyScaledBreakdownToFunds(
   };
 }
 
+function deductReversedBreakdownFromFunds(
+  funds: FinancialFunds,
+  delta: FourLayerBreakdown,
+  seller: SellerName,
+): FinancialFunds {
+  const nextCommissionsBySeller = { ...funds.commissionsBySeller };
+  if (!isUnassignedSeller(seller) && delta.layer2Commission > 0) {
+    const partner = seller as PartnerName;
+    nextCommissionsBySeller[partner] = round2(
+      Math.max(
+        0,
+        (nextCommissionsBySeller[partner] ?? 0) - delta.layer2Commission,
+      ),
+    );
+  }
+  const nextCommissionsTotal = funds.commissionsBySeller
+    ? round2(
+        nextCommissionsBySeller.Jesús +
+          nextCommissionsBySeller.Josué +
+          nextCommissionsBySeller.Gabriel,
+      )
+    : round2(Math.max(0, funds.commissions - delta.layer2Commission));
+
+  return {
+    ...funds,
+    replacement: round2(Math.max(0, funds.replacement - delta.layer1CostRecovery)),
+    commissions: nextCommissionsTotal,
+    commissionsBySeller: nextCommissionsBySeller,
+    operatingAndAds: round2(
+      Math.max(0, funds.operatingAndAds - delta.layer3OperatingFund),
+    ),
+    growthReinvestment: round2(
+      Math.max(0, funds.growthReinvestment - delta.layer4GrowthReinvestment),
+    ),
+    dividendsByPartner: {
+      Jesús: round2(
+        Math.max(0, funds.dividendsByPartner.Jesús - delta.partnerSplits.Jesús),
+      ),
+      Josué: round2(
+        Math.max(0, funds.dividendsByPartner.Josué - delta.partnerSplits.Josué),
+      ),
+      Gabriel: round2(
+        Math.max(
+          0,
+          funds.dividendsByPartner.Gabriel - delta.partnerSplits.Gabriel,
+        ),
+      ),
+    },
+  };
+}
+
 export interface CartSaleItemInput {
   skuId: string;
   quantity: number;
@@ -1019,6 +1072,7 @@ export interface RegisterMultiSaleInput {
   debtorName?: string;
   deliveryDate?: string;
   clientOperationId?: string;
+  actorName?: string;
 }
 
 export interface RegisterSaleInput {
@@ -1036,6 +1090,7 @@ export interface RegisterSaleInput {
   paymentSplits?: PaymentSplit[];
   debtorName?: string;
   deliveryDate?: string;
+  actorName?: string;
 }
 
 export interface UpsertCustomerInput {
@@ -1422,8 +1477,7 @@ export function registerMultiItemSale(
     input.seller,
   );
 
-  const activeUser = getStoredActiveUser();
-  const currentUserName = activeUser ? activeUser.name : 'Jesús César';
+  const currentUserName = input.actorName?.trim() || 'Jesús César';
 
   const firstLine = resolvedLines[0];
   const saleRecord: SaleRecord = {
@@ -1500,7 +1554,7 @@ export function registerMultiItemSale(
         amount: totalFinalPrice,
         createdAt: now,
       },
-      ...state.movements.slice(0, 49),
+      ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
     ],
   };
 
@@ -1532,6 +1586,7 @@ export function registerSale(
     paymentSplits: input.paymentSplits,
     debtorName: input.debtorName,
     deliveryDate: input.deliveryDate,
+    actorName: input.actorName,
   });
 }
 
@@ -1558,6 +1613,7 @@ export interface RegisterImportBatchInput {
   isDirectReception?: boolean;
   clientOperationId?: string;
   usdtRate?: number;
+  actorName?: string;
   items: BatchPurchaseLineInput[];
 }
 
@@ -1744,8 +1800,7 @@ export function createImportOrder(
   const estimatedArrivalDate = input.estimatedArrivalDate?.trim() || undefined;
   const cleanSupplier = input.supplier?.trim() || undefined;
 
-  const activeUser = getStoredActiveUser();
-  const currentUserName = activeUser ? activeUser.name : 'Jesús César';
+  const currentUserName = input.actorName?.trim() || 'Jesús César';
 
   const batchRecord: PurchaseBatchRecord = {
     id: batchId,
@@ -1810,7 +1865,7 @@ export function createImportOrder(
         amount: -totalLandedCost,
         createdAt: now,
       },
-      ...state.movements.slice(0, 49),
+      ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
     ],
   };
 
@@ -1913,6 +1968,7 @@ export function receiveImportBatch(
 
   const receivedCounts: number[] = [];
   let totalReceivedUnits = 0;
+  let actualTotalFactoryCostRaw = 0;
 
   for (let i = 0; i < targetBatch.items.length; i++) {
     const orderedItem = targetBatch.items[i];
@@ -1928,6 +1984,7 @@ export function receiveImportBatch(
     }
     receivedCounts.push(qty);
     totalReceivedUnits += qty;
+    actualTotalFactoryCostRaw += qty * orderedItem.factoryUnitCost;
   }
 
   if (totalReceivedUnits <= 0) {
@@ -1941,16 +1998,21 @@ export function receiveImportBatch(
   const estimatedFreight =
     targetBatch.estimatedFreightCost ?? targetBatch.totalFreightCost;
   const freightDiff = round2(actualFreightCost - estimatedFreight);
+  const arrivedFactoryCost = round2(actualTotalFactoryCostRaw);
+  const factoryShortageUsd = round2(
+    Math.max(0, targetBatch.totalFactoryCost - arrivedFactoryCost),
+  );
   const fundingSource = targetBatch.fundingSource ?? 'cashOnHand';
 
   if (freightDiff > 0 && freightDiff > state.cashOnHand) {
     return {
       ok: false,
-      error: `Efectivo insuficiente en caja (${formatUSD(state.cashOnHand)}) para cubrir la diferencia de flete real (+${formatUSD(freightDiff)}).`,
+      error: `Efectivo insuficiente en caja (${formatUSD(state.cashOnHand)}) para cubrir la diferencia adicional de flete (+${formatUSD(freightDiff)}).`,
       state,
     };
   }
 
+  const shortagePerUnitExact = factoryShortageUsd / totalReceivedUnits;
   const freightPerUnitExact = actualFreightCost / totalReceivedUnits;
   const freightPerUnitDisplay = round2(freightPerUnitExact);
 
@@ -1966,7 +2028,9 @@ export function receiveImportBatch(
   for (let i = 0; i < targetBatch.items.length; i++) {
     const line = targetBatch.items[i];
     const receivedQty = receivedCounts[i];
-    const exactLandedUnitCost = round4(line.factoryUnitCost + freightPerUnitExact);
+    const exactLandedUnitCost = round4(
+      line.factoryUnitCost + shortagePerUnitExact + freightPerUnitExact,
+    );
     const landedUnitCostDisplay = round2(exactLandedUnitCost);
     const lineFactoryTotal = round2(receivedQty * line.factoryUnitCost);
     const lineLandedTotal = round2(receivedQty * exactLandedUnitCost);
@@ -2078,6 +2142,7 @@ export function receiveImportBatch(
       : {}),
     receivedAt: now,
     totalUnits: totalReceivedUnits,
+    totalFactoryCost: targetBatch.totalFactoryCost,
     totalFreightCost: actualFreightCost,
     freightAdjustment: freightDiff,
     freightPerUnit: freightPerUnitDisplay,
@@ -2124,6 +2189,10 @@ export function receiveImportBatch(
       : freightDiff > 0
         ? `cargo adicional flete +${formatUSD(freightDiff)}`
         : `reembolso flete -${formatUSD(Math.abs(freightDiff))}`;
+  const shortageNote =
+    factoryShortageUsd > 0
+      ? ` · faltante fábrica ${formatUSD(factoryShortageUsd)} prorrateado (+${formatUSD(round2(shortagePerUnitExact))}/ud)`
+      : '';
 
   return {
     ok: true,
@@ -2143,11 +2212,11 @@ export function receiveImportBatch(
             targetBatch.isDirectReception
               ? 'Recepción Directa EN BODEGA'
               : 'Recepción EN BODEGA'
-          }: ${targetBatch.referenceName} · ${totalReceivedUnits}/${targetBatch.orderedTotalUnits} uds · Flete real ${formatUSD(actualFreightCost)} (${adjustmentNote})`,
+          }: ${targetBatch.referenceName} · ${totalReceivedUnits}/${targetBatch.orderedTotalUnits} uds · Flete real ${formatUSD(actualFreightCost)} (${adjustmentNote}${shortageNote})`,
           amount: freightDiff !== 0 ? -freightDiff : 0,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -2323,15 +2392,15 @@ export function collectReceivable(
           return {
             ...s,
             paymentStatus: 'Cobrado' as const,
-            paidAmount: round2(s.finalPrice),
+            paidAmount: round2(Math.max(0, s.finalPrice - (s.returnedAmount ?? 0))),
           };
         }
         return {
           ...s,
           paidAmount: round2(
             Math.min(
-              s.finalPrice,
-              (s.paidAmount ?? Math.max(0, s.finalPrice - target.amount)) +
+              Math.max(0, s.finalPrice - (s.returnedAmount ?? 0)),
+              (s.paidAmount ?? Math.max(0, s.finalPrice - (s.returnedAmount ?? 0) - target.amount)) +
                 effectivePayment,
             ),
           ),
@@ -2371,7 +2440,7 @@ export function collectReceivable(
         amount: effectivePayment,
         createdAt: now,
       },
-      ...state.movements.slice(0, 49),
+      ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
     ],
   };
 
@@ -2413,7 +2482,7 @@ export function reinvestPartnerDividends(
         amount: available,
         createdAt: now,
       },
-      ...state.movements.slice(0, 49),
+      ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
     ],
   };
 
@@ -2496,7 +2565,7 @@ export function withdrawPartnerDividends(
           amount: -withdrawAmount,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -2532,7 +2601,7 @@ export function syncUnassignedCashToGrowthFund(state: AppState): ActionResult {
           amount: unassignedCash,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -2759,7 +2828,7 @@ export function registerOperatingExpense(
           amount: -amount,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -2778,6 +2847,7 @@ export interface ProcessReturnExchangeInput {
   paymentMethod?: SinglePaymentMethod;
   reason?: string;
   customerName?: string;
+  seller?: SellerName;
   clientOperationId?: string;
 }
 
@@ -2786,13 +2856,14 @@ export interface ProcessReturnExchangeInput {
  * - Restaura al inventario + capa FIFO la(s) franela(s) devuelta(s).
  * - En caso de Cambio, descuenta por FIFO la(s) prenda(s) de reemplazo.
  * - Calcula automáticamente la diferencia de precio:
- *     > 0: Cliente paga diferencia (+caja)
- *     < 0: Se reembolsa al cliente (-deuda pendiente si aplica y -caja con conciliación proporcional de fondos)
+ *     > 0: Cliente paga diferencia (+caja y distribución 4 Capas sobre diferencial de precio/costo FIFO)
+ *     < 0: Se reembolsa al cliente (-deuda pendiente si aplica y -caja con reverso proporcional de fondos)
  *     = 0: Cambio parejo
  */
 export function processReturnOrExchange(
   state: AppState,
   input: ProcessReturnExchangeInput,
+  matrixParams?: MatrixConfigParams,
 ): ActionResult {
   const opId = input.clientOperationId?.trim();
   if (opId && (state.returns ?? []).some((r) => r.clientOperationId === opId)) {
@@ -2881,6 +2952,7 @@ export function processReturnOrExchange(
   let replacementQty = 0;
   let replacementUnitPrice = 0;
   let replacementTotal = 0;
+  let repFifoCost = 0;
 
   if (input.type === 'Cambio') {
     if (!input.replacementSkuId) {
@@ -2932,6 +3004,7 @@ export function processReturnOrExchange(
     }
 
     const fifoOut = previewFifoConsumption(targetRep, replacementQty);
+    repFifoCost = fifoOut.totalCost;
     const nextRepActive = fifoOut.updatedBatches.find(
       (b) => b.remainingQuantity > 0,
     );
@@ -2951,7 +3024,7 @@ export function processReturnOrExchange(
   let nextCash = state.cashOnHand;
   let nextReceivables = [...state.receivables];
   let nextSales = [...state.sales];
-  let nextCollectedCount = state.collectedReceivablesCount;
+  const nextCollectedCount = state.collectedReceivablesCount;
   let nextFunds = {
     ...state.funds,
     commissionsBySeller: { ...state.funds.commissionsBySeller },
@@ -2959,32 +3032,38 @@ export function processReturnOrExchange(
   };
 
   if (differenceUsd > 0) {
-    // Cliente paga diferencia a favor de la tienda
+    // Cliente paga diferencia a favor de la tienda -> +caja y Matriz de 4 Capas sobre diferencial
     nextCash = round2(state.cashOnHand + differenceUsd);
+    const returnedFifoCost = round2(restoreUnitCogs * returnedQty);
+    const costDiff = round2(Math.max(0, repFifoCost - returnedFifoCost));
+    const sellerForUpgrade: SellerName =
+      input.seller ?? linkedSale?.seller ?? 'Sin Vendedor';
+    const upgradeBreakdown = calculateFourLayerMatrixConsolidated(
+      differenceUsd,
+      costDiff,
+      sellerForUpgrade,
+      matrixParams,
+    );
+    nextFunds = applyScaledBreakdownToFunds(
+      nextFunds,
+      upgradeBreakdown,
+      sellerForUpgrade,
+    );
   } else if (differenceUsd < 0) {
     const refundTotal = round2(Math.abs(differenceUsd));
     let remainingCashRefund = refundTotal;
+    let debtOffset = 0;
+    let recIdx = -1;
+    let newRecAmt = 0;
 
     // Si la venta original tiene saldo pendiente en CxC, reducir esa deuda primero
     if (linkedSale) {
-      const recIdx = nextReceivables.findIndex((r) => r.saleId === linkedSale.id);
+      recIdx = nextReceivables.findIndex((r) => r.saleId === linkedSale.id);
       if (recIdx >= 0) {
         const rec = nextReceivables[recIdx];
-        const debtOffset = round2(Math.min(rec.amount, remainingCashRefund));
-        const newRecAmt = round2(rec.amount - debtOffset);
+        debtOffset = round2(Math.min(rec.amount, remainingCashRefund));
+        newRecAmt = round2(rec.amount - debtOffset);
         remainingCashRefund = round2(remainingCashRefund - debtOffset);
-
-        if (newRecAmt <= 0.009) {
-          nextReceivables = nextReceivables.filter((r) => r.id !== rec.id);
-          nextCollectedCount += 1;
-          nextSales = nextSales.map((s) =>
-            s.id === linkedSale.id ? { ...s, paymentStatus: 'Cobrado' as const } : s,
-          );
-        } else {
-          nextReceivables = nextReceivables.map((r, idx) =>
-            idx === recIdx ? { ...r, amount: newRecAmt } : r,
-          );
-        }
       }
     }
 
@@ -2996,8 +3075,111 @@ export function processReturnOrExchange(
       };
     }
 
+    if (linkedSale) {
+      const originalSaleUnits =
+        linkedSale.items && linkedSale.items.length > 0
+          ? linkedSale.items.reduce((sum, l) => sum + l.quantity, 0)
+          : linkedSale.quantity;
+      const previouslyReturnedUnits = (state.returns ?? [])
+        .filter((r) => r.saleId === linkedSale.id && r.type === 'Devolución')
+        .reduce((sum, r) => sum + r.returnedQuantity, 0);
+      const remainingActiveUnits = Math.max(
+        0,
+        originalSaleUnits -
+          previouslyReturnedUnits -
+          (input.type === 'Devolución' ? returnedQty : 0),
+      );
+      const hasRemainingActiveItems =
+        input.type === 'Cambio' ? true : remainingActiveUnits > 0;
+      const nextReturnStatus: 'Parcial' | 'Total' = hasRemainingActiveItems
+        ? 'Parcial'
+        : 'Total';
+
+      const prevReturnedAmount = round2(linkedSale.returnedAmount ?? 0);
+      const nextReturnedAmount = round2(prevReturnedAmount + refundTotal);
+
+      if (recIdx >= 0) {
+        const rec = nextReceivables[recIdx];
+        const currentPaid = round2(
+          linkedSale.paidAmount !== undefined
+            ? linkedSale.paidAmount
+            : Math.max(
+                0,
+                linkedSale.finalPrice - prevReturnedAmount - rec.amount,
+              ),
+        );
+        const netCashPaid = round2(
+          Math.max(0, currentPaid - remainingCashRefund),
+        );
+
+        if (newRecAmt <= 0.009) {
+          nextReceivables = nextReceivables.filter((r) => r.id !== rec.id);
+          nextSales = nextSales.map((s) =>
+            s.id === linkedSale.id
+              ? {
+                  ...s,
+                  paymentStatus: 'Cobrado' as const,
+                  paidAmount: netCashPaid,
+                  returnedAmount: nextReturnedAmount,
+                  returnStatus: nextReturnStatus,
+                }
+              : s,
+          );
+        } else {
+          const nextRecOriginal = round2(
+            Math.max(newRecAmt, (rec.originalAmount ?? rec.amount) - debtOffset),
+          );
+          nextReceivables = nextReceivables.map((r, idx) =>
+            idx === recIdx
+              ? { ...r, amount: newRecAmt, originalAmount: nextRecOriginal }
+              : r,
+          );
+          nextSales = nextSales.map((s) =>
+            s.id === linkedSale.id
+              ? {
+                  ...s,
+                  paidAmount: netCashPaid,
+                  returnedAmount: nextReturnedAmount,
+                  returnStatus: nextReturnStatus,
+                }
+              : s,
+          );
+        }
+      } else {
+        const currentPaid = round2(
+          linkedSale.paidAmount !== undefined
+            ? linkedSale.paidAmount
+            : Math.max(0, linkedSale.finalPrice - prevReturnedAmount),
+        );
+        const netCashPaid = round2(
+          Math.max(0, currentPaid - remainingCashRefund),
+        );
+        nextSales = nextSales.map((s) =>
+          s.id === linkedSale.id
+            ? {
+                ...s,
+                paidAmount: netCashPaid,
+                returnedAmount: nextReturnedAmount,
+                returnStatus: nextReturnStatus,
+              }
+            : s,
+        );
+      }
+    }
+
     nextCash = round2(state.cashOnHand - remainingCashRefund);
     if (remainingCashRefund > 0) {
+      if (linkedSale?.breakdown) {
+        const reversedBreakdown = scaleBreakdownToCashAmount(
+          linkedSale.breakdown,
+          remainingCashRefund,
+        );
+        nextFunds = deductReversedBreakdownFromFunds(
+          nextFunds,
+          reversedBreakdown,
+          linkedSale.seller,
+        );
+      }
       nextFunds = reconcileFundsToPhysicalCash(nextFunds, nextCash).funds;
     }
   }
@@ -3066,7 +3248,7 @@ export function processReturnOrExchange(
           amount: differenceUsd,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -3154,7 +3336,7 @@ export function registerCapitalInjection(
           amount,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -3213,7 +3395,7 @@ export function reconcileCashOnHand(
           amount: diff,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -3223,6 +3405,7 @@ export interface AdjustInventoryCountInput {
   skuId: string;
   newStock: number;
   reason: string;
+  actorName?: string;
 }
 
 export function adjustInventoryPhysicalCount(
@@ -3297,8 +3480,7 @@ export function adjustInventoryPhysicalCount(
       : item,
   );
 
-  const activeUser = getStoredActiveUser();
-  const currentUserName = activeUser ? activeUser.name : 'Jesús César';
+  const currentUserName = input.actorName?.trim() || 'Jesús César';
 
   const adjustmentRecord: InventoryAdjustmentRecord = {
     id: `adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3333,7 +3515,7 @@ export function adjustInventoryPhysicalCount(
           amount: fifoLossCost ? -fifoLossCost : 0,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -3344,6 +3526,7 @@ export interface RegisterManualAdjustmentInput {
   skuId: string;
   quantity: number;
   reason: string;
+  actorName?: string;
 }
 
 export interface RegisterUncrossAdjustmentInput {
@@ -3351,6 +3534,7 @@ export interface RegisterUncrossAdjustmentInput {
   targetSkuId: string;
   quantity: number;
   reason: string;
+  actorName?: string;
 }
 
 /**
@@ -3392,8 +3576,7 @@ export function registerManualInventoryAdjustment(
   const previousStock = target.stock;
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
-  const activeUser = getStoredActiveUser();
-  const currentUserName = activeUser ? activeUser.name : 'Jesús César';
+  const currentUserName = input.actorName?.trim() || 'Jesús César';
 
   if (input.type === 'salida') {
     if (target.stock < quantity) {
@@ -3454,7 +3637,7 @@ export function registerManualInventoryAdjustment(
             amount: consumption.totalCost ? -consumption.totalCost : 0,
             createdAt: now,
           },
-          ...state.movements.slice(0, 49),
+          ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
         ],
       },
     };
@@ -3521,7 +3704,7 @@ export function registerManualInventoryAdjustment(
           amount: 0,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -3586,8 +3769,7 @@ export function performInventoryUncross(
 
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
-  const activeUser = getStoredActiveUser();
-  const currentUserName = activeUser ? activeUser.name : 'Jesús César';
+  const currentUserName = input.actorName?.trim() || 'Jesús César';
 
   const sourceConsumption = previewFifoConsumption(sourceItem, quantity);
   const sourceNewStock = sourceItem.stock - quantity;
@@ -3698,7 +3880,7 @@ export function performInventoryUncross(
           amount: 0,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -3870,11 +4052,11 @@ export function closeAuditSession(
   counts: Record<string, number | null>,
   applyAdjustmentsToInventory = true,
   reason = 'Cierre de auditoría física de inventario',
+  actorName?: string,
 ): ActionResult {
   const now = new Date().toISOString();
   const metrics = calculateAuditMetrics(state.inventory, counts);
-  const activeUser = getStoredActiveUser();
-  const currentUserName = activeUser ? activeUser.name : 'Jesús César';
+  const currentUserName = actorName?.trim() || 'Jesús César';
 
   let nextInventory = state.inventory;
   let newAdjustments = [...(state.inventoryAdjustments ?? [])];
@@ -3891,6 +4073,7 @@ export function closeAuditSession(
         items: adjustmentItems,
         reason,
         auditMode: 'sku',
+        actorName: currentUserName,
       });
       if (!adjRes.ok) {
         return { ok: false, error: adjRes.error, state };
@@ -4679,6 +4862,7 @@ export interface ApplyAuditAdjustmentsInput {
   items: AuditAdjustmentItemInput[];
   reason?: string;
   auditMode?: 'cascade' | 'sku';
+  actorName?: string;
 }
 
 export function applyAuditAdjustments(
@@ -4781,6 +4965,7 @@ export function applyAuditAdjustments(
       fifoLossCost,
       auditMode,
       reason,
+      ...(input.actorName?.trim() ? { userName: input.actorName.trim() } : {}),
       createdAt: now,
     });
   }
@@ -4820,7 +5005,7 @@ export function applyAuditAdjustments(
           amount: totalFifoLossCost > 0 ? -totalFifoLossCost : 0,
           createdAt: now,
         },
-        ...state.movements.slice(0, 49),
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ],
     },
   };
@@ -5082,7 +5267,10 @@ export function normalizeAppState(raw: unknown): AppState {
       userPurgedEmpty: Boolean(parsed.userPurgedEmpty),
       isExplicitDemo: Boolean(parsed.isExplicitDemo),
       funds: normalizedFunds,
-      movements: toArray<AuditMovement>(parsed.movements),
+      movements: toArray<AuditMovement>(parsed.movements).slice(
+        0,
+        MAX_RECENT_MOVEMENTS,
+      ),
       ...(parsed.bulkImports
         ? { bulkImports: toArray<BulkImportRecord>(parsed.bulkImports) }
         : {}),
@@ -5549,7 +5737,7 @@ export function recoverStartupErpState(
             amount: restoredCash,
             createdAt: new Date().toISOString(),
           },
-          ...(bestLocal.movements ?? []).slice(0, 49),
+          ...(bestLocal.movements ?? []).slice(0, MAX_RECENT_MOVEMENTS - 1),
         ],
       };
 
@@ -5586,7 +5774,7 @@ export function recoverStartupErpState(
           amount: 15.0,
           createdAt: new Date().toISOString(),
         },
-        ...baseSource.movements.slice(0, 49),
+        ...baseSource.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
       ];
     }
 
@@ -5669,7 +5857,7 @@ export function recoverStartupErpState(
         amount: 15.0,
         createdAt: new Date().toISOString(),
       },
-      ...effectiveRemote.movements.slice(0, 49),
+      ...effectiveRemote.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
     ];
   }
 

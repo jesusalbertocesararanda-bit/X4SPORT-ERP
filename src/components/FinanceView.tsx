@@ -42,6 +42,7 @@ import {
   formatVES,
   getCashBackedFundsSummary,
   getTotalReceivables,
+  MAX_RECENT_MOVEMENTS,
   normalizeExpenseCategory,
   round2,
 } from '../utils/finance';
@@ -56,19 +57,25 @@ interface FinanceViewProps {
     amountPaid?: number,
     clientOperationId?: string,
   ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
-  onReinvestDividends: (partner: PartnerName) => { ok: boolean; error?: string };
+  onReinvestDividends: (
+    partner: PartnerName,
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onWithdrawDividends?: (
     partner: PartnerName,
     amount?: number,
-  ) => { ok: boolean; error?: string };
-  onSyncFreeCashToFunds?: () => { ok: boolean; error?: string };
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
+  onSyncFreeCashToFunds?: () =>
+    | Promise<{ ok: boolean; error?: string }>
+    | { ok: boolean; error?: string };
   onRegisterOperatingExpense: (
     input: RegisterOperatingExpenseInput,
-  ) => { ok: boolean; error?: string };
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onRegisterCapitalInjection: (
     input: RegisterCapitalInjectionInput,
-  ) => { ok: boolean; error?: string };
-  onReconcileCash: (input: ReconcileCashInput) => { ok: boolean; error?: string };
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
+  onReconcileCash: (
+    input: ReconcileCashInput,
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onResetDemoData: () => void;
 }
 
@@ -218,6 +225,8 @@ export function FinanceView({
     return () => window.removeEventListener('keydown', handleKey);
   }, [isArqueoModalOpen]);
 
+  const [showAllMovements, setShowAllMovements] = useState(false);
+
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -353,8 +362,8 @@ export function FinanceView({
     }
   };
 
-  const handleReinvest = (partner: PartnerName, amount: number) => {
-    const res = onReinvestDividends(partner);
+  const handleReinvest = async (partner: PartnerName, amount: number) => {
+    const res = await Promise.resolve(onReinvestDividends(partner));
     if (!res.ok) {
       setFeedback({ type: 'error', text: res.error ?? 'No se pudo reinvertir.' });
       return;
@@ -365,9 +374,9 @@ export function FinanceView({
     });
   };
 
-  const handleWithdrawDividend = (partner: PartnerName, amount: number) => {
+  const handleWithdrawDividend = async (partner: PartnerName, amount: number) => {
     if (!onWithdrawDividends) return;
-    const res = onWithdrawDividends(partner, amount);
+    const res = await Promise.resolve(onWithdrawDividends(partner, amount));
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -381,9 +390,9 @@ export function FinanceView({
     });
   };
 
-  const handleSyncFreeCash = () => {
+  const handleSyncFreeCash = async () => {
     if (!onSyncFreeCashToFunds) return;
-    const res = onSyncFreeCashToFunds();
+    const res = await Promise.resolve(onSyncFreeCashToFunds());
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -408,17 +417,19 @@ export function FinanceView({
     }
   };
 
-  const handleExpenseSubmit = (e: React.FormEvent) => {
+  const handleExpenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
     const parsedAmount = Number(expenseAmount);
-    const res = onRegisterOperatingExpense({
-      concept: expenseConcept,
-      category: expenseCategory,
-      amount: parsedAmount,
-      source: expenseSource,
-      paymentMethod: expenseMethod,
-    });
+    const res = await Promise.resolve(
+      onRegisterOperatingExpense({
+        concept: expenseConcept,
+        category: expenseCategory,
+        amount: parsedAmount,
+        source: expenseSource,
+        paymentMethod: expenseMethod,
+      }),
+    );
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -443,17 +454,19 @@ export function FinanceView({
     });
   };
 
-  const handleCapitalInjectionSubmit = (e: React.FormEvent) => {
+  const handleCapitalInjectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
     const parsedAmount = Number(injAmount);
-    const res = onRegisterCapitalInjection({
-      contributor: injContributor,
-      concept: injConcept,
-      amount: parsedAmount,
-      paymentMethod: injMethod,
-      destination: injDestination,
-    });
+    const res = await Promise.resolve(
+      onRegisterCapitalInjection({
+        contributor: injContributor,
+        concept: injConcept,
+        amount: parsedAmount,
+        paymentMethod: injMethod,
+        destination: injDestination,
+      }),
+    );
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -469,14 +482,16 @@ export function FinanceView({
     });
   };
 
-  const handleReconcileCashSubmit = (e: React.FormEvent) => {
+  const handleReconcileCashSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
     const parsedCount = Number(countedCashInput);
-    const res = onReconcileCash({
-      countedCash: parsedCount,
-      reason: reconcileReason,
-    });
+    const res = await Promise.resolve(
+      onReconcileCash({
+        countedCash: parsedCount,
+        reason: reconcileReason,
+      }),
+    );
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -491,14 +506,16 @@ export function FinanceView({
     });
   };
 
-  const handleModalArqueoSubmit = (e: React.FormEvent) => {
+  const handleModalArqueoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
     const parsedCount = Number(modalCountedCashInput);
-    const res = onReconcileCash({
-      countedCash: parsedCount,
-      reason: modalReconcileReason.trim() || 'Arqueo físico desde tarjeta principal',
-    });
+    const res = await Promise.resolve(
+      onReconcileCash({
+        countedCash: parsedCount,
+        reason: modalReconcileReason.trim() || 'Arqueo físico desde tarjeta principal',
+      }),
+    );
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -1822,43 +1839,63 @@ export function FinanceView({
             </button>
           </form>
 
-          {(state.movements ?? []).length > 0 && (
-            <div className="border-t border-slate-800 pt-3 space-y-2">
-              <p className="text-xs font-semibold text-slate-300">
-                Últimos movimientos financieros sincronizados
-              </p>
-              <div className="max-h-48 overflow-y-auto divide-y divide-slate-800/70">
-                {(state.movements ?? []).slice(0, 8).map((mov) => (
-                  <div
-                    key={mov.id}
-                    className="flex items-start justify-between gap-2 py-2 text-[11px]"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-slate-200">{mov.description}</p>
-                      <p className="text-slate-500">
-                        {new Date(mov.createdAt).toLocaleString('es-VE', {
-                          dateStyle: 'short',
-                          timeStyle: 'short',
-                        })}
-                      </p>
-                    </div>
-                    <span
-                      className={`font-mono-num font-semibold shrink-0 ${
-                        mov.amount > 0
-                          ? 'text-emerald-400'
-                          : mov.amount < 0
-                            ? 'text-red-300'
-                            : 'text-slate-400'
-                      }`}
+          {(state.movements ?? []).length > 0 && (() => {
+            const allMovements = state.movements ?? [];
+            const visibleMovements = showAllMovements
+              ? allMovements.slice(0, MAX_RECENT_MOVEMENTS)
+              : allMovements.slice(0, 15);
+            return (
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-slate-300">
+                    Últimos movimientos financieros sincronizados
+                  </p>
+                  {allMovements.length > 15 && (
+                    <button
+                      type="button"
+                      data-testid="btn-toggle-all-movements"
+                      onClick={() => setShowAllMovements((prev) => !prev)}
+                      className="rounded-md border border-slate-700 bg-[#080E1C] px-2.5 py-1 text-[11px] font-medium text-blue-300 transition-colors hover:border-blue-500/50 hover:text-blue-200 shrink-0"
                     >
-                      {mov.amount > 0 ? '+' : ''}
-                      {formatUSD(mov.amount)}
-                    </span>
-                  </div>
-                ))}
+                      {showAllMovements
+                        ? 'Mostrar menos'
+                        : `Ver todos (${allMovements.length})`}
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/70">
+                  {visibleMovements.map((mov) => (
+                    <div
+                      key={mov.id}
+                      className="flex items-start justify-between gap-2 py-2 text-[11px]"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-slate-200">{mov.description}</p>
+                        <p className="text-slate-500">
+                          {new Date(mov.createdAt).toLocaleString('es-VE', {
+                            dateStyle: 'short',
+                            timeStyle: 'short',
+                          })}
+                        </p>
+                      </div>
+                      <span
+                        className={`font-mono-num font-semibold shrink-0 ${
+                          mov.amount > 0
+                            ? 'text-emerald-400'
+                            : mov.amount < 0
+                              ? 'text-red-300'
+                              : 'text-slate-400'
+                        }`}
+                      >
+                        {mov.amount > 0 ? '+' : ''}
+                        {formatUSD(mov.amount)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </section>
       </div>
 

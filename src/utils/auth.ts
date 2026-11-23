@@ -18,6 +18,121 @@ export const AUTHORIZED_ADMIN_EMAILS: readonly string[] = [
   'jesus@x4sport.app',
 ];
 
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function rotr32(value: number, bits: number): number {
+  return (value >>> bits) | (value << (32 - bits));
+}
+
+export function hashPasswordSha256Sync(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  const bitLen = bytes.length * 8;
+  const paddedLen = Math.ceil((bytes.length + 9) / 64) * 64;
+  const padded = new Uint8Array(paddedLen);
+  padded.set(bytes);
+  padded[bytes.length] = 0x80;
+
+  const view = new DataView(padded.buffer);
+  view.setUint32(paddedLen - 8, Math.floor(bitLen / 0x100000000), false);
+  view.setUint32(paddedLen - 4, bitLen >>> 0, false);
+
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85;
+  let h2 = 0x3c6ef372;
+  let h3 = 0xa54ff53a;
+  let h4 = 0x510e527f;
+  let h5 = 0x9b05688c;
+  let h6 = 0x1f83d9ab;
+  let h7 = 0x5be0cd19;
+
+  const w = new Uint32Array(64);
+
+  for (let offset = 0; offset < paddedLen; offset += 64) {
+    for (let i = 0; i < 16; i += 1) {
+      w[i] = view.getUint32(offset + i * 4, false);
+    }
+    for (let i = 16; i < 64; i += 1) {
+      const s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let h = h7;
+
+    for (let i = 0; i < 64; i += 1) {
+      const S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+    h5 = (h5 + f) >>> 0;
+    h6 = (h6 + g) >>> 0;
+    h7 = (h7 + h) >>> 0;
+  }
+
+  return [h0, h1, h2, h3, h4, h5, h6, h7]
+    .map((word) => word.toString(16).padStart(8, '0'))
+    .join('');
+}
+
+export async function hashPasswordSha256Async(input: string): Promise<string> {
+  if (typeof globalThis.crypto?.subtle?.digest === 'function') {
+    const encoded = new TextEncoder().encode(input);
+    const buffer = await globalThis.crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(buffer))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return hashPasswordSha256Sync(input);
+}
+
+export function verifyUserPassword(
+  plainPassword: string,
+  record: Pick<AuthorizedUserRecord, 'password' | 'passwordHash'>,
+): boolean {
+  if (!plainPassword) return false;
+  if (typeof record.passwordHash === 'string' && record.passwordHash.trim().length > 0) {
+    return hashPasswordSha256Sync(plainPassword) === record.passwordHash.trim().toLowerCase();
+  }
+  if (typeof record.password === 'string' && record.password.length > 0) {
+    return record.password === plainPassword;
+  }
+  return false;
+}
+
 export const DEFAULT_AUTHORIZED_USERS: readonly AuthorizedUserRecord[] = [
   {
     id: 'user-jesus-main',
@@ -26,7 +141,7 @@ export const DEFAULT_AUTHORIZED_USERS: readonly AuthorizedUserRecord[] = [
     role: 'admin',
     title: 'Administrador Principal',
     phone: '+58 412-4612132',
-    password: 'jesus2026',
+    passwordHash: '632be5e7df180b51682e87b6a1ece695c8662a782dd6ea3597b63e3cd88a567c',
     firstLoginPending: false,
     avatarBg: 'bg-blue-600',
     createdAt: '2026-11-01T00:00:00.000Z',
@@ -38,7 +153,7 @@ export const DEFAULT_AUTHORIZED_USERS: readonly AuthorizedUserRecord[] = [
     role: 'admin',
     title: 'Administrador Principal',
     phone: '+58 412-4612132',
-    password: 'jesus2026',
+    passwordHash: '632be5e7df180b51682e87b6a1ece695c8662a782dd6ea3597b63e3cd88a567c',
     firstLoginPending: false,
     avatarBg: 'bg-blue-600',
     createdAt: '2026-11-01T00:00:00.000Z',
@@ -50,7 +165,7 @@ export const DEFAULT_AUTHORIZED_USERS: readonly AuthorizedUserRecord[] = [
     role: 'admin',
     title: 'Administrador Principal',
     phone: '+58 412-4612132',
-    password: 'jesus2026',
+    passwordHash: '632be5e7df180b51682e87b6a1ece695c8662a782dd6ea3597b63e3cd88a567c',
     firstLoginPending: false,
     avatarBg: 'bg-blue-600',
     createdAt: '2026-11-01T00:00:00.000Z',
@@ -62,7 +177,7 @@ export const DEFAULT_AUTHORIZED_USERS: readonly AuthorizedUserRecord[] = [
     role: 'partner',
     title: 'Socio Operativo',
     phone: '+58 412-4588754',
-    password: 'josue2026',
+    passwordHash: '0c7039d7128c3899d661eb3602ea6baa1330d2c4f0d1b6a0f59c9238f48348e9',
     firstLoginPending: false,
     avatarBg: 'bg-emerald-600',
     createdAt: '2026-11-01T00:00:00.000Z',
@@ -74,7 +189,7 @@ export const DEFAULT_AUTHORIZED_USERS: readonly AuthorizedUserRecord[] = [
     role: 'partner',
     title: 'Socio Operativo',
     phone: '+58 412-0000000',
-    password: 'gabriel2026',
+    passwordHash: '303ef03c7d48380e69e60df18b0f8e1645416eddec1cc7071d330032ed2562fe',
     firstLoginPending: false,
     avatarBg: 'bg-indigo-600',
     createdAt: '2026-11-01T00:00:00.000Z',
@@ -91,9 +206,13 @@ export const ERP_USERS: readonly ERPUser[] = DEFAULT_AUTHORIZED_USERS.map((u) =>
   avatarBg: u.avatarBg || 'bg-blue-600',
 }));
 
+export const SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_USER_STORAGE_KEY = 'x4sport_active_user_v1';
+export const LAST_ACTIVITY_STORAGE_KEY = 'x4sport_last_activity_v1';
 export const AUTHORIZED_USERS_STORAGE_KEY = 'x4sport_authorized_users_v2';
 export const OTP_STORAGE_KEY = 'x4sport_otp_pending_v2';
+
+const inMemoryOtpStore = new Map<string, string>();
 
 export function getAuthorizedUsersFromStorage(): AuthorizedUserRecord[] {
   if (typeof window === 'undefined' || !window.localStorage) {
@@ -163,27 +282,83 @@ export function findAuthorizedUser(
   return list.find((u) => u.email.toLowerCase() === cleanEmail);
 }
 
-export function getStoredActiveUser(): ERPUser | null {
+export function isSessionExpired(
+  lastActivityMs: number | null | undefined,
+  nowMs = Date.now(),
+  timeoutMs = SESSION_IDLE_TIMEOUT_MS,
+): boolean {
+  if (
+    typeof lastActivityMs !== 'number' ||
+    !Number.isFinite(lastActivityMs) ||
+    lastActivityMs <= 0
+  ) {
+    return true;
+  }
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) {
+    return true;
+  }
+  return nowMs - lastActivityMs >= timeoutMs;
+}
+
+export function getStoredLastActivityMs(): number | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function touchUserActivity(nowMs = Date.now()): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || nowMs <= 0) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, String(nowMs));
+  } catch {
+    // Ignore storage quota or access errors
+  }
+}
+
+export function getStoredActiveUser(nowMs = Date.now()): ERPUser | null {
   if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
     const raw = window.localStorage.getItem(ACTIVE_USER_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ERPUser;
-    if (parsed && typeof parsed.email === 'string') {
-      const match = findAuthorizedUser(parsed.email);
-      if (match) {
-        return {
-          id: match.id,
-          email: match.email,
-          name: match.name,
-          role: match.role,
-          title: match.title || (match.role === 'admin' ? 'Administrador Principal' : 'Socio Operativo'),
-          phone: match.phone || '',
-          avatarBg: match.avatarBg || 'bg-blue-600',
-        };
-      }
-      return parsed;
+    if (!parsed || typeof parsed.email !== 'string') {
+      storeActiveUser(null);
+      return null;
     }
+
+    const lastActivityMs = getStoredLastActivityMs();
+    if (isSessionExpired(lastActivityMs, nowMs)) {
+      storeActiveUser(null);
+      return null;
+    }
+
+    touchUserActivity(nowMs);
+
+    const match = findAuthorizedUser(parsed.email);
+    if (match) {
+      return {
+        id: match.id,
+        email: match.email,
+        name: match.name,
+        role: match.role,
+        title:
+          match.title ||
+          (match.role === 'admin' ? 'Administrador Principal' : 'Socio Operativo'),
+        phone: match.phone || '',
+        avatarBg: match.avatarBg || 'bg-blue-600',
+      };
+    }
+    return parsed;
   } catch {
     // Ignore parse error
   }
@@ -192,16 +367,23 @@ export function getStoredActiveUser(): ERPUser | null {
 
 export function storeActiveUser(user: ERPUser | null): void {
   if (typeof window === 'undefined' || !window.localStorage) return;
-  if (!user) {
-    window.localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
-  } else {
-    window.localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(user));
+  try {
+    if (!user) {
+      window.localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
+      window.localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(user));
+      window.localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, String(Date.now()));
+    }
+  } catch {
+    // Ignore storage quota or access errors
   }
 }
 
 export function generateOtpCode(email: string): string {
   const cleanEmail = email.trim().toLowerCase();
   const code = String(Math.floor(100000 + Math.random() * 900000));
+  inMemoryOtpStore.set(cleanEmail, code);
   if (typeof window !== 'undefined' && window.sessionStorage) {
     window.sessionStorage.setItem(`${OTP_STORAGE_KEY}_${cleanEmail}`, code);
   }
@@ -279,18 +461,20 @@ export function requestOtpDelivery(
 export function verifyOtpCode(email: string, code: string): boolean {
   const cleanEmail = email.trim().toLowerCase();
   const cleanCode = code.trim();
-  if (!cleanCode) return false;
+  if (!cleanEmail || !cleanCode) return false;
 
   if (typeof window !== 'undefined' && window.sessionStorage) {
     const stored = window.sessionStorage.getItem(`${OTP_STORAGE_KEY}_${cleanEmail}`);
     if (stored && stored === cleanCode) {
       window.sessionStorage.removeItem(`${OTP_STORAGE_KEY}_${cleanEmail}`);
+      inMemoryOtpStore.delete(cleanEmail);
       return true;
     }
   }
 
-  // Backup fallback verification for developer/demo test suites
-  if (cleanCode === '123456') {
+  const memoryCode = inMemoryOtpStore.get(cleanEmail);
+  if (memoryCode && memoryCode === cleanCode) {
+    inMemoryOtpStore.delete(cleanEmail);
     return true;
   }
 
@@ -325,7 +509,7 @@ export function authenticateByPassword(
     return { ok: false, error: 'Ingresa tu contraseña de acceso.' };
   }
 
-  if (record.password && record.password === cleanPass) {
+  if (verifyUserPassword(cleanPass, record)) {
     const erpUser: ERPUser = {
       id: record.id,
       email: record.email,
@@ -361,12 +545,14 @@ export function completeFirstTimeLogin(
     return { ok: false, error: 'La nueva contraseña debe tener al menos 4 caracteres.' };
   }
 
+  const passwordHash = hashPasswordSha256Sync(newPassword.trim());
   const allUsers = getMergedAuthorizedUsers(stateUsers);
   const updatedUsers: AuthorizedUserRecord[] = allUsers.map((u) => {
     if (u.email.toLowerCase() === cleanEmail) {
+      const { password: _legacyPassword, ...rest } = u;
       return {
-        ...u,
-        password: newPassword.trim(),
+        ...rest,
+        passwordHash,
         firstLoginPending: false,
       };
     }

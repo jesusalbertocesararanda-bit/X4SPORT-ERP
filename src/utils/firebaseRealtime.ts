@@ -7,8 +7,14 @@ import type {
   AppState,
   ExchangeRates,
   GeneralConfig,
+  InventoryItem,
+  JerseySize,
+  JerseyVersion,
+  PurchaseBatchItemRecord,
   PurchaseBatchRecord,
   SaleRecord,
+  ShippingType,
+  TeamCategory,
 } from '../types/erp';
 import {
   type ActionResult,
@@ -19,6 +25,7 @@ import {
   normalizeGeneralConfig,
   recoverStartupErpState,
   sanitizeForFirebase,
+  toArray,
 } from './finance';
 
 // Configuración de Firebase
@@ -34,9 +41,53 @@ export const firebaseConfig = {
 } as const;
 
 export const RTDB_ERP_PATH = 'x4sport/erpState';
+export const RTDB_PUBLIC_CATALOG_PATH = 'x4sport/publicCatalog';
 export const RTDB_CONFIG_PATH = 'configuracion/general';
 export const LOCAL_BACKUP_KEY = 'x4sport_erp_backup_v2';
+export const LOCAL_PUBLIC_CATALOG_BACKUP_KEY = 'x4sport_public_catalog_v1';
 export const LOCAL_CONFIG_BACKUP_KEY = 'x4sport_general_config_v1';
+
+export interface PublicCatalogInventoryItem {
+  id: string;
+  team: TeamCategory;
+  model: string;
+  version: JerseyVersion;
+  size: JerseySize;
+  stock: number;
+  salePrice: number;
+}
+
+export interface PublicCatalogBatchItem {
+  skuId?: string;
+  team: TeamCategory;
+  model: string;
+  version: JerseyVersion;
+  size: JerseySize;
+  orderedQuantity: number;
+  quantity: number;
+  salePrice?: number;
+}
+
+export interface PublicCatalogBatch {
+  id: string;
+  status: 'EN TRÁNSITO';
+  entryDate: string;
+  estimatedArrivalDate?: string;
+  shippingType: ShippingType;
+  referenceName: string;
+  orderedTotalUnits: number;
+  totalUnits: number;
+  items: PublicCatalogBatchItem[];
+}
+
+export interface PublicCatalogSnapshot {
+  catalogEnabled: boolean;
+  exchangeRates: ExchangeRates;
+  catalogPhotos: Record<string, string>;
+  catalogKeywords: Record<string, string>;
+  inventory: PublicCatalogInventoryItem[];
+  purchaseBatches: PublicCatalogBatch[];
+}
 
 interface FirebaseDataSnapshot {
   exists: () => boolean;
@@ -61,10 +112,20 @@ interface FirebaseDatabaseRef {
   ) => Promise<{ committed: boolean; snapshot: FirebaseDataSnapshot }>;
 }
 
+interface FirebaseAuthCompat {
+  currentUser?: {
+    uid?: string;
+    isAnonymous?: boolean;
+    getIdToken?: () => Promise<string>;
+  } | null;
+  signInAnonymously?: () => Promise<{ user?: { uid?: string } | null }>;
+}
+
 interface FirebaseCompatGlobal {
   apps: unknown[];
   initializeApp: (config: Record<string, string>) => unknown;
   app: () => unknown;
+  auth?: () => FirebaseAuthCompat;
   database: () => {
     ref: (path: string) => FirebaseDatabaseRef;
   };
@@ -176,6 +237,53 @@ function getFirebaseDatabase(): { ref: (path: string) => FirebaseDatabaseRef } {
   return fb.database();
 }
 
+let pendingSilentAuthPromise: Promise<boolean> | null = null;
+
+/**
+ * Garantiza una sesión anónima silenciosa en Firebase Auth antes de operar sobre
+ * x4sport/erpState cuando las reglas RTDB exigen `"auth != null"`.
+ * Captura cualquier error sin bloquear la aplicación si Anonymous Auth aún no está habilitado.
+ */
+export async function ensureSilentFirebaseAuth(): Promise<boolean> {
+  if (typeof window === 'undefined' || !window.firebase) {
+    return false;
+  }
+
+  const fb = window.firebase;
+  try {
+    if (!fb.apps || fb.apps.length === 0) {
+      fb.initializeApp({ ...firebaseConfig });
+    }
+    if (typeof fb.auth !== 'function') {
+      return false;
+    }
+
+    const authInstance = fb.auth();
+    if (!authInstance) {
+      return false;
+    }
+    if (authInstance.currentUser) {
+      return true;
+    }
+    if (typeof authInstance.signInAnonymously !== 'function') {
+      return false;
+    }
+
+    if (!pendingSilentAuthPromise) {
+      pendingSilentAuthPromise = Promise.resolve(authInstance.signInAnonymously())
+        .then((cred) => Boolean(cred?.user ?? authInstance.currentUser))
+        .catch(() => false)
+        .finally(() => {
+          pendingSilentAuthPromise = null;
+        });
+    }
+
+    return await pendingSilentAuthPromise;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Hook onValue en tiempo real contra Firebase Realtime Database (x4sport/erpState)
  * con hidratación REST rápida inicial y recuperación/migración automática no destructiva.
@@ -189,6 +297,7 @@ export function subscribeErpState(
   let syncedRecoveryOnce = false;
   let receivedRealtimeSnapshot = false;
   let deliveredInitial = false;
+  let detachRealtimeListener: (() => void) | null = null;
 
   const deliverState = (raw: unknown, fromRealtime: boolean) => {
     if (!active) return;
@@ -217,22 +326,6 @@ export function subscribeErpState(
     }
   };
 
-  // Hidratación inicial rápida vía REST (~200ms)
-  const restUrl = `${firebaseConfig.databaseURL}/${RTDB_ERP_PATH}.json`;
-  void fetch(restUrl, { cache: 'no-store' })
-    .then(async (resp) => {
-      if (!active || receivedRealtimeSnapshot) return;
-      if (!resp.ok) return;
-      const data: unknown = await resp.json();
-      if (!active || receivedRealtimeSnapshot) return;
-      if (data !== null && data !== undefined) {
-        deliverState(data, false);
-      }
-    })
-    .catch(() => {
-      // Fallback manejado por listener onValue / timeout
-    });
-
   const safetyTimer = setTimeout(() => {
     if (!active || deliveredInitial) return;
     deliveredInitial = true;
@@ -247,58 +340,100 @@ export function subscribeErpState(
     );
   }, 6000);
 
-  try {
-    const db = getFirebaseDatabase();
-    const stateRef = db.ref(RTDB_ERP_PATH);
+  void ensureSilentFirebaseAuth()
+    .then(async () => {
+      if (!active) return;
 
-    const listener = stateRef.on(
-      'value',
-      (snapshot) => {
-        if (!active) return;
-        clearTimeout(safetyTimer);
-
-        if (!snapshot.exists() || snapshot.val() === null) {
-          if (!seededOnce) {
-            seededOnce = true;
-            const { state: initialRecovered } = recoverStartupErpState(
-              createInitialState(),
-              readLocalStorageRecoveryCandidates(),
-            );
-            const initialPayload = sanitizeForFirebase(initialRecovered);
-            void stateRef
-              .transaction((current) =>
-                current === null ? initialPayload : current,
-              )
-              .catch((err: unknown) => {
-                if (!active) return;
-                onError(formatFirebaseError(err));
-              });
-          }
-          return;
+      // Hidratación inicial rápida vía REST (~200ms) con token de Firebase Auth si está disponible
+      let restAuthQuery = '';
+      try {
+        const token = await window.firebase?.auth?.()?.currentUser?.getIdToken?.();
+        if (token) {
+          restAuthQuery = `?auth=${encodeURIComponent(token)}`;
         }
+      } catch {
+        // Continuar sin token REST si falla la lectura del token
+      }
 
-        deliverState(snapshot.val(), true);
-      },
-      (error) => {
-        if (!active) return;
+      const restUrl = `${firebaseConfig.databaseURL}/${RTDB_ERP_PATH}.json${restAuthQuery}`;
+      void fetch(restUrl, { cache: 'no-store' })
+        .then(async (resp) => {
+          if (!active || receivedRealtimeSnapshot) return;
+          if (!resp.ok) return;
+          const data: unknown = await resp.json();
+          if (!active || receivedRealtimeSnapshot) return;
+          if (data !== null && data !== undefined) {
+            deliverState(data, false);
+          }
+        })
+        .catch(() => {
+          // Fallback manejado por listener onValue / timeout
+        });
+
+      try {
+        const db = getFirebaseDatabase();
+        const stateRef = db.ref(RTDB_ERP_PATH);
+
+        const listener = stateRef.on(
+          'value',
+          (snapshot) => {
+            if (!active) return;
+            clearTimeout(safetyTimer);
+            try {
+              if (!snapshot.exists() || snapshot.val() === null) {
+                if (!seededOnce) {
+                  seededOnce = true;
+                  const { state: initialRecovered } = recoverStartupErpState(
+                    createInitialState(),
+                    readLocalStorageRecoveryCandidates(),
+                  );
+                  const initialPayload = sanitizeForFirebase(initialRecovered);
+                  void stateRef
+                    .transaction((current) =>
+                      current === null ? initialPayload : current,
+                    )
+                    .catch((err: unknown) => {
+                      if (!active) return;
+                      onError(formatFirebaseError(err));
+                    });
+                }
+                return;
+              }
+
+              deliverState(snapshot.val(), true);
+            } catch (err) {
+              if (!active) return;
+              onError(formatFirebaseError(err));
+            }
+          },
+          (error) => {
+            if (!active) return;
+            clearTimeout(safetyTimer);
+            onError(formatFirebaseError(error));
+          },
+        );
+
+        detachRealtimeListener = () => {
+          stateRef.off('value', listener);
+        };
+      } catch (err) {
         clearTimeout(safetyTimer);
-        onError(formatFirebaseError(error));
-      },
-    );
+        onError(formatFirebaseError(err));
+      }
+    })
+    .catch((err: unknown) => {
+      if (!active) return;
+      clearTimeout(safetyTimer);
+      onError(formatFirebaseError(err));
+    });
 
-    return () => {
-      active = false;
-      clearTimeout(safetyTimer);
-      stateRef.off('value', listener);
-    };
-  } catch (err) {
+  return () => {
+    active = false;
     clearTimeout(safetyTimer);
-    onError(formatFirebaseError(err));
-    return () => {
-      active = false;
-      clearTimeout(safetyTimer);
-    };
-  }
+    if (detachRealtimeListener) {
+      detachRealtimeListener();
+    }
+  };
 }
 
 /**
@@ -306,6 +441,7 @@ export function subscribeErpState(
  */
 export async function writeErpState(nextState: AppState): Promise<void> {
   saveLocalStateBackup(nextState, { allowOverwriteEmpty: true });
+  await ensureSilentFirebaseAuth();
   const db = getFirebaseDatabase();
   const payload = sanitizeForFirebase(nextState);
   await db.ref(RTDB_ERP_PATH).set(payload);
@@ -330,6 +466,7 @@ export async function transactErpState(
 ): Promise<TransactErpStateOutcome> {
   let db: { ref: (path: string) => FirebaseDatabaseRef };
   try {
+    await ensureSilentFirebaseAuth();
     db = getFirebaseDatabase();
   } catch (err: unknown) {
     return {
@@ -385,8 +522,8 @@ export async function transactErpState(
 
     return {
       ok: false,
-      error: 'No se pudo confirmar la transacción en Firebase RTDB.',
-      source: 'rejected',
+      error: 'No se pudo confirmar la transacción en Firebase RTDB. Intenta de nuevo.',
+      source: 'unavailable',
     };
   } catch (err: unknown) {
     return {
@@ -403,6 +540,7 @@ export async function transactErpState(
 export async function updateErpState(
   partial: Partial<AppState>,
 ): Promise<void> {
+  await ensureSilentFirebaseAuth();
   const db = getFirebaseDatabase();
   const payload = sanitizeForFirebase(partial) as Record<string, unknown>;
   await db.ref(RTDB_ERP_PATH).update(payload);
@@ -488,53 +626,80 @@ export function subscribeGeneralConfig(
 ): () => void {
   let active = true;
   let receivedRealtime = false;
+  let detachConfigListener: (() => void) | null = null;
 
-  const restUrl = `${firebaseConfig.databaseURL}/${RTDB_CONFIG_PATH}.json`;
-  void fetch(restUrl, { cache: 'no-store' })
-    .then(async (resp) => {
-      if (!active || receivedRealtime || !resp.ok) return;
-      const data: unknown = await resp.json();
-      if (!active || receivedRealtime) return;
-      if (data !== null && data !== undefined) {
-        const normalized = normalizeGeneralConfig(data);
-        saveLocalGeneralConfigBackup(normalized);
-        onConfig(normalized);
+  void ensureSilentFirebaseAuth()
+    .then(async () => {
+      if (!active) return;
+
+      let restAuthQuery = '';
+      try {
+        const token = await window.firebase?.auth?.()?.currentUser?.getIdToken?.();
+        if (token) {
+          restAuthQuery = `?auth=${encodeURIComponent(token)}`;
+        }
+      } catch {
+        // Continue without REST token if unavailable
+      }
+
+      const restUrl = `${firebaseConfig.databaseURL}/${RTDB_CONFIG_PATH}.json${restAuthQuery}`;
+      void fetch(restUrl, { cache: 'no-store' })
+        .then(async (resp) => {
+          if (!active || receivedRealtime || !resp.ok) return;
+          const data: unknown = await resp.json();
+          if (!active || receivedRealtime) return;
+          if (data !== null && data !== undefined) {
+            const normalized = normalizeGeneralConfig(data);
+            saveLocalGeneralConfigBackup(normalized);
+            onConfig(normalized);
+          }
+        })
+        .catch(() => {
+          // Fallback handled by onValue listener or local backup
+        });
+
+      try {
+        const db = getFirebaseDatabase();
+        const configRef = db.ref(RTDB_CONFIG_PATH);
+
+        const listener = configRef.on(
+          'value',
+          (snapshot) => {
+            if (!active) return;
+            receivedRealtime = true;
+            try {
+              if (!snapshot.exists() || snapshot.val() === null) {
+                return;
+              }
+              const normalized = normalizeGeneralConfig(snapshot.val());
+              saveLocalGeneralConfigBackup(normalized);
+              onConfig(normalized);
+            } catch {
+              // Keep active local config cleanly if parsing fails
+            }
+          },
+          () => {
+            // Keep active local config cleanly if permission/network error occurs
+          },
+        );
+
+        detachConfigListener = () => {
+          configRef.off('value', listener);
+        };
+      } catch {
+        // Keep active local config cleanly if Firebase SDK is unavailable
       }
     })
     .catch(() => {
-      // Fallback handled by onValue listener or local backup
+      // Keep active local config cleanly
     });
 
-  try {
-    const db = getFirebaseDatabase();
-    const configRef = db.ref(RTDB_CONFIG_PATH);
-
-    const listener = configRef.on(
-      'value',
-      (snapshot) => {
-        if (!active) return;
-        receivedRealtime = true;
-        if (!snapshot.exists() || snapshot.val() === null) {
-          return;
-        }
-        const normalized = normalizeGeneralConfig(snapshot.val());
-        saveLocalGeneralConfigBackup(normalized);
-        onConfig(normalized);
-      },
-      () => {
-        // Keep active local config cleanly if permission/network error occurs
-      },
-    );
-
-    return () => {
-      active = false;
-      configRef.off('value', listener);
-    };
-  } catch {
-    return () => {
-      active = false;
-    };
-  }
+  return () => {
+    active = false;
+    if (detachConfigListener) {
+      detachConfigListener();
+    }
+  };
 }
 
 export async function writeGeneralConfig(config: GeneralConfig): Promise<void> {
@@ -542,6 +707,329 @@ export async function writeGeneralConfig(config: GeneralConfig): Promise<void> {
   saveLocalGeneralConfigBackup(clean);
   const db = getFirebaseDatabase();
   await db.ref(RTDB_CONFIG_PATH).set(sanitizeForFirebase(clean));
+}
+
+function normalizePublicCatalogStringMap(rawMap: unknown): Record<string, string> {
+  if (!rawMap || typeof rawMap !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(rawMap as Record<string, unknown>)) {
+    if (typeof val !== 'string') continue;
+    const safeKey = key.replace(/[.#$/[\]]/g, '_');
+    if (!safeKey) continue;
+    if (key !== safeKey && safeKey in out) continue;
+    out[safeKey] = val;
+  }
+  return out;
+}
+
+export function buildPublicCatalogSnapshot(state: AppState): PublicCatalogSnapshot {
+  const rawInventory = toArray<InventoryItem>(state.inventory);
+  const publicInventory: PublicCatalogInventoryItem[] = rawInventory
+    .filter((item) => Boolean(item && item.id))
+    .map((item) => ({
+      id: item.id,
+      team: item.team,
+      model: item.model,
+      version: item.version,
+      size: item.size,
+      stock: Number.isFinite(item.stock) ? item.stock : 0,
+      salePrice: Number.isFinite(item.salePrice) ? item.salePrice : 0,
+    }));
+
+  const rawBatches = toArray<PurchaseBatchRecord>(state.purchaseBatches);
+  const publicTransitBatches: PublicCatalogBatch[] = rawBatches
+    .filter((batch) => Boolean(batch && batch.status === 'EN TRÁNSITO'))
+    .map((batch) => ({
+      id: batch.id,
+      status: 'EN TRÁNSITO' as const,
+      entryDate: batch.entryDate ?? '',
+      ...(batch.estimatedArrivalDate
+        ? { estimatedArrivalDate: batch.estimatedArrivalDate }
+        : {}),
+      shippingType: batch.shippingType,
+      referenceName: batch.referenceName ?? '',
+      orderedTotalUnits: Number.isFinite(batch.orderedTotalUnits)
+        ? batch.orderedTotalUnits
+        : Number.isFinite(batch.totalUnits)
+          ? batch.totalUnits
+          : 0,
+      totalUnits: Number.isFinite(batch.totalUnits) ? batch.totalUnits : 0,
+      items: toArray<PurchaseBatchItemRecord>(batch.items).map((item) => ({
+        ...(item.skuId ? { skuId: item.skuId } : {}),
+        team: item.team,
+        model: item.model,
+        version: item.version,
+        size: item.size,
+        orderedQuantity: Number.isFinite(item.orderedQuantity)
+          ? item.orderedQuantity
+          : Number.isFinite(item.quantity)
+            ? item.quantity
+            : 0,
+        quantity: Number.isFinite(item.quantity) ? item.quantity : 0,
+        ...(typeof item.salePrice === 'number' && Number.isFinite(item.salePrice)
+          ? { salePrice: item.salePrice }
+          : {}),
+      })),
+    }));
+
+  const snapshot: PublicCatalogSnapshot = {
+    catalogEnabled: state.catalogEnabled !== false,
+    exchangeRates: {
+      bcv: Number.isFinite(state.exchangeRates?.bcv) ? state.exchangeRates.bcv : 0,
+      usdt: Number.isFinite(state.exchangeRates?.usdt) ? state.exchangeRates.usdt : 0,
+      updatedAt: state.exchangeRates?.updatedAt ?? '',
+      source: state.exchangeRates?.source ?? 'seed',
+    },
+    catalogPhotos: normalizePublicCatalogStringMap(state.catalogPhotos),
+    catalogKeywords: normalizePublicCatalogStringMap(state.catalogKeywords),
+    inventory: publicInventory,
+    purchaseBatches: publicTransitBatches,
+  };
+
+  return sanitizeForFirebase(snapshot);
+}
+
+export function normalizePublicCatalogToAppState(raw: unknown): AppState {
+  const parsed =
+    raw && typeof raw === 'object' ? (raw as Partial<PublicCatalogSnapshot>) : {};
+
+  const exchangeRates: ExchangeRates = {
+    bcv:
+      typeof parsed.exchangeRates?.bcv === 'number' &&
+      Number.isFinite(parsed.exchangeRates.bcv)
+        ? parsed.exchangeRates.bcv
+        : 0,
+    usdt:
+      typeof parsed.exchangeRates?.usdt === 'number' &&
+      Number.isFinite(parsed.exchangeRates.usdt)
+        ? parsed.exchangeRates.usdt
+        : 0,
+    updatedAt:
+      typeof parsed.exchangeRates?.updatedAt === 'string'
+        ? parsed.exchangeRates.updatedAt
+        : '',
+    source: parsed.exchangeRates?.source ?? 'seed',
+  };
+
+  const inventory: InventoryItem[] = toArray<PublicCatalogInventoryItem>(
+    parsed.inventory,
+  )
+    .filter((item) => Boolean(item && item.id))
+    .map((item) => ({
+      id: item.id,
+      team: item.team,
+      model: item.model,
+      version: item.version,
+      size: item.size,
+      stock: Number.isFinite(item.stock) ? item.stock : 0,
+      salePrice: Number.isFinite(item.salePrice) ? item.salePrice : 0,
+      cogs: 0,
+      fifoBatches: [],
+    }));
+
+  const purchaseBatches: PurchaseBatchRecord[] = toArray<PublicCatalogBatch>(
+    parsed.purchaseBatches,
+  )
+    .filter((batch) => Boolean(batch && batch.status === 'EN TRÁNSITO'))
+    .map((batch) => ({
+      id: batch.id,
+      status: 'EN TRÁNSITO',
+      fundingSource: 'cashOnHand',
+      entryDate: batch.entryDate ?? '',
+      ...(batch.estimatedArrivalDate
+        ? { estimatedArrivalDate: batch.estimatedArrivalDate }
+        : {}),
+      shippingType: batch.shippingType ?? 'Aéreo',
+      referenceName: batch.referenceName ?? '',
+      orderedTotalUnits: Number.isFinite(batch.orderedTotalUnits)
+        ? batch.orderedTotalUnits
+        : Number.isFinite(batch.totalUnits)
+          ? batch.totalUnits
+          : 0,
+      totalUnits: Number.isFinite(batch.totalUnits) ? batch.totalUnits : 0,
+      totalFactoryCost: 0,
+      estimatedFreightCost: 0,
+      totalFreightCost: 0,
+      freightPerUnit: 0,
+      totalLandedCost: 0,
+      createdAt: batch.entryDate ?? '',
+      items: toArray<PublicCatalogBatchItem>(batch.items).map((item) => ({
+        ...(item.skuId ? { skuId: item.skuId } : {}),
+        team: item.team,
+        model: item.model,
+        version: item.version,
+        size: item.size,
+        orderedQuantity: Number.isFinite(item.orderedQuantity)
+          ? item.orderedQuantity
+          : Number.isFinite(item.quantity)
+            ? item.quantity
+            : 0,
+        quantity: Number.isFinite(item.quantity) ? item.quantity : 0,
+        ...(typeof item.salePrice === 'number' && Number.isFinite(item.salePrice)
+          ? { salePrice: item.salePrice }
+          : {}),
+        factoryUnitCost: 0,
+        proratedFreightPerUnit: 0,
+        landedUnitCost: 0,
+        lineFactoryTotal: 0,
+        lineLandedTotal: 0,
+      })),
+    }));
+
+  return {
+    cashOnHand: 0,
+    collectedReceivablesCount: 0,
+    exchangeRates,
+    inventory,
+    receivables: [],
+    sales: [],
+    returns: [],
+    purchases: [],
+    purchaseBatches,
+    operatingExpenses: [],
+    capitalInjections: [],
+    inventoryAdjustments: [],
+    activeAuditSession: null,
+    auditHistory: [],
+    customers: [],
+    catalogEnabled:
+      typeof parsed.catalogEnabled === 'boolean' ? parsed.catalogEnabled : true,
+    catalogPhotos: normalizePublicCatalogStringMap(parsed.catalogPhotos),
+    catalogKeywords: normalizePublicCatalogStringMap(parsed.catalogKeywords),
+    historicalNetProfit: 0,
+    funds: {
+      replacement: 0,
+      commissions: 0,
+      commissionsBySeller: { Jesús: 0, Josué: 0, Gabriel: 0 },
+      operatingAndAds: 0,
+      growthReinvestment: 0,
+      dividendsByPartner: { Jesús: 0, Josué: 0, Gabriel: 0 },
+      reinvestedFromDividendsTotal: 0,
+    },
+    movements: [],
+  };
+}
+
+export function readLocalPublicCatalogBackup(): AppState | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_PUBLIC_CATALOG_BACKUP_KEY);
+    if (!raw) return null;
+    return normalizePublicCatalogToAppState(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveLocalPublicCatalogBackup(snapshot: PublicCatalogSnapshot): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(
+      LOCAL_PUBLIC_CATALOG_BACKUP_KEY,
+      JSON.stringify(sanitizeForFirebase(snapshot)),
+    );
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export async function writePublicCatalogSnapshot(state: AppState): Promise<void> {
+  const snapshot = buildPublicCatalogSnapshot(state);
+  saveLocalPublicCatalogBackup(snapshot);
+  const db = getFirebaseDatabase();
+  await db.ref(RTDB_PUBLIC_CATALOG_PATH).set(snapshot);
+}
+
+/**
+ * Suscripción ligera de SOLO LECTURA al nodo público `x4sport/publicCatalog`.
+ * Nunca descarga `x4sport/erpState` (ventas, clientes, CxC, fondos ni usuarios).
+ */
+export function subscribePublicCatalog(
+  onState: (state: AppState) => void,
+  onError: (message: string) => void,
+): () => void {
+  let active = true;
+  let receivedRealtimeSnapshot = false;
+  let deliveredInitial = false;
+
+  const deliverPublicState = (raw: unknown, fromRealtime: boolean) => {
+    if (!active) return;
+    if (fromRealtime) {
+      receivedRealtimeSnapshot = true;
+    } else if (receivedRealtimeSnapshot) {
+      return;
+    }
+    deliveredInitial = true;
+
+    const appState = normalizePublicCatalogToAppState(raw);
+    saveLocalPublicCatalogBackup(buildPublicCatalogSnapshot(appState));
+    onState(appState);
+  };
+
+  const restUrl = `${firebaseConfig.databaseURL}/${RTDB_PUBLIC_CATALOG_PATH}.json`;
+  void fetch(restUrl, { cache: 'no-store' })
+    .then(async (resp) => {
+      if (!active || receivedRealtimeSnapshot || !resp.ok) return;
+      const data: unknown = await resp.json();
+      if (!active || receivedRealtimeSnapshot) return;
+      if (data !== null && data !== undefined) {
+        deliverPublicState(data, false);
+      }
+    })
+    .catch(() => {
+      // Fallback handled by onValue listener or timeout
+    });
+
+  const safetyTimer = setTimeout(() => {
+    if (!active || deliveredInitial) return;
+    deliveredInitial = true;
+    const backup = readLocalPublicCatalogBackup();
+    onState(backup ?? normalizePublicCatalogToAppState(null));
+    onError(
+      'Conexión lenta con Firebase Realtime Database; mostrando catálogo guardado mientras sincroniza.',
+    );
+  }, 6000);
+
+  try {
+    const db = getFirebaseDatabase();
+    const publicRef = db.ref(RTDB_PUBLIC_CATALOG_PATH);
+
+    const listener = publicRef.on(
+      'value',
+      (snapshot) => {
+        if (!active) return;
+        clearTimeout(safetyTimer);
+        try {
+          if (!snapshot.exists() || snapshot.val() === null) {
+            deliverPublicState(null, true);
+            return;
+          }
+          deliverPublicState(snapshot.val(), true);
+        } catch (err) {
+          if (!active) return;
+          onError(formatFirebaseError(err));
+        }
+      },
+      (error) => {
+        if (!active) return;
+        clearTimeout(safetyTimer);
+        onError(formatFirebaseError(error));
+      },
+    );
+
+    return () => {
+      active = false;
+      clearTimeout(safetyTimer);
+      publicRef.off('value', listener);
+    };
+  } catch (err) {
+    clearTimeout(safetyTimer);
+    onError(formatFirebaseError(err));
+    return () => {
+      active = false;
+      clearTimeout(safetyTimer);
+    };
+  }
 }
 
 

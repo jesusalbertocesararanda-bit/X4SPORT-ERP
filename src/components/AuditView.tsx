@@ -34,7 +34,7 @@ interface AuditViewProps {
   onSaveProgress: (
     counts: Record<string, number>,
     notes?: string,
-  ) => { ok: boolean; error?: string };
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onCloseAuditSession: (
     counts: Record<string, number>,
     applyAdjustmentsToInventory: boolean,
@@ -42,7 +42,9 @@ interface AuditViewProps {
   ) =>
     | Promise<{ ok: boolean; error?: string; session?: InventoryAuditSession }>
     | { ok: boolean; error?: string; session?: InventoryAuditSession };
-  onStartNewAuditSession: () => { ok: boolean; error?: string };
+  onStartNewAuditSession: () =>
+    | Promise<{ ok: boolean; error?: string }>
+    | { ok: boolean; error?: string };
   onPerformUncross: (input: {
     sourceSkuId: string;
     targetSkuId: string;
@@ -193,9 +195,9 @@ export function AuditView({
     }));
   };
 
-  const handleSaveProgress = () => {
+  const handleSaveProgress = async () => {
     setFeedback(null);
-    const res = onSaveProgress(parsedNumericCounts, notes);
+    const res = await Promise.resolve(onSaveProgress(parsedNumericCounts, notes));
     if (!res.ok) {
       setFeedback({ type: 'error', text: res.error ?? 'Error al guardar el progreso.' });
       return;
@@ -207,7 +209,7 @@ export function AuditView({
     });
   };
 
-  const handleStartNewSession = () => {
+  const handleStartNewSession = async () => {
     if (
       !isClosed &&
       Object.keys(parsedNumericCounts).length > 0 &&
@@ -217,7 +219,7 @@ export function AuditView({
     ) {
       return;
     }
-    const res = onStartNewAuditSession();
+    const res = await Promise.resolve(onStartNewAuditSession());
     if (res.ok) {
       setCounts({});
       setNotes('');

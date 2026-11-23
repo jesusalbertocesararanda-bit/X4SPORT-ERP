@@ -922,20 +922,51 @@ export async function compressCatalogImageFile(file: File): Promise<string> {
       img.onerror = () =>
         reject(new Error('La imagen seleccionada no es compatible.'));
       img.onload = () => {
-        const maxSide = 720;
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-        const targetW = Math.max(1, Math.round(img.width * scale));
-        const targetH = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(dataUrl);
-          return;
+        const MAX_DATA_URL_CHARS = 40 * 1024;
+        const maxSide = 480;
+        const baseScale = Math.min(1, maxSide / Math.max(img.width, img.height));
+
+        const encodeAt = (scaleFactor: number, quality: number): string | null => {
+          const targetW = Math.max(1, Math.round(img.width * baseScale * scaleFactor));
+          const targetH = Math.max(1, Math.round(img.height * baseScale * scaleFactor));
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return null;
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, targetW, targetH);
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          return canvas.toDataURL('image/jpeg', quality);
+        };
+
+        let bestOutput = '';
+        for (const quality of [0.68, 0.55, 0.45]) {
+          const candidate = encodeAt(1, quality);
+          if (candidate === null) {
+            resolve(dataUrl);
+            return;
+          }
+          bestOutput = candidate;
+          if (candidate.length <= MAX_DATA_URL_CHARS) {
+            resolve(candidate);
+            return;
+          }
         }
-        ctx.drawImage(img, 0, 0, targetW, targetH);
-        resolve(canvas.toDataURL('image/jpeg', 0.8));
+
+        // Garantiza <= 40 KB incluso en imágenes muy detalladas
+        for (const fallbackScale of [0.8, 0.65, 0.5]) {
+          const candidate = encodeAt(fallbackScale, 0.45);
+          if (candidate && candidate.length < bestOutput.length) {
+            bestOutput = candidate;
+          }
+          if (candidate && candidate.length <= MAX_DATA_URL_CHARS) {
+            resolve(candidate);
+            return;
+          }
+        }
+
+        resolve(bestOutput || dataUrl);
       };
       img.src = dataUrl;
     };

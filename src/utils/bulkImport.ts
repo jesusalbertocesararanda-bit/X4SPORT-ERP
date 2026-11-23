@@ -1149,6 +1149,7 @@ export function applyBulkUploadPreview(
           paymentStatus: p.paymentStatus,
           paymentMethod: p.paymentMethod,
           clientOperationId: p.dedupKey,
+          actorName: userName,
         },
         matrixParams,
       );
@@ -1200,6 +1201,7 @@ export function applyBulkUploadPreview(
         retailPricingMode: 'per-item',
         usdtRate: first.usdtRate,
         clientOperationId: first.dedupKey,
+        actorName: userName,
         items: items.map((it) => ({
           team: it.team,
           model: it.model,
@@ -1235,6 +1237,7 @@ export function applyBulkUploadPreview(
         skuId: p.skuId,
         quantity: p.quantity,
         reason: p.reason,
+        actorName: userName,
       });
       if (!res.ok) {
         return {

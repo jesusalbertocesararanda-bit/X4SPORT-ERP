@@ -92,7 +92,7 @@ interface SalesViewProps {
     | { ok: boolean; error?: string; createdSale?: SaleRecord };
   onSaveCustomerProfile?: (
     input: UpsertCustomerInput,
-  ) => { ok: boolean; error?: string };
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
 }
 
 interface CartLine {
@@ -399,15 +399,17 @@ export function SalesView({
     setCustomerDropdownOpen(false);
   };
 
-  const handleSaveNewCustomerInline = () => {
+  const handleSaveNewCustomerInline = async () => {
     if (!onSaveCustomerProfile) return;
-    const res = onSaveCustomerProfile({
-      name: customerName,
-      phone: customerPhone,
-      city: customerCity,
-      social: customerSocial,
-      idDoc: customerIdDoc,
-    });
+    const res = await Promise.resolve(
+      onSaveCustomerProfile({
+        name: customerName,
+        phone: customerPhone,
+        city: customerCity,
+        social: customerSocial,
+        idDoc: customerIdDoc,
+      }),
+    );
     if (!res.ok) {
       setFeedback({
         type: 'error',
@@ -2294,11 +2296,18 @@ export function SalesView({
                           sale.paidAmount !== undefined
                             ? sale.paidAmount
                             : sale.paymentStatus === 'Cobrado'
-                              ? sale.finalPrice
+                              ? round2(Math.max(0, sale.finalPrice - (sale.returnedAmount ?? 0)))
                               : 0;
                         const pendingCredit =
                           sale.paymentStatus === 'Pendiente'
-                            ? round2(Math.max(0, sale.finalPrice - paidAtSale))
+                            ? round2(
+                                Math.max(
+                                  0,
+                                  sale.finalPrice -
+                                    (sale.returnedAmount ?? 0) -
+                                    paidAtSale,
+                                ),
+                              )
                             : 0;
 
                         return (
@@ -2358,11 +2367,37 @@ export function SalesView({
                               {formatUSD(sale.finalPrice)}
                             </td>
                             <td className="px-4 py-3 text-right text-xs font-semibold whitespace-nowrap">
-                              {sale.paymentStatus === 'Cobrado' ? (
-                                <span className="text-emerald-400">Contado</span>
+                              {sale.returnStatus === 'Total' ? (
+                                <div className="text-rose-400">
+                                  <span>Devuelto Total</span>
+                                  {sale.returnedAmount ? (
+                                    <span className="font-mono-num block text-[11px] font-normal text-rose-300">
+                                      -{formatUSD(sale.returnedAmount)}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : sale.paymentStatus === 'Cobrado' ? (
+                                <div className="text-emerald-400">
+                                  <span>
+                                    {sale.returnStatus === 'Parcial'
+                                      ? 'Contado · Dev. Parcial'
+                                      : 'Contado'}
+                                  </span>
+                                  {sale.returnStatus === 'Parcial' &&
+                                  sale.returnedAmount ? (
+                                    <span className="font-mono-num block text-[11px] font-normal text-amber-200">
+                                      Pagado {formatUSD(paidAtSale)} · Dev.{' '}
+                                      {formatUSD(sale.returnedAmount)}
+                                    </span>
+                                  ) : null}
+                                </div>
                               ) : (
                                 <div className="text-amber-400">
-                                  <span>Crédito CxC</span>
+                                  <span>
+                                    {sale.returnStatus === 'Parcial'
+                                      ? 'Crédito CxC · Dev. Parcial'
+                                      : 'Crédito CxC'}
+                                  </span>
                                   <span className="font-mono-num block text-[11px] font-normal text-amber-200">
                                     Abono {formatUSD(paidAtSale)} · Resta{' '}
                                     {formatUSD(pendingCredit)}
@@ -2427,14 +2462,22 @@ export function SalesView({
                           {sale.paymentMethod ?? 'Efectivo ($)'} ·{' '}
                           <span
                             className={
-                              sale.paymentStatus === 'Cobrado'
-                                ? 'text-emerald-400'
-                                : 'text-amber-400'
+                              sale.returnStatus === 'Total'
+                                ? 'text-rose-400'
+                                : sale.paymentStatus === 'Cobrado'
+                                  ? 'text-emerald-400'
+                                  : 'text-amber-400'
                             }
                           >
-                            {sale.paymentStatus === 'Cobrado'
-                              ? 'Contado'
-                              : 'Crédito CxC'}
+                            {sale.returnStatus === 'Total'
+                              ? 'Devuelto Total'
+                              : sale.paymentStatus === 'Cobrado'
+                                ? sale.returnStatus === 'Parcial'
+                                  ? 'Contado · Dev. Parcial'
+                                  : 'Contado'
+                                : sale.returnStatus === 'Parcial'
+                                  ? 'Crédito CxC · Dev. Parcial'
+                                  : 'Crédito CxC'}
                           </span>
                         </p>
                         <button

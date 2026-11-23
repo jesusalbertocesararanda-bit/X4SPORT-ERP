@@ -28,10 +28,13 @@ import {
   canAccessConfiguration,
   ERPUser,
   getStoredActiveUser,
+  getStoredLastActivityMs,
   isAdminUser,
+  isSessionExpired,
   MAIN_ADMIN_EMAIL,
   saveAuthorizedUsersToStorage,
   storeActiveUser,
+  touchUserActivity,
 } from './utils/auth';
 import type {
   AppState,
@@ -53,6 +56,7 @@ import {
   attachSaleCalendarMetadata,
   closeAuditSession,
   collectReceivable,
+  DEFAULT_GENERAL_CONFIG,
   getActiveOperationalAlerts,
   normalizeGeneralConfig,
   performInventoryUncross,
@@ -100,9 +104,12 @@ import {
   toggleAlertSeenId,
 } from './utils/notifications';
 import {
+  buildPublicCatalogSnapshot,
   formatFirebaseError,
+  normalizePublicCatalogToAppState,
   purgeAllDataInFirebase,
   readLocalGeneralConfigBackup,
+  readLocalPublicCatalogBackup,
   readLocalStorageRecoveryCandidates,
   resetBaselineStateInFirebase,
   resetErpStateInFirebase,
@@ -110,10 +117,13 @@ import {
   saveLocalStateBackup,
   subscribeErpState,
   subscribeGeneralConfig,
+  subscribePublicCatalog,
   transactErpState,
+  updateErpState,
   writeErpState,
   writeExchangeRatesOnly,
   writeGeneralConfig,
+  writePublicCatalogSnapshot,
 } from './utils/firebaseRealtime';
 import {
   getBreadcrumbParts,
@@ -131,15 +141,27 @@ export interface RateSyncInfo {
 }
 
 export default function App() {
+  const [isPublicCatalogRoute, setIsPublicCatalogRoute] = useState<boolean>(() =>
+    isPublicCatalogModeFromLocation(),
+  );
   const [state, setState] = useState<AppState>(() => {
+    if (isPublicCatalogModeFromLocation()) {
+      return (
+        readLocalPublicCatalogBackup() ?? normalizePublicCatalogToAppState(null)
+      );
+    }
     const { state: initialRecovered } = recoverStartupErpState(
       createInitialState(),
       readLocalStorageRecoveryCandidates(),
     );
     return initialRecovered;
   });
+  const latestStateRef = useRef<AppState>(state);
+  latestStateRef.current = state;
   const [generalConfig, setGeneralConfig] = useState<GeneralConfig>(() =>
-    readLocalGeneralConfigBackup(),
+    isPublicCatalogModeFromLocation()
+      ? DEFAULT_GENERAL_CONFIG
+      : readLocalGeneralConfigBackup(),
   );
   const [isHydratingDb, setIsHydratingDb] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -152,9 +174,6 @@ export default function App() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [rateSync, setRateSync] = useState<RateSyncInfo>({ status: 'idle' });
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
-  const [isPublicCatalogRoute, setIsPublicCatalogRoute] = useState<boolean>(() =>
-    isPublicCatalogModeFromLocation(),
-  );
   const [isCatalogPreview, setIsCatalogPreview] = useState(false);
   const [calendarAuth, setCalendarAuth] = useState<GoogleCalendarAuthState>({
     isConnected: false,
@@ -164,6 +183,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<ERPUser | null>(() => getStoredActiveUser());
   const [loginToast, setLoginToast] = useState<string | null>(null);
   const [restrictedToast, setRestrictedToast] = useState<string | null>(null);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loginToast) return;
@@ -181,31 +201,94 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [restrictedToast]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let lastThrottledWriteMs = getStoredLastActivityMs() ?? Date.now();
+
+    const expireSessionIfIdle = (nowMs = Date.now()): boolean => {
+      const lastActivityMs = getStoredLastActivityMs();
+      if (isSessionExpired(lastActivityMs, nowMs)) {
+        storeActiveUser(null);
+        setCurrentUser(null);
+        setActiveSubModule('dashboard');
+        setSessionExpiredNotice(
+          'Tu sesión se cerró automáticamente por superar 24 horas de inactividad. Inicia sesión nuevamente.',
+        );
+        return true;
+      }
+      return false;
+    };
+
+    if (expireSessionIfIdle(Date.now())) {
+      return;
+    }
+
+    const handleUserInteraction = () => {
+      const nowMs = Date.now();
+      // Verificar expiración de 24h ANTES de actualizar el timestamp de actividad
+      if (expireSessionIfIdle(nowMs)) return;
+      if (nowMs - lastThrottledWriteMs < 60_000) return;
+      lastThrottledWriteMs = nowMs;
+      touchUserActivity(nowMs);
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        expireSessionIfIdle(Date.now());
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      expireSessionIfIdle(Date.now());
+    }, 60_000);
+
+    window.addEventListener('pointerdown', handleUserInteraction, { passive: true });
+    window.addEventListener('keydown', handleUserInteraction);
+    window.addEventListener('touchstart', handleUserInteraction, { passive: true });
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('pointerdown', handleUserInteraction);
+      window.removeEventListener('keydown', handleUserInteraction);
+      window.removeEventListener('touchstart', handleUserInteraction);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+    };
+  }, [currentUser]);
+
   const handleLoginSuccess = useCallback((user: ERPUser) => {
     storeActiveUser(user);
     setCurrentUser(user);
+    setSessionExpiredNotice(null);
     setLoginToast(`¡Bienvenido, ${user.name}!`);
   }, []);
 
   const handleLogout = useCallback(() => {
     storeActiveUser(null);
     setCurrentUser(null);
+    setSessionExpiredNotice(null);
     setActiveSubModule('dashboard');
   }, []);
 
   const handleUpdateAuthorizedUsers = useCallback((users: AuthorizedUserRecord[]) => {
     saveAuthorizedUsersToStorage(users);
-    setState((prev) => {
-      const next: AppState = {
-        ...prev,
-        authorizedUsers: users,
-      };
-      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void writeErpState(next).catch((err: unknown) => {
+    const next: AppState = {
+      ...latestStateRef.current,
+      authorizedUsers: users,
+    };
+    latestStateRef.current = next;
+    setState(next);
+    saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+    void updateErpState({ authorizedUsers: users })
+      .then(() => setDbError(null))
+      .catch((err: unknown) => {
         setDbError(formatFirebaseError(err));
       });
-      return next;
-    });
   }, []);
 
   const handleSelectSubModule = useCallback((subModule: SubModuleId) => {
@@ -334,8 +417,29 @@ export default function App() {
     });
   }, []);
 
-  // Suscripción en tiempo real (onValue) a Firebase RTDB con blindaje anti-borrado de localStorage
+  // Suscripción en tiempo real (onValue) a Firebase RTDB:
+  // En ruta pública (?catalogo=1) solo descarga `x4sport/publicCatalog` sin datos financieros ni privados.
   useEffect(() => {
+    setIsHydratingDb(true);
+    if (isPublicCatalogRoute) {
+      const unsubscribePublic = subscribePublicCatalog(
+        (publicState) => {
+          latestStateRef.current = publicState;
+          setState(publicState);
+          setIsHydratingDb(false);
+          setDbError(null);
+        },
+        (errorMessage) => {
+          setIsHydratingDb(false);
+          setDbError(errorMessage);
+        },
+      );
+
+      return () => {
+        unsubscribePublic();
+      };
+    }
+
     const unsubscribeState = subscribeErpState(
       (remoteState) => {
         setState(remoteState);
@@ -356,7 +460,32 @@ export default function App() {
       unsubscribeState();
       unsubscribeConfig();
     };
-  }, []);
+  }, [isPublicCatalogRoute]);
+
+  const lastSyncedPublicCatalogJsonRef = useRef<string | null>(null);
+
+  // Sincronización automática del nodo público ligero `x4sport/publicCatalog`
+  // cada vez que cambia inventario, tasas, fotos, palabras clave o lotes en tránsito
+  useEffect(() => {
+    if (isPublicCatalogRoute || isHydratingDb || !currentUser) return;
+    const publicSnapshot = buildPublicCatalogSnapshot(state);
+    const serialized = JSON.stringify(publicSnapshot);
+    if (serialized === lastSyncedPublicCatalogJsonRef.current) return;
+    lastSyncedPublicCatalogJsonRef.current = serialized;
+    void writePublicCatalogSnapshot(state).catch(() => {
+      lastSyncedPublicCatalogJsonRef.current = null;
+    });
+  }, [
+    isPublicCatalogRoute,
+    isHydratingDb,
+    currentUser,
+    state.catalogEnabled,
+    state.exchangeRates,
+    state.catalogPhotos,
+    state.catalogKeywords,
+    state.inventory,
+    state.purchaseBatches,
+  ]);
 
   const handleSaveGeneralConfig = useCallback(
     async (nextConfig: GeneralConfig): Promise<void> => {
@@ -378,38 +507,6 @@ export default function App() {
       }
     },
     [currentUser],
-  );
-
-  const commitState = useCallback(
-    (
-      res: ActionResult,
-    ): {
-      ok: boolean;
-      error?: string;
-      createdSale?: SaleRecord;
-      createdBatch?: PurchaseBatchRecord;
-    } => {
-      if (!res.ok) {
-        return { ok: false, error: res.error };
-      }
-
-      setState(res.state);
-      saveLocalStateBackup(res.state, { allowOverwriteEmpty: true });
-      void writeErpState(res.state)
-        .then(() => {
-          setDbError(null);
-        })
-        .catch((err: unknown) => {
-          setDbError(formatFirebaseError(err));
-        });
-
-      return {
-        ok: true,
-        createdSale: res.createdSale,
-        createdBatch: res.createdBatch,
-      };
-    },
-    [],
   );
 
   const hasBootRateSyncRef = useRef(false);
@@ -457,9 +554,9 @@ export default function App() {
   }, []);
 
   // Esperar a que Firebase entregue el estado inicial antes de sincronizar tasas en vivo
-  // (No sobrescribir tasas reales importadas desde Excel ni ajustes manuales)
+  // (No sobrescribir tasas reales importadas desde Excel ni ajustes manuales, ni ejecutar en catálogo público)
   useEffect(() => {
-    if (isHydratingDb || hasBootRateSyncRef.current) return;
+    if (isPublicCatalogRoute || isHydratingDb || hasBootRateSyncRef.current) return;
     hasBootRateSyncRef.current = true;
 
     const currentSource = latestRateSourceRef.current;
@@ -524,7 +621,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [isHydratingDb]);
+  }, [isHydratingDb, isPublicCatalogRoute]);
 
   const activeAlerts = useMemo(
     () =>
@@ -556,13 +653,18 @@ export default function App() {
     } catch {
       // Ignore storage quota errors
     }
-    commitState({
-      ok: true,
-      state: {
-        ...state,
-        seenAlertIds: nextIds,
-      },
-    });
+    const next: AppState = {
+      ...latestStateRef.current,
+      seenAlertIds: nextIds,
+    };
+    latestStateRef.current = next;
+    setState(next);
+    saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+    void updateErpState({ seenAlertIds: nextIds })
+      .then(() => setDbError(null))
+      .catch((err: unknown) => {
+        setDbError(formatFirebaseError(err));
+      });
   };
 
   const handleToggleAlertSeen = (alertId: string) => {
@@ -575,20 +677,30 @@ export default function App() {
     persistSeenAlerts(nextIds);
   };
 
-  const handleUpdateRates = (bcv: number, usdt: number) => {
-    const res = updateExchangeRates(state, bcv, usdt, 'manual');
-    if (res.ok) {
+  const handleUpdateRates = async (
+    bcv: number,
+    usdt: number,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = updateExchangeRates(latestStateRef.current, bcv, usdt, 'manual');
+    if (!res.ok) {
+      return { ok: false, error: res.error };
+    }
+    try {
+      await writeExchangeRatesOnly(res.state.exchangeRates);
+      latestStateRef.current = res.state;
       setState(res.state);
       saveLocalStateBackup(res.state, { allowOverwriteEmpty: true });
-      void writeExchangeRatesOnly(res.state.exchangeRates)
-        .then(() => setDbError(null))
-        .catch((err: unknown) => setDbError(formatFirebaseError(err)));
+      setDbError(null);
       setRateSync({
         status: 'idle',
         message: 'Ajuste manual guardado.',
       });
+      return { ok: true };
+    } catch (err: unknown) {
+      const msg = formatFirebaseError(err);
+      setDbError(msg);
+      return { ok: false, error: msg };
     }
-    return { ok: res.ok, error: res.error };
   };
 
   const inFlightErpOpsRef = useRef<Set<string>>(new Set());
@@ -611,13 +723,9 @@ export default function App() {
       }
       inFlightErpOpsRef.current.add(opKey);
       try {
-        const localCheck = mutator(state);
-        if (!localCheck.ok) {
-          return { ok: false, error: localCheck.error };
-        }
-
-        const txOutcome = await transactErpState(mutator, state);
+        const txOutcome = await transactErpState(mutator, latestStateRef.current);
         if (txOutcome.ok && txOutcome.state) {
+          latestStateRef.current = txOutcome.state;
           setState(txOutcome.state);
           saveLocalStateBackup(txOutcome.state, { allowOverwriteEmpty: true });
           setDbError(null);
@@ -635,19 +743,19 @@ export default function App() {
           };
         }
 
-        // Fallback seguro cuando el SDK CDN de Firebase está offline o no disponible en el entorno
-        const committed = commitState(localCheck);
+        const unavailableError =
+          txOutcome.error ??
+          'No se pudo sincronizar la transacción con Firebase RTDB. Verifica tu conexión e inténtalo de nuevo.';
+        setDbError(unavailableError);
         return {
-          ok: committed.ok,
-          error: committed.error,
-          createdBatch: committed.createdBatch,
-          createdSale: committed.createdSale,
+          ok: false,
+          error: unavailableError,
         };
       } finally {
         inFlightErpOpsRef.current.delete(opKey);
       }
     },
-    [commitState, state],
+    [],
   );
 
   const handleRegisterMultiSale = (input: RegisterMultiSaleInput) => {
@@ -655,19 +763,30 @@ export default function App() {
       input.clientOperationId?.trim() ||
       `sale-${Date.now()}-${input.items.map((i) => `${i.skuId}:${i.quantity}`).join(',')}`;
     return runAtomicErpOperation(opKey, (current) =>
-      registerMultiItemSale(current, input, generalConfig.matrixParams),
+      registerMultiItemSale(
+        current,
+        { ...input, actorName: input.actorName ?? currentUser?.name },
+        generalConfig.matrixParams,
+      ),
     );
   };
 
-  const handleSaveCustomerProfile = (input: UpsertCustomerInput) =>
-    commitState(upsertCustomerProfile(state, input));
+  const handleSaveCustomerProfile = (input: UpsertCustomerInput) => {
+    const opKey = `save-customer-${input.name.trim().toLowerCase()}`;
+    return runAtomicErpOperation(opKey, (current) =>
+      upsertCustomerProfile(current, input),
+    );
+  };
 
   const handleRegisterImportBatch = (input: RegisterImportBatchInput) => {
     const opKey =
       input.clientOperationId?.trim() ||
       `reg-${input.referenceName.trim()}-${input.entryDate}`;
     return runAtomicErpOperation(opKey, (current) =>
-      registerImportBatch(current, input),
+      registerImportBatch(current, {
+        ...input,
+        actorName: input.actorName ?? currentUser?.name,
+      }),
     );
   };
 
@@ -699,12 +818,14 @@ export default function App() {
   };
 
   const handleReinvestDividends = (partner: PartnerName) =>
-    commitState(reinvestPartnerDividends(state, partner));
+    runAtomicErpOperation(`reinvest-${partner}`, (current) =>
+      reinvestPartnerDividends(current, partner),
+    );
 
   const handleWithdrawDividends = (partner: PartnerName, amount?: number) =>
-    commitState(
+    runAtomicErpOperation(`withdraw-${partner}`, (current) =>
       withdrawPartnerDividends(
-        state,
+        current,
         partner,
         generalConfig.matrixParams.vitalReserveMinUsd ?? 150,
         amount,
@@ -712,31 +833,51 @@ export default function App() {
     );
 
   const handleSyncFreeCashToFunds = () =>
-    commitState(syncUnassignedCashToGrowthFund(state));
+    runAtomicErpOperation('sync-free-cash', (current) =>
+      syncUnassignedCashToGrowthFund(current),
+    );
 
   const handleRegisterOperatingExpense = (
     input: RegisterOperatingExpenseInput,
-  ) => commitState(registerOperatingExpense(state, input));
+  ) =>
+    runAtomicErpOperation('register-operating-expense', (current) =>
+      registerOperatingExpense(current, input),
+    );
 
-  const handleRegisterCapitalInjection = (
+  const handleRegisterCapitalInjection = async (
     input: RegisterCapitalInjectionInput,
-  ): { ok: boolean; error?: string } => {
+  ): Promise<{ ok: boolean; error?: string }> => {
     if (!checkAdminPermission('Inyección de Capital / Dinero en Caja')) {
-      return { ok: false, error: 'Acceso restringido: Solo Administrador Principal (Jesús César)' };
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
     }
-    return commitState(registerCapitalInjection(state, input));
+    return runAtomicErpOperation('register-capital-injection', (current) =>
+      registerCapitalInjection(current, input),
+    );
   };
 
   const handleReconcileCash = (input: ReconcileCashInput) =>
-    commitState(reconcileCashOnHand(state, input));
+    runAtomicErpOperation('reconcile-cash', (current) =>
+      reconcileCashOnHand(current, input),
+    );
 
-  const handleAdjustInventoryCount = (
+  const handleAdjustInventoryCount = async (
     input: AdjustInventoryCountInput,
-  ): { ok: boolean; error?: string } => {
+  ): Promise<{ ok: boolean; error?: string }> => {
     if (!checkAdminPermission('Ajustes Manuales de Inventario')) {
-      return { ok: false, error: 'Acceso restringido: Solo Administrador Principal (Jesús César)' };
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
     }
-    return commitState(adjustInventoryPhysicalCount(state, input));
+    return runAtomicErpOperation(`adjust-count-${input.skuId}`, (current) =>
+      adjustInventoryPhysicalCount(current, {
+        ...input,
+        actorName: input.actorName ?? currentUser?.name,
+      }),
+    );
   };
 
   const handleRegisterManualInventoryAdjustment = (input: {
@@ -750,6 +891,7 @@ export default function App() {
   }) => {
     const opKey = `adj-${input.skuId}-${Date.now()}`;
     return runAtomicErpOperation(opKey, (current) => {
+      const actorName = input.user?.trim() || currentUser?.name;
       if (input.adjustmentType === 'descruce') {
         if (!input.targetSkuId) {
           return {
@@ -763,6 +905,7 @@ export default function App() {
           targetSkuId: input.targetSkuId,
           quantity: input.quantity,
           reason: input.reason,
+          actorName,
         });
       }
       return registerManualInventoryAdjustment(current, {
@@ -770,6 +913,7 @@ export default function App() {
         skuId: input.skuId,
         quantity: input.quantity,
         reason: input.reason,
+        actorName,
       });
     });
   };
@@ -788,6 +932,7 @@ export default function App() {
         targetSkuId: input.targetSkuId,
         quantity: input.quantity,
         reason: input.reason ?? '',
+        actorName: input.user?.trim() || currentUser?.name,
       }),
     );
   };
@@ -795,9 +940,10 @@ export default function App() {
   const handleSaveAuditProgress = (
     counts: Record<string, number>,
     notes?: string,
-  ) => {
-    return commitState(saveAuditProgress(state, counts, notes));
-  };
+  ) =>
+    runAtomicErpOperation('audit-save-progress', (current) =>
+      saveAuditProgress(current, counts, notes),
+    );
 
   const handleCloseAuditSession = (
     counts: Record<string, number>,
@@ -806,55 +952,74 @@ export default function App() {
   ) => {
     const opKey = `audit-close-${Date.now()}`;
     return runAtomicErpOperation(opKey, (current) =>
-      closeAuditSession(current, counts, applyAdjustmentsToInventory, reason),
+      closeAuditSession(
+        current,
+        counts,
+        applyAdjustmentsToInventory,
+        reason,
+        currentUser?.name,
+      ),
     );
   };
 
-  const handleStartNewAuditSession = () => {
-    return commitState(startNewAuditSession(state));
-  };
+  const handleStartNewAuditSession = () =>
+    runAtomicErpOperation('audit-start-new-session', (current) =>
+      startNewAuditSession(current),
+    );
 
   const handleApplyAuditAdjustments = (input: ApplyAuditAdjustmentsInput) =>
-    commitState(applyAuditAdjustments(state, input));
+    runAtomicErpOperation('apply-audit-adjustments', (current) =>
+      applyAuditAdjustments(current, {
+        ...input,
+        actorName: input.actorName ?? currentUser?.name,
+      }),
+    );
 
   const handleProcessReturnOrExchange = (input: ProcessReturnExchangeInput) => {
     const opKey =
       input.clientOperationId?.trim() ||
       `ret-${input.saleId}-${input.type}-${input.returnedSkuId}`;
     return runAtomicErpOperation(opKey, (current) =>
-      processReturnOrExchange(current, input),
+      processReturnOrExchange(current, input, generalConfig.matrixParams),
     );
   };
 
   const handleAttachSaleCalendarMetadata = useCallback(
     (saleId: string, eventId: string, htmlLink?: string) => {
-      setState((prev) => {
-        const next = attachSaleCalendarMetadata(prev, saleId, eventId, htmlLink);
-        saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-        void writeErpState(next).catch((err: unknown) => {
+      const next = attachSaleCalendarMetadata(
+        latestStateRef.current,
+        saleId,
+        eventId,
+        htmlLink,
+      );
+      latestStateRef.current = next;
+      setState(next);
+      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+      void updateErpState({ sales: next.sales })
+        .then(() => setDbError(null))
+        .catch((err: unknown) => {
           setDbError(formatFirebaseError(err));
         });
-        return next;
-      });
     },
     [],
   );
 
   const handleAttachPurchaseCalendarMetadata = useCallback(
     (batchId: string, eventId: string, htmlLink?: string) => {
-      setState((prev) => {
-        const next = attachPurchaseBatchCalendarMetadata(
-          prev,
-          batchId,
-          eventId,
-          htmlLink,
-        );
-        saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-        void writeErpState(next).catch((err: unknown) => {
+      const next = attachPurchaseBatchCalendarMetadata(
+        latestStateRef.current,
+        batchId,
+        eventId,
+        htmlLink,
+      );
+      latestStateRef.current = next;
+      setState(next);
+      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+      void updateErpState({ purchaseBatches: next.purchaseBatches })
+        .then(() => setDbError(null))
+        .catch((err: unknown) => {
           setDbError(formatFirebaseError(err));
         });
-        return next;
-      });
     },
     [],
   );
@@ -889,7 +1054,7 @@ export default function App() {
   ) => {
     if (!checkAdminPermission('Cargas Masivas de Datos')) return;
     const nowIso = new Date().toISOString();
-    const prevBulkImports = state.bulkImports ?? [];
+    const prevBulkImports = latestStateRef.current.bulkImports ?? [];
     const newImportEntry: BulkImportRecord[] = importMeta
       ? [
           {
@@ -900,17 +1065,26 @@ export default function App() {
           },
         ]
       : [];
+    const mergedBulkImports = [
+      ...newImportEntry,
+      ...(nextState.bulkImports ?? []),
+      ...prevBulkImports,
+    ];
+    const seenBulkIds = new Set<string>();
+    const deduplicatedBulkImports: BulkImportRecord[] = [];
+    for (const record of mergedBulkImports) {
+      if (!record?.id || seenBulkIds.has(record.id)) continue;
+      seenBulkIds.add(record.id);
+      deduplicatedBulkImports.push(record);
+    }
     const cleanNext: AppState = {
       ...nextState,
-      bulkImports: [
-        ...newImportEntry,
-        ...(nextState.bulkImports ?? []),
-        ...prevBulkImports,
-      ],
+      bulkImports: deduplicatedBulkImports,
       userPurgedEmpty: false,
       isExplicitDemo: false,
     };
     saveLocalStateBackup(cleanNext, { allowOverwriteEmpty: true });
+    latestStateRef.current = cleanNext;
     setState(cleanNext);
     await writeErpState(cleanNext);
     setDbError(null);
@@ -931,6 +1105,7 @@ export default function App() {
       isExplicitDemo: false,
     };
     saveLocalStateBackup(cleanNext, { allowOverwriteEmpty: true });
+    latestStateRef.current = cleanNext;
     setState(cleanNext);
     await writeErpState(cleanNext);
     setDbError(null);
@@ -944,46 +1119,49 @@ export default function App() {
       state.exchangeRates.usdt,
       state.exchangeRates.source,
     );
+    latestStateRef.current = clean;
     setState(clean);
     setDbError(null);
   };
 
   const handleToggleCatalogEnabled = useCallback((enabled: boolean) => {
-    setState((prev) => {
-      const next: AppState = {
-        ...prev,
-        catalogEnabled: enabled,
-      };
-      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void writeErpState(next).catch((err: unknown) => {
+    const next: AppState = {
+      ...latestStateRef.current,
+      catalogEnabled: enabled,
+    };
+    latestStateRef.current = next;
+    setState(next);
+    saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+    void updateErpState({ catalogEnabled: enabled })
+      .then(() => setDbError(null))
+      .catch((err: unknown) => {
         setDbError(formatFirebaseError(err));
       });
-      return next;
-    });
   }, []);
 
   const handleSaveCatalogPhoto = useCallback(
     (modelKey: string, photoUrl: string) => {
       if (!modelKey || !photoUrl) return;
       const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
-      setState((prev) => {
-        const updated = { ...(prev.catalogPhotos ?? {}) };
-        for (const existingKey of Object.keys(updated)) {
-          if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
-            delete updated[existingKey];
-          }
+      const updated = { ...(latestStateRef.current.catalogPhotos ?? {}) };
+      for (const existingKey of Object.keys(updated)) {
+        if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
+          delete updated[existingKey];
         }
-        updated[safeModelKey] = photoUrl;
-        const next: AppState = {
-          ...prev,
-          catalogPhotos: updated,
-        };
-        saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-        void writeErpState(next).catch((err: unknown) => {
+      }
+      updated[safeModelKey] = photoUrl;
+      const next: AppState = {
+        ...latestStateRef.current,
+        catalogPhotos: updated,
+      };
+      latestStateRef.current = next;
+      setState(next);
+      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+      void updateErpState({ catalogPhotos: updated })
+        .then(() => setDbError(null))
+        .catch((err: unknown) => {
           setDbError(formatFirebaseError(err));
         });
-        return next;
-      });
     },
     [],
   );
@@ -991,8 +1169,33 @@ export default function App() {
   const handleRemoveCatalogPhoto = useCallback((modelKey: string) => {
     if (!modelKey) return;
     const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
-    setState((prev) => {
-      const updated = { ...(prev.catalogPhotos ?? {}) };
+    const updated = { ...(latestStateRef.current.catalogPhotos ?? {}) };
+    delete updated[modelKey];
+    delete updated[safeModelKey];
+    for (const existingKey of Object.keys(updated)) {
+      if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
+        delete updated[existingKey];
+      }
+    }
+    const next: AppState = {
+      ...latestStateRef.current,
+      catalogPhotos: updated,
+    };
+    latestStateRef.current = next;
+    setState(next);
+    saveLocalStateBackup(next, { allowOverwriteEmpty: true });
+    void updateErpState({ catalogPhotos: updated })
+      .then(() => setDbError(null))
+      .catch((err: unknown) => {
+        setDbError(formatFirebaseError(err));
+      });
+  }, []);
+
+  const handleSaveCatalogKeywords = useCallback(
+    (modelKey: string, keywords: string) => {
+      if (!modelKey) return;
+      const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
+      const updated = { ...(latestStateRef.current.catalogKeywords ?? {}) };
       delete updated[modelKey];
       delete updated[safeModelKey];
       for (const existingKey of Object.keys(updated)) {
@@ -1000,45 +1203,22 @@ export default function App() {
           delete updated[existingKey];
         }
       }
+      const trimmed = keywords.trim();
+      if (trimmed) {
+        updated[safeModelKey] = trimmed;
+      }
       const next: AppState = {
-        ...prev,
-        catalogPhotos: updated,
+        ...latestStateRef.current,
+        catalogKeywords: updated,
       };
+      latestStateRef.current = next;
+      setState(next);
       saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void writeErpState(next).catch((err: unknown) => {
-        setDbError(formatFirebaseError(err));
-      });
-      return next;
-    });
-  }, []);
-
-  const handleSaveCatalogKeywords = useCallback(
-    (modelKey: string, keywords: string) => {
-      if (!modelKey) return;
-      const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
-      setState((prev) => {
-        const updated = { ...(prev.catalogKeywords ?? {}) };
-        delete updated[modelKey];
-        delete updated[safeModelKey];
-        for (const existingKey of Object.keys(updated)) {
-          if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
-            delete updated[existingKey];
-          }
-        }
-        const trimmed = keywords.trim();
-        if (trimmed) {
-          updated[safeModelKey] = trimmed;
-        }
-        const next: AppState = {
-          ...prev,
-          catalogKeywords: updated,
-        };
-        saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-        void writeErpState(next).catch((err: unknown) => {
+      void updateErpState({ catalogKeywords: updated })
+        .then(() => setDbError(null))
+        .catch((err: unknown) => {
           setDbError(formatFirebaseError(err));
         });
-        return next;
-      });
     },
     [],
   );
@@ -1076,6 +1256,24 @@ export default function App() {
               onClick={() => setRestrictedToast(null)}
               className="ml-2 text-amber-400/70 hover:text-amber-200 p-0.5 rounded shrink-0"
               aria-label="Cerrar alerta"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+        {sessionExpiredNotice && (
+          <div
+            role="alert"
+            data-testid="session-expired-notice"
+            className="fixed top-5 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2.5 rounded-xl border border-amber-500/45 bg-[#1f1504]/95 backdrop-blur-md px-4 py-3 text-xs font-semibold text-amber-200 shadow-2xl max-w-md text-center"
+          >
+            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>{sessionExpiredNotice}</span>
+            <button
+              type="button"
+              onClick={() => setSessionExpiredNotice(null)}
+              className="ml-2 text-amber-400/70 hover:text-amber-200 p-0.5 rounded shrink-0"
+              aria-label="Cerrar aviso de sesión"
             >
               <X className="h-3.5 w-3.5" />
             </button>

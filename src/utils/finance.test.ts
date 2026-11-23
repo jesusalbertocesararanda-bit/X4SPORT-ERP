@@ -61,6 +61,7 @@ import {
   reinvestPartnerDividends,
   round2,
   sanitizeForFirebase,
+  scaleBreakdownToCashAmount,
   syncUnassignedCashToGrowthFund,
   updateExchangeRates,
   withdrawPartnerDividends,
@@ -655,7 +656,7 @@ test('receiveImportBatch adjusts freight variance on cash/growthReinvestment and
     undefined,
   );
 
-  // Stage 2: Only 8 units arrive, and actual courier freight was $16 (+$6 higher than $10 est)
+  // Stage 2: Only 8 units arrive ($40 factory vs $50 paid -> $10 shortage = +$1.25/ud), and actual courier freight was $16 (+$6 higher than $10 est)
   const recHigher = receiveImportBatch(state, {
     batchId: state.purchaseBatches[0].id,
     receivedDate: '2026-11-25',
@@ -665,16 +666,19 @@ test('receiveImportBatch adjusts freight variance on cash/growthReinvestment and
   assert.equal(recHigher.ok, true);
   state = recHigher.state;
 
-  // Extra $6 deducted from BOTH cashOnHand and growthReinvestment
+  // Factory shortage ($10) is NOT refunded to cash/funds; only +$6 freightDiff is deducted (-$66 total vs -$60 prepaid)
   assert.equal(state.cashOnHand, round2(cashBefore - 66));
   assert.equal(state.funds.growthReinvestment, round2(growthBefore - 66));
-  // Real landed cost = $5 factory + ($16 / 8 arrived = $2.00) = $7.00/ud
+  assert.equal(state.purchaseBatches[0].totalFactoryCost, 50);
+  assert.equal(state.purchaseBatches[0].totalLandedCost, 66);
+  // Real landed cost = $5 factory + ($10 shortage / 8 = $1.25) + ($16 freight / 8 = $2.00) = $8.25/ud
   assert.equal(state.purchaseBatches[0].freightAdjustment, 6);
   assert.equal(state.purchaseBatches[0].freightPerUnit, 2.0);
-  assert.equal(state.purchaseBatches[0].items[0].landedUnitCost, 7.0);
+  assert.equal(state.purchaseBatches[0].items[0].landedUnitCost, 8.25);
   const arsenalSku = state.inventory.find((i) => i.model === 'Arsenal Retro 02');
   assert.equal(arsenalSku?.stock, 8);
-  assert.equal(arsenalSku?.cogs, 7.0);
+  assert.equal(arsenalSku?.cogs, 8.25);
+  assert.equal(arsenalSku?.fifoBatches[0].unitCost, 8.25);
   assert.equal(arsenalSku?.fifoBatches[0].entryDate, '2026-11-25');
 
   // Test freight refund (< estimated): another order with $20 est freight, actual freight $14 -> +$6 refunded to cash
@@ -2405,6 +2409,391 @@ test('createImportOrder, receiveImportBatch, and registerOperatingExpense apply 
   assert.equal(expRes.state.funds.growthReinvestment, round2(32.11 - 7));
   assert.equal(getTotalAllocatedFunds(expRes.state.funds), 40);
 });
+
+test('processReturnOrExchange reverses linkedSale breakdown on cash refunds, distributes upgrade surplus via 4-layer matrix, and updates paidAmount/returnStatus on multi-item partial returns', () => {
+  // 1. Linked cash sale refund (-differenceUsd) reverses funds proportionally even when unassigned cash exists in cashOnHand
+  let state = createDemoSeedState(); // cashOnHand = 135.19 unassigned, funds = 0
+  const saleCash = registerMultiItemSale(state, {
+    items: [
+      { skuId: 'sku-fcb-1', quantity: 1, unitPrice: 35 },
+      { skuId: 'sku-fcb-3', quantity: 1, unitPrice: 25 },
+    ],
+    customerName: 'Cliente Reembolso',
+    seller: 'Josué',
+    paymentStatus: 'Cobrado',
+  });
+  assert.equal(saleCash.ok, true);
+  state = saleCash.state;
+  const linked = saleCash.createdSale!;
+  const fundsAfterSale = { ...state.funds };
+  assert.equal(getTotalAllocatedFunds(state.funds), 60);
+
+  // Return 1 item ($25) out of $60 -> reverses 25/60 of linked.breakdown in state.funds
+  const partialRefund = processReturnOrExchange(state, {
+    type: 'Devolución',
+    saleId: linked.id,
+    invoiceNumber: linked.invoiceNumber,
+    returnedSkuId: 'sku-fcb-3',
+    returnedQuantity: 1,
+    returnedUnitPrice: 25,
+    paymentMethod: 'Efectivo ($)',
+    reason: 'Devolución parcial',
+  });
+  assert.equal(partialRefund.ok, true);
+  state = partialRefund.state;
+
+  const expectedReversed = scaleBreakdownToCashAmount(linked.breakdown, 25);
+  assert.equal(state.cashOnHand, round2(135.19 + 60 - 25));
+  assert.equal(getTotalAllocatedFunds(state.funds), 35);
+  assert.equal(
+    state.funds.replacement,
+    round2(fundsAfterSale.replacement - expectedReversed.layer1CostRecovery),
+  );
+  assert.equal(
+    state.funds.commissionsBySeller.Josué,
+    round2(fundsAfterSale.commissionsBySeller.Josué - expectedReversed.layer2Commission),
+  );
+  assert.equal(
+    state.funds.operatingAndAds,
+    round2(fundsAfterSale.operatingAndAds - expectedReversed.layer3OperatingFund),
+  );
+  assert.equal(
+    state.funds.growthReinvestment,
+    round2(fundsAfterSale.growthReinvestment - expectedReversed.layer4GrowthReinvestment),
+  );
+  assert.equal(
+    state.funds.dividendsByPartner.Jesús,
+    round2(fundsAfterSale.dividendsByPartner.Jesús - expectedReversed.partnerSplits.Jesús),
+  );
+
+  // Even if a fund bucket was spent down, reversing never produces negative fund balances
+  state = {
+    ...state,
+    funds: {
+      ...state.funds,
+      operatingAndAds: 0,
+      commissions: round2(state.funds.commissions - state.funds.commissionsBySeller.Josué),
+      commissionsBySeller: { ...state.funds.commissionsBySeller, Josué: 0 },
+    },
+  };
+  const restRefund = processReturnOrExchange(state, {
+    type: 'Devolución',
+    saleId: linked.id,
+    invoiceNumber: linked.invoiceNumber,
+    returnedSkuId: 'sku-fcb-1',
+    returnedQuantity: 1,
+    returnedUnitPrice: 35,
+    paymentMethod: 'Efectivo ($)',
+    reason: 'Devolución resto',
+  });
+  assert.equal(restRefund.ok, true);
+  assert.ok(restRefund.state.funds.operatingAndAds >= 0);
+  assert.ok(restRefund.state.funds.commissions >= 0);
+  assert.ok(restRefund.state.funds.commissionsBySeller.Josué >= 0);
+  assert.ok(restRefund.state.funds.replacement >= 0);
+  assert.ok(restRefund.state.funds.growthReinvestment >= 0);
+  assert.ok(restRefund.state.funds.dividendsByPartner.Jesús >= 0);
+  assert.equal(getCashBackedFundsSummary(restRefund.state).isStrictlyCashBacked, true);
+
+  // 2. Exchange upgrade (+differenceUsd) distributes differential price & FIFO cost via 4-layer matrix
+  let upState = createDemoSeedState();
+  upState = reconcileCashOnHand(upState, { countedCash: 0 }).state;
+  const baseSale = registerMultiItemSale(upState, {
+    items: [{ skuId: 'sku-fcb-3', quantity: 1, unitPrice: 25 }],
+    customerName: 'Cliente Upgrade',
+    seller: 'Jesús',
+    paymentStatus: 'Cobrado',
+  });
+  upState = baseSale.state;
+  const fansSku = upState.inventory.find((i) => i.id === 'sku-fcb-3')!;
+  const playerSku = upState.inventory.find((i) => i.id === 'sku-fcb-1')!;
+  const expectedDiffMatrix = calculateFourLayerMatrixConsolidated(
+    10,
+    round2(Math.max(0, playerSku.cogs - fansSku.cogs)),
+    'Jesús',
+  );
+  const fundsBeforeUpgrade = { ...upState.funds };
+
+  const upgradeRes = processReturnOrExchange(upState, {
+    type: 'Cambio',
+    saleId: baseSale.createdSale!.id,
+    returnedSkuId: 'sku-fcb-3',
+    returnedQuantity: 1,
+    returnedUnitPrice: 25,
+    replacementSkuId: 'sku-fcb-1',
+    replacementQuantity: 1,
+    replacementUnitPrice: 35,
+    reason: 'Upgrade Player +$10',
+  });
+  assert.equal(upgradeRes.ok, true);
+  upState = upgradeRes.state;
+  assert.equal(upState.cashOnHand, 35);
+  assert.equal(getTotalAllocatedFunds(upState.funds), 35);
+  assert.equal(
+    upState.funds.replacement,
+    round2(fundsBeforeUpgrade.replacement + expectedDiffMatrix.layer1CostRecovery),
+  );
+  assert.equal(
+    upState.funds.commissionsBySeller.Jesús,
+    round2(fundsBeforeUpgrade.commissionsBySeller.Jesús + expectedDiffMatrix.layer2Commission),
+  );
+  assert.equal(
+    upState.funds.operatingAndAds,
+    round2(fundsBeforeUpgrade.operatingAndAds + expectedDiffMatrix.layer3OperatingFund),
+  );
+  assert.equal(
+    upState.funds.growthReinvestment,
+    round2(fundsBeforeUpgrade.growthReinvestment + expectedDiffMatrix.layer4GrowthReinvestment),
+  );
+
+  // 3. Partial return on multi-item credit sale reduces CxC to $0 while leaving active item
+  let creditState = createDemoSeedState();
+  const multiCredit = registerMultiItemSale(creditState, {
+    items: [
+      { skuId: 'sku-fcb-1', quantity: 1, unitPrice: 30 },
+      { skuId: 'sku-fcb-3', quantity: 1, unitPrice: 30 },
+    ],
+    customerName: 'Cliente Multi Crédito',
+    seller: 'Jesús',
+    paymentStatus: 'Pendiente',
+    paidAmount: 40, // $40 pagado, $20 pendiente en CxC
+  });
+  assert.equal(multiCredit.ok, true);
+  creditState = multiCredit.state;
+  const creditSale = multiCredit.createdSale!;
+  const collectedCountBefore = creditState.collectedReceivablesCount;
+  const cashBeforeCreditRet = creditState.cashOnHand;
+
+  // Return 1 garment ($30): $20 cancels CxC to $0, $10 refunded in cash, 1 garment still active!
+  const partialCreditRet = processReturnOrExchange(creditState, {
+    type: 'Devolución',
+    saleId: creditSale.id,
+    invoiceNumber: creditSale.invoiceNumber,
+    returnedSkuId: 'sku-fcb-3',
+    returnedQuantity: 1,
+    returnedUnitPrice: 30,
+    reason: 'Devolución 1 prenda de venta multi-ítem',
+  });
+  assert.equal(partialCreditRet.ok, true);
+  creditState = partialCreditRet.state;
+
+  // Receivable liquidated to $0 and removed, cash decreased by $10, collectedCount not inflated by return
+  assert.equal(
+    creditState.receivables.some((r) => r.saleId === creditSale.id),
+    false,
+  );
+  assert.equal(creditState.cashOnHand, round2(cashBeforeCreditRet - 10));
+  assert.equal(creditState.collectedReceivablesCount, collectedCountBefore);
+
+  // SaleRecord tracks returnedAmount ($30), returnStatus ('Parcial'), and net paidAmount ($30 = 40 - 10)
+  const updatedCreditSale = creditState.sales.find((s) => s.id === creditSale.id)!;
+  assert.equal(updatedCreditSale.paidAmount, 30);
+  assert.equal(updatedCreditSale.returnedAmount, 30);
+  assert.equal(updatedCreditSale.returnStatus, 'Parcial');
+  assert.equal(updatedCreditSale.paymentStatus, 'Cobrado');
+});
+
+test('receiveImportBatch prorates factory shortage across arrived units without refunding cashOnHand or funds', () => {
+  let state = createDemoSeedState();
+  state = reconcileCashOnHand(state, { countedCash: 0 }).state;
+  state = registerMultiItemSale(state, {
+    items: [
+      { skuId: 'sku-fcb-1', quantity: 3, unitPrice: 30 },
+      { skuId: 'sku-fcb-3', quantity: 2, unitPrice: 25 },
+    ],
+    customerName: 'Fondeo Reposición',
+    seller: 'Jesús',
+    paymentStatus: 'Cobrado',
+  }).state;
+  // Seed replacement fund with enough liquidity via sale -> replacement has ~$30
+  const repoBefore = state.funds.replacement;
+  const cashBefore = state.cashOnHand;
+
+  // Order 4 units @ $6.00 factory ($24) + $6.00 freight = $30.00 funded from 'replacement'
+  const orderRes = createImportOrder(state, {
+    entryDate: '2026-11-15',
+    referenceName: 'Lote Faltante Fábrica',
+    shippingType: 'Aéreo',
+    totalFreightCost: 6,
+    fundingSource: 'replacement',
+    items: [
+      {
+        team: 'Barcelona',
+        model: 'Barcelona Local 25/26',
+        version: 'Player',
+        size: 'M',
+        quantity: 4,
+        factoryUnitCost: 6,
+      },
+    ],
+  });
+  assert.equal(orderRes.ok, true);
+  state = orderRes.state;
+  assert.equal(state.cashOnHand, round2(cashBefore - 30));
+  assert.equal(state.funds.replacement, round2(repoBefore - 30));
+
+  // Factory only shipped 3 units (1 unit @ $6.00 missing -> +$2.00/ud shortage), freight remained $6.00 (+$2.00/ud)
+  const recvRes = receiveImportBatch(state, {
+    batchId: orderRes.createdBatch!.id,
+    receivedDate: '2026-11-20',
+    actualFreightCost: 6,
+    receivedItems: [{ itemIndex: 0, receivedQuantity: 3 }],
+  });
+  assert.equal(recvRes.ok, true);
+  state = recvRes.state;
+
+  // $6.00 factory shortage is NOT refunded to cashOnHand or replacement fund (freightDiff = $0.00)
+  assert.equal(state.cashOnHand, round2(cashBefore - 30));
+  assert.equal(state.funds.replacement, round2(repoBefore - 30));
+  assert.equal(recvRes.createdBatch?.totalFactoryCost, 24);
+  assert.equal(recvRes.createdBatch?.totalLandedCost, 30);
+  assert.equal(recvRes.createdBatch?.totalUnits, 3);
+  assert.equal(recvRes.createdBatch?.items[0].landedUnitCost, 10);
+  const fcbSku = state.inventory.find((i) => i.id === 'sku-fcb-1');
+  const addedFifo = fcbSku?.fifoBatches.find(
+    (b) => b.batchId === `${orderRes.createdBatch!.id}-line-0`,
+  );
+  assert.equal(addedFifo?.unitCost, 10);
+  assert.equal(state.movements[0].amount, 0);
+  assert.ok(
+    state.movements[0].description.includes('faltante fábrica $6.00 prorrateado (+$2.00/ud)'),
+  );
+
+  // Also verify exact numerical example: 30 units @ $10.00 ($300) + $60 freight, 25 arrive -> $14.40/ud FIFO
+  state = registerCapitalInjection(state, {
+    contributor: 'Jesús',
+    concept: 'Fondeo lote grande',
+    amount: 400,
+    paymentMethod: 'Binance USDT',
+    destination: 'cashOnly',
+  }).state;
+  const cashBeforeBig = state.cashOnHand;
+  const orderBig = createImportOrder(state, {
+    entryDate: '2026-11-21',
+    referenceName: 'Lote China 30uds',
+    shippingType: 'Marítimo',
+    totalFreightCost: 60,
+    fundingSource: 'cashOnHand',
+    items: [
+      {
+        team: 'Real Madrid',
+        model: 'Real Madrid Local 26/27 Test',
+        version: 'Player',
+        size: 'M',
+        quantity: 30,
+        factoryUnitCost: 10,
+      },
+    ],
+  });
+  assert.equal(orderBig.ok, true);
+  state = orderBig.state;
+  assert.equal(state.cashOnHand, round2(cashBeforeBig - 360));
+
+  const recvBig = receiveImportBatch(state, {
+    batchId: orderBig.createdBatch!.id,
+    receivedDate: '2026-11-22',
+    actualFreightCost: 60,
+    receivedItems: [{ itemIndex: 0, receivedQuantity: 25 }],
+  });
+  assert.equal(recvBig.ok, true);
+  state = recvBig.state;
+
+  // $0 freight diff -> cashOnHand untouched at -360
+  assert.equal(state.cashOnHand, round2(cashBeforeBig - 360));
+  assert.equal(recvBig.createdBatch?.totalFactoryCost, 300);
+  assert.equal(recvBig.createdBatch?.totalLandedCost, 360);
+  assert.equal(recvBig.createdBatch?.freightPerUnit, 2.4);
+  assert.equal(recvBig.createdBatch?.items[0].landedUnitCost, 14.4);
+  const rmSku = state.inventory.find(
+    (i) => i.model === 'Real Madrid Local 26/27 Test',
+  );
+  assert.equal(rmSku?.stock, 25);
+  assert.equal(rmSku?.cogs, 14.4);
+  assert.equal(rmSku?.fifoBatches[0].unitCost, 14.4);
+  assert.equal(state.movements[0].amount, 0);
+  assert.ok(
+    state.movements[0].description.includes('faltante fábrica $50.00 prorrateado (+$2.00/ud)'),
+  );
+});
+
+test('finance operations record explicit actorName without depending on stored browser user', () => {
+  let state = createDemoSeedState();
+
+  const saleRes = registerMultiItemSale(state, {
+    items: [{ skuId: 'sku-fcb-1', quantity: 1, unitPrice: 30 }],
+    customerName: 'Cliente Actor',
+    seller: 'Josué',
+    paymentStatus: 'Cobrado',
+    actorName: 'Josué Daniel',
+  });
+  assert.equal(saleRes.ok, true);
+  assert.equal(saleRes.createdSale?.userName, 'Josué Daniel');
+  state = saleRes.state;
+
+  const orderRes = createImportOrder(state, {
+    entryDate: '2026-11-20',
+    referenceName: 'Lote Actor',
+    shippingType: 'Aéreo',
+    totalFreightCost: 4,
+    actorName: 'Gabriel',
+    items: [
+      {
+        team: 'Real Madrid',
+        model: 'Real Madrid Local 26/27',
+        version: 'Fans',
+        size: 'M',
+        quantity: 2,
+        factoryUnitCost: 5,
+      },
+    ],
+  });
+  assert.equal(orderRes.ok, true);
+  assert.equal(orderRes.createdBatch?.userName, 'Gabriel');
+  state = orderRes.state;
+
+  const manualRes = registerManualInventoryAdjustment(state, {
+    type: 'entrada',
+    skuId: 'sku-fcb-1',
+    quantity: 1,
+    reason: 'Conteo explícito',
+    actorName: 'Josué Daniel',
+  });
+  assert.equal(manualRes.ok, true);
+  assert.equal(manualRes.state.inventoryAdjustments[0].userName, 'Josué Daniel');
+  state = manualRes.state;
+
+  const physicalRes = adjustInventoryPhysicalCount(state, {
+    skuId: 'sku-fcb-1',
+    newStock: state.inventory.find((i) => i.id === 'sku-fcb-1')!.stock + 1,
+    reason: 'Auditoría directa',
+    actorName: 'Gabriel',
+  });
+  assert.equal(physicalRes.ok, true);
+  assert.equal(physicalRes.state.inventoryAdjustments[0].userName, 'Gabriel');
+  state = physicalRes.state;
+
+  const uncrossRes = performInventoryUncross(state, {
+    sourceSkuId: 'sku-fcb-1',
+    targetSkuId: 'sku-fcb-3',
+    quantity: 1,
+    reason: 'Descruce con actor explícito',
+    actorName: 'Josué Daniel',
+  });
+  assert.equal(uncrossRes.ok, true);
+  assert.equal(uncrossRes.state.inventoryAdjustments[0].userName, 'Josué Daniel');
+  state = uncrossRes.state;
+
+  const auditRes = closeAuditSession(
+    state,
+    { 'sku-fcb-1': 1 },
+    false,
+    'Cierre auditado',
+    'Gabriel',
+  );
+  assert.equal(auditRes.ok, true);
+  assert.equal(auditRes.state.activeAuditSession?.closedBy, 'Gabriel');
+});
+
 
 
 
