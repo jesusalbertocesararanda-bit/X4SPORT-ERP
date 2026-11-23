@@ -60,10 +60,17 @@ export interface BrandIdentityConfig {
   invoiceFooterMessage: string; // Default 'Gracias por comprar en X4SPORT'
 }
 
+export interface OtpEmailConfig {
+  serviceId: string;
+  templateId: string;
+  publicKey: string;
+}
+
 export interface GeneralConfig {
   matrixParams: MatrixConfigParams;
   alertThresholds: AlertThresholdsConfig;
   brandIdentity: BrandIdentityConfig;
+  otpEmailConfig?: OtpEmailConfig;
   updatedAt?: string;
   updatedBy?: string;
 }

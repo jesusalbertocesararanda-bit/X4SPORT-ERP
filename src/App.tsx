@@ -1283,6 +1283,7 @@ export default function App() {
           onLoginSuccess={handleLoginSuccess}
           authorizedUsers={state.authorizedUsers}
           onUpdateAuthorizedUsers={handleUpdateAuthorizedUsers}
+          otpEmailConfig={generalConfig.otpEmailConfig}
         />
       </div>
     );

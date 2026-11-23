@@ -10,6 +10,7 @@ import {
   FileSpreadsheet,
   Globe,
   Layers,
+  Mail,
   Plus,
   RefreshCcw,
   RefreshCw,
@@ -142,6 +143,17 @@ export function ConfigView({
     generalConfig.brandIdentity.invoiceFooterMessage,
   );
 
+  // EmailJS OTP Config State
+  const [emailJsServiceId, setEmailJsServiceId] = useState(
+    generalConfig.otpEmailConfig?.serviceId ?? '',
+  );
+  const [emailJsTemplateId, setEmailJsTemplateId] = useState(
+    generalConfig.otpEmailConfig?.templateId ?? '',
+  );
+  const [emailJsPublicKey, setEmailJsPublicKey] = useState(
+    generalConfig.otpEmailConfig?.publicKey ?? '',
+  );
+
   // Rates, Backup & Users State
   const [bcvInput, setBcvInput] = useState(state.exchangeRates.bcv.toFixed(2));
   const [usdtInput, setUsdtInput] = useState(state.exchangeRates.usdt.toFixed(2));
@@ -204,6 +216,10 @@ export function ConfigView({
     setStoreLocation(generalConfig.brandIdentity.storeLocation);
     setLogoUrl(generalConfig.brandIdentity.logoUrl);
     setInvoiceFooterMessage(generalConfig.brandIdentity.invoiceFooterMessage);
+
+    setEmailJsServiceId(generalConfig.otpEmailConfig?.serviceId ?? '');
+    setEmailJsTemplateId(generalConfig.otpEmailConfig?.templateId ?? '');
+    setEmailJsPublicKey(generalConfig.otpEmailConfig?.publicKey ?? '');
   }, [generalConfig]);
 
   useEffect(() => {
@@ -370,6 +386,18 @@ export function ConfigView({
       ? convertGoogleDriveUrlToDirect(logoUrl.trim())
       : DEFAULT_GENERAL_CONFIG.brandIdentity.logoUrl;
 
+    const cleanServiceId = emailJsServiceId.trim();
+    const cleanTemplateId = emailJsTemplateId.trim();
+    const cleanPublicKey = emailJsPublicKey.trim();
+    const otpEmailConfig =
+      cleanServiceId || cleanTemplateId || cleanPublicKey
+        ? {
+            serviceId: cleanServiceId,
+            templateId: cleanTemplateId,
+            publicKey: cleanPublicKey,
+          }
+        : undefined;
+
     const nextConfig: GeneralConfig = {
       matrixParams: {
         commissionPct: round2(comm),
@@ -400,6 +428,7 @@ export function ConfigView({
         invoiceFooterMessage:
           invoiceFooterMessage.trim() || 'Gracias por comprar en X4SPORT',
       },
+      ...(otpEmailConfig ? { otpEmailConfig } : {}),
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser?.email ?? MAIN_ADMIN_EMAIL,
     };
@@ -1129,31 +1158,118 @@ export function ConfigView({
               />
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
-            <span className="text-[11px] text-slate-400">
-              {generalConfig.updatedAt
-                ? `Última sincronización: ${new Date(
-                    generalConfig.updatedAt,
-                  ).toLocaleString('es-VE', {
-                    dateStyle: 'short',
-                    timeStyle: 'short',
-                  })}`
-                : 'Usando parámetros iniciales estándar'}
-            </span>
-            <button
-              type="submit"
-              data-testid="btn-save-general-config"
-              disabled={savingGeneral}
-              className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
-            >
-              <Save className="h-4 w-4" aria-hidden="true" />
-              {savingGeneral
-                ? 'Guardando en Firebase...'
-                : 'Guardar Configuración General'}
-            </button>
-          </div>
         </section>
+
+        {/* 4. Envío de Códigos OTP por Correo (EmailJS) — Solo Administrador Principal */}
+        {canAccessConfiguration(currentUser) && (
+          <section
+            data-testid="config-emailjs-section"
+            className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6"
+          >
+            <div>
+              <h2 className="flex items-center gap-2 font-display text-base font-semibold text-white">
+                <Mail className="h-4 w-4 text-blue-400" aria-hidden="true" />
+                Envío de Códigos OTP por Correo (EmailJS)
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-400">
+                Configura tu cuenta gratuita de EmailJS para enviar códigos OTP de 6 dígitos en producción sin exponerlos en pantalla. Variables enviadas en la plantilla:{' '}
+                <code className="font-mono text-[11px] text-blue-300">
+                  {'{{to_email}}'}
+                </code>
+                ,{' '}
+                <code className="font-mono text-[11px] text-blue-300">
+                  {'{{to_name}}'}
+                </code>
+                ,{' '}
+                <code className="font-mono text-[11px] text-blue-300">
+                  {'{{otp_code}}'}
+                </code>{' '}
+                y{' '}
+                <code className="font-mono text-[11px] text-blue-300">
+                  {'{{app_name}}'}
+                </code>
+                .
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label
+                  htmlFor="cfg-emailjs-service-id"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Service ID
+                </label>
+                <input
+                  id="cfg-emailjs-service-id"
+                  type="text"
+                  value={emailJsServiceId}
+                  onChange={(e) => setEmailJsServiceId(e.target.value)}
+                  placeholder="service_xxxxxxx"
+                  className="font-mono mt-1 w-full min-h-[40px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-xs text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cfg-emailjs-template-id"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Template ID
+                </label>
+                <input
+                  id="cfg-emailjs-template-id"
+                  type="text"
+                  value={emailJsTemplateId}
+                  onChange={(e) => setEmailJsTemplateId(e.target.value)}
+                  placeholder="template_xxxxxxx"
+                  className="font-mono mt-1 w-full min-h-[40px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-xs text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cfg-emailjs-public-key"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Public Key
+                </label>
+                <input
+                  id="cfg-emailjs-public-key"
+                  type="text"
+                  value={emailJsPublicKey}
+                  onChange={(e) => setEmailJsPublicKey(e.target.value)}
+                  placeholder="Tu Public Key de EmailJS"
+                  className="font-mono mt-1 w-full min-h-[40px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-xs text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
+              <span className="text-[11px] text-slate-400">
+                {generalConfig.updatedAt
+                  ? `Última sincronización: ${new Date(
+                      generalConfig.updatedAt,
+                    ).toLocaleString('es-VE', {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                    })}`
+                  : 'Usando parámetros iniciales estándar'}
+              </span>
+              <button
+                type="submit"
+                data-testid="btn-save-general-config"
+                disabled={savingGeneral}
+                className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" aria-hidden="true" />
+                {savingGeneral
+                  ? 'Guardando en Firebase...'
+                  : 'Guardar Configuración General'}
+              </button>
+            </div>
+          </section>
+        )}
       </form>
 
       {/* Gestión de Usuarios y Socios Autorizados (Roles SAP) */}

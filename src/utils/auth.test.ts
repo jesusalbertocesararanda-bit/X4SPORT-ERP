@@ -4,6 +4,7 @@ import {
   ACTIVE_USER_STORAGE_KEY,
   authenticateByPassword,
   canAccessConfiguration,
+  clearOtpEntry,
   completeFirstTimeLogin,
   DEFAULT_AUTHORIZED_USERS,
   findAuthorizedUser,
@@ -17,8 +18,11 @@ import {
   isSessionExpired,
   LAST_ACTIVITY_STORAGE_KEY,
   MAIN_ADMIN_EMAIL,
+  OTP_EXPIRATION_MS,
+  OTP_MAX_FAILED_ATTEMPTS,
   requestOtpDelivery,
   SECONDARY_ADMIN_EMAIL,
+  sendOtpViaEmailJs,
   SESSION_IDLE_TIMEOUT_MS,
   storeActiveUser,
   verifyOtpCode,
@@ -217,7 +221,7 @@ test('auth: isAiStudioPreviewEnvironment detects AI Studio preview and localhost
   );
 });
 
-test('auth: requestOtpDelivery displays temporary code on screen in AI Studio preview or when email fails', () => {
+test('auth: requestOtpDelivery shows temporary code ONLY in AI Studio preview and NEVER in production even when email fails', () => {
   const previewDelivery = requestOtpDelivery('x4sportvefutbol@gmail.com', {
     hostname: 'ais-dev-dl25afluqelxchfuitfvuh-351640450641.us-west1.run.app',
     emailTransportAvailable: true,
@@ -227,15 +231,26 @@ test('auth: requestOtpDelivery displays temporary code on screen in AI Studio pr
   assert.equal(previewDelivery.showTemporaryCodeOnScreen, true);
   assert.equal(previewDelivery.reason, 'preview_environment');
 
-  const failedEmailDelivery = requestOtpDelivery('x4sportvefutbol@gmail.com', {
-    hostname: 'erp.x4sport.com',
-    emailTransportAvailable: true,
-    emailSendFailed: true,
-  });
-  assert.match(failedEmailDelivery.code, /^\d{6}$/);
-  assert.equal(failedEmailDelivery.emailSent, false);
-  assert.equal(failedEmailDelivery.showTemporaryCodeOnScreen, true);
-  assert.equal(failedEmailDelivery.reason, 'email_delivery_unavailable');
+  for (const prodHost of ['erp.x4sport.com', 'x4sport.workers.dev', 'x4sport.pages.dev']) {
+    const failedEmailDelivery = requestOtpDelivery('x4sportvefutbol@gmail.com', {
+      hostname: prodHost,
+      emailTransportAvailable: true,
+      emailSendFailed: true,
+    });
+    assert.match(failedEmailDelivery.code, /^\d{6}$/);
+    assert.equal(failedEmailDelivery.emailSent, false);
+    assert.equal(failedEmailDelivery.showTemporaryCodeOnScreen, false);
+    assert.equal(failedEmailDelivery.reason, 'email_delivery_unavailable');
+    assert.equal(failedEmailDelivery.message.includes(failedEmailDelivery.code), false);
+
+    const noTransportDelivery = requestOtpDelivery('x4sportvefutbol@gmail.com', {
+      hostname: prodHost,
+      emailTransportAvailable: false,
+    });
+    assert.equal(noTransportDelivery.emailSent, false);
+    assert.equal(noTransportDelivery.showTemporaryCodeOnScreen, false);
+    assert.equal(noTransportDelivery.reason, 'email_delivery_unavailable');
+  }
 
   const prodEmailSent = requestOtpDelivery('x4sportvefutbol@gmail.com', {
     hostname: 'erp.x4sport.com',
@@ -247,19 +262,109 @@ test('auth: requestOtpDelivery displays temporary code on screen in AI Studio pr
   assert.equal(prodEmailSent.reason, 'email_sent');
 });
 
-test('auth: verifyOtpCode rejects hardcoded 123456 and validates generated single-use codes', () => {
+test('auth: verifyOtpCode rejects hardcoded 123456, enforces 5-minute TTL and 5 failed attempts lockout', () => {
   assert.equal(
     verifyOtpCode('jesusalbertocesararanda@gmail.com', '123456'),
     false,
   );
 
-  const generated = generateOtpCode('josue@x4sport.app');
+  const t0 = 1_700_000_000_000;
+  const generated = generateOtpCode('josue@x4sport.app', t0);
   if (generated !== '123456') {
-    assert.equal(verifyOtpCode('josue@x4sport.app', '123456'), false);
+    assert.equal(verifyOtpCode('josue@x4sport.app', '123456', t0 + 1000), false);
   }
-  assert.equal(verifyOtpCode('josue@x4sport.app', generated), true);
+  assert.equal(verifyOtpCode('josue@x4sport.app', generated, t0 + OTP_EXPIRATION_MS - 1), true);
   // Single-use: second verification with same code fails
-  assert.equal(verifyOtpCode('josue@x4sport.app', generated), false);
+  assert.equal(verifyOtpCode('josue@x4sport.app', generated, t0 + OTP_EXPIRATION_MS - 1), false);
+
+  // Expiration at 5 minutes
+  const expiringCode = generateOtpCode('gabriel@x4sport.app', t0);
+  assert.equal(OTP_EXPIRATION_MS, 5 * 60 * 1000);
+  assert.equal(
+    verifyOtpCode('gabriel@x4sport.app', expiringCode, t0 + OTP_EXPIRATION_MS),
+    false,
+  );
+
+  // Max 5 failed attempts invalidates valid code
+  assert.equal(OTP_MAX_FAILED_ATTEMPTS, 5);
+  const lockedCode = generateOtpCode('locktest@x4sport.app', t0);
+  const wrongCode = lockedCode === '000000' ? '999999' : '000000';
+  for (let i = 0; i < OTP_MAX_FAILED_ATTEMPTS; i += 1) {
+    assert.equal(verifyOtpCode('locktest@x4sport.app', wrongCode, t0 + 1000), false);
+  }
+  // Even with the real code on 6th attempt, it was invalidated
+  assert.equal(verifyOtpCode('locktest@x4sport.app', lockedCode, t0 + 2000), false);
+  clearOtpEntry('locktest@x4sport.app');
+});
+
+test('auth: sendOtpViaEmailJs posts expected JSON payload and handles errors safely', async () => {
+  const missingRes = await sendOtpViaEmailJs({
+    toEmail: 'jesusalbertocesararanda@gmail.com',
+    toName: 'Jesús César',
+    otpCode: '654321',
+  });
+  assert.equal(missingRes.ok, false);
+
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  let capturedInit: RequestInit | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedInit = init;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => 'OK',
+    } as Response;
+  }) as typeof fetch;
+
+  try {
+    const okRes = await sendOtpViaEmailJs({
+      toEmail: 'jesusalbertocesararanda@gmail.com',
+      toName: 'Jesús César',
+      otpCode: '654321',
+      config: {
+        serviceId: 'service_x4sport',
+        templateId: 'template_otp',
+        publicKey: 'pub_key_123',
+      },
+    });
+    assert.equal(okRes.ok, true);
+    assert.equal(capturedUrl, 'https://api.emailjs.com/api/v1.0/email/send');
+    assert.equal(capturedInit?.method, 'POST');
+    const body = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
+    assert.equal(body.service_id, 'service_x4sport');
+    assert.equal(body.template_id, 'template_otp');
+    assert.equal(body.user_id, 'pub_key_123');
+    assert.deepEqual(body.template_params, {
+      to_email: 'jesusalbertocesararanda@gmail.com',
+      to_name: 'Jesús César',
+      otp_code: '654321',
+      app_name: 'X4SPORT ERP',
+    });
+
+    globalThis.fetch = (async () =>
+      ({
+        ok: false,
+        status: 400,
+        text: async () => 'Invalid template',
+      }) as Response) as typeof fetch;
+
+    const failRes = await sendOtpViaEmailJs({
+      toEmail: 'jesusalbertocesararanda@gmail.com',
+      toName: 'Jesús César',
+      otpCode: '654321',
+      config: {
+        serviceId: 'service_x4sport',
+        templateId: 'template_otp',
+        publicKey: 'pub_key_123',
+      },
+    });
+    assert.equal(failRes.ok, false);
+    assert.ok(failRes.error?.includes('400'));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('auth: DEFAULT_AUTHORIZED_USERS stores SHA-256 hashes without plaintext passwords', () => {

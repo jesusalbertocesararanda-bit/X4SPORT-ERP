@@ -212,7 +212,6 @@ export const LAST_ACTIVITY_STORAGE_KEY = 'x4sport_last_activity_v1';
 export const AUTHORIZED_USERS_STORAGE_KEY = 'x4sport_authorized_users_v2';
 export const OTP_STORAGE_KEY = 'x4sport_otp_pending_v2';
 
-const inMemoryOtpStore = new Map<string, string>();
 
 export function getAuthorizedUsersFromStorage(): AuthorizedUserRecord[] {
   if (typeof window === 'undefined' || !window.localStorage) {
@@ -380,13 +379,91 @@ export function storeActiveUser(user: ERPUser | null): void {
   }
 }
 
-export function generateOtpCode(email: string): string {
-  const cleanEmail = email.trim().toLowerCase();
-  const code = String(Math.floor(100000 + Math.random() * 900000));
-  inMemoryOtpStore.set(cleanEmail, code);
+export const OTP_EXPIRATION_MS = 5 * 60 * 1000;
+export const OTP_MAX_FAILED_ATTEMPTS = 5;
+
+interface OtpStoreEntry {
+  code: string;
+  expiresAt: number;
+  failedAttempts: number;
+}
+
+const inMemoryOtpStore = new Map<string, OtpStoreEntry>();
+
+function readOtpEntry(cleanEmail: string): OtpStoreEntry | null {
   if (typeof window !== 'undefined' && window.sessionStorage) {
-    window.sessionStorage.setItem(`${OTP_STORAGE_KEY}_${cleanEmail}`, code);
+    try {
+      const raw = window.sessionStorage.getItem(`${OTP_STORAGE_KEY}_${cleanEmail}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<OtpStoreEntry>;
+        if (
+          parsed &&
+          typeof parsed.code === 'string' &&
+          typeof parsed.expiresAt === 'number' &&
+          Number.isFinite(parsed.expiresAt)
+        ) {
+          return {
+            code: parsed.code,
+            expiresAt: parsed.expiresAt,
+            failedAttempts:
+              typeof parsed.failedAttempts === 'number' &&
+              Number.isFinite(parsed.failedAttempts)
+                ? parsed.failedAttempts
+                : 0,
+          };
+        }
+      }
+    } catch {
+      // Ignore parse error and fallback to in-memory store
+    }
   }
+  return inMemoryOtpStore.get(cleanEmail) ?? null;
+}
+
+function writeOtpEntry(cleanEmail: string, entry: OtpStoreEntry): void {
+  inMemoryOtpStore.set(cleanEmail, entry);
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      window.sessionStorage.setItem(
+        `${OTP_STORAGE_KEY}_${cleanEmail}`,
+        JSON.stringify(entry),
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+}
+
+export function clearOtpEntry(email: string): void {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return;
+  inMemoryOtpStore.delete(cleanEmail);
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      window.sessionStorage.removeItem(`${OTP_STORAGE_KEY}_${cleanEmail}`);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+}
+
+function generateSixDigitOtp(): string {
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const buf = new Uint32Array(1);
+    globalThis.crypto.getRandomValues(buf);
+    return String(100000 + (buf[0] % 900000));
+  }
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+export function generateOtpCode(email: string, nowMs = Date.now()): string {
+  const cleanEmail = email.trim().toLowerCase();
+  const code = generateSixDigitOtp();
+  writeOtpEntry(cleanEmail, {
+    code,
+    expiresAt: nowMs + OTP_EXPIRATION_MS,
+    failedAttempts: 0,
+  });
   return code;
 }
 
@@ -426,16 +503,18 @@ export function requestOtpDelivery(
     hostname?: string;
     emailTransportAvailable?: boolean;
     emailSendFailed?: boolean;
+    nowMs?: number;
   },
 ): OtpDeliveryResult {
-  const code = generateOtpCode(email);
+  const code = generateOtpCode(email, options?.nowMs);
   const inPreview = isAiStudioPreviewEnvironment(
     options?.hostname !== undefined ? { hostname: options.hostname } : undefined,
   );
   const transportAvailable = options?.emailTransportAvailable ?? false;
   const sendFailed = options?.emailSendFailed ?? !transportAvailable;
   const emailSent = transportAvailable && !sendFailed;
-  const showTemporaryCodeOnScreen = inPreview || !emailSent;
+  // Seguridad crítica: jamás exponer el código OTP en pantalla fuera de vista previa AI Studio / localhost
+  const showTemporaryCodeOnScreen = inPreview === true;
 
   const reason: OtpDeliveryResult['reason'] = inPreview
     ? 'preview_environment'
@@ -446,7 +525,7 @@ export function requestOtpDelivery(
   const message = inPreview
     ? 'Entorno de vista previa de AI Studio detectado: usa este código temporal en pantalla para iniciar sesión sin bloqueos.'
     : !emailSent
-      ? 'No se pudo completar el envío automático por correo: usa este código temporal en pantalla para verificar tu acceso.'
+      ? 'No se pudo enviar el código OTP al correo autorizado. Ingresa con tu Contraseña o revisa la configuración de EmailJS en Configuración.'
       : `Código OTP enviado al correo autorizado (${email.trim()}).`;
 
   return {
@@ -458,24 +537,145 @@ export function requestOtpDelivery(
   };
 }
 
-export function verifyOtpCode(email: string, code: string): boolean {
+export interface OtpEmailConfigInput {
+  serviceId: string;
+  templateId: string;
+  publicKey: string;
+}
+
+export function resolveEmailJsConfig(
+  config?: Partial<OtpEmailConfigInput>,
+): OtpEmailConfigInput | null {
+  const env =
+    typeof import.meta !== 'undefined' &&
+    (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+      ? (import.meta as unknown as { env?: Record<string, string | undefined> }).env!
+      : {};
+
+  const serviceId = (
+    config?.serviceId ||
+    env.VITE_EMAILJS_SERVICE_ID ||
+    ''
+  ).trim();
+  const templateId = (
+    config?.templateId ||
+    env.VITE_EMAILJS_TEMPLATE_ID ||
+    ''
+  ).trim();
+  const publicKey = (
+    config?.publicKey ||
+    env.VITE_EMAILJS_PUBLIC_KEY ||
+    ''
+  ).trim();
+
+  if (!serviceId || !templateId || !publicKey) {
+    return null;
+  }
+
+  return { serviceId, templateId, publicKey };
+}
+
+export async function sendOtpViaEmailJs(params: {
+  toEmail: string;
+  toName: string;
+  otpCode: string;
+  config?: OtpEmailConfigInput;
+}): Promise<{ ok: boolean; error?: string }> {
+  const resolved = resolveEmailJsConfig(params.config);
+  if (!resolved) {
+    return {
+      ok: false,
+      error:
+        'EmailJS no está configurado (faltan Service ID, Template ID o Public Key).',
+    };
+  }
+
+  const toEmail = params.toEmail.trim();
+  const toName = params.toName.trim() || toEmail;
+  const otpCode = params.otpCode.trim();
+  if (!toEmail || !otpCode) {
+    return {
+      ok: false,
+      error: 'Correo destino o código OTP inválido.',
+    };
+  }
+
+  try {
+    const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        service_id: resolved.serviceId,
+        template_id: resolved.templateId,
+        user_id: resolved.publicKey,
+        template_params: {
+          to_email: toEmail,
+          to_name: toName,
+          otp_code: otpCode,
+          app_name: 'X4SPORT ERP',
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      return {
+        ok: false,
+        error: detail
+          ? `EmailJS rechazó el envío (${response.status}): ${detail}`
+          : `EmailJS rechazó el envío (HTTP ${response.status}).`,
+      };
+    }
+
+    return { ok: true };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Error de red al enviar el código OTP vía EmailJS.',
+    };
+  }
+}
+
+export function verifyOtpCode(
+  email: string,
+  code: string,
+  nowMs = Date.now(),
+): boolean {
   const cleanEmail = email.trim().toLowerCase();
   const cleanCode = code.trim();
   if (!cleanEmail || !cleanCode) return false;
 
-  if (typeof window !== 'undefined' && window.sessionStorage) {
-    const stored = window.sessionStorage.getItem(`${OTP_STORAGE_KEY}_${cleanEmail}`);
-    if (stored && stored === cleanCode) {
-      window.sessionStorage.removeItem(`${OTP_STORAGE_KEY}_${cleanEmail}`);
-      inMemoryOtpStore.delete(cleanEmail);
-      return true;
-    }
+  const entry = readOtpEntry(cleanEmail);
+  if (!entry) return false;
+
+  if (nowMs >= entry.expiresAt) {
+    clearOtpEntry(cleanEmail);
+    return false;
   }
 
-  const memoryCode = inMemoryOtpStore.get(cleanEmail);
-  if (memoryCode && memoryCode === cleanCode) {
-    inMemoryOtpStore.delete(cleanEmail);
+  if (entry.failedAttempts >= OTP_MAX_FAILED_ATTEMPTS) {
+    clearOtpEntry(cleanEmail);
+    return false;
+  }
+
+  if (entry.code === cleanCode) {
+    clearOtpEntry(cleanEmail);
     return true;
+  }
+
+  const nextFailed = entry.failedAttempts + 1;
+  if (nextFailed >= OTP_MAX_FAILED_ATTEMPTS) {
+    clearOtpEntry(cleanEmail);
+  } else {
+    writeOtpEntry(cleanEmail, {
+      ...entry,
+      failedAttempts: nextFailed,
+    });
   }
 
   return false;

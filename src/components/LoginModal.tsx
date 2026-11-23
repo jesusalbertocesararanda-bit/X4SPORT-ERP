@@ -11,13 +11,18 @@ import {
   UserCheck,
   Zap,
 } from 'lucide-react';
-import type { AuthorizedUserRecord } from '../types/erp';
+import type { AuthorizedUserRecord, OtpEmailConfig } from '../types/erp';
 import {
   authenticateByPassword,
+  clearOtpEntry,
   completeFirstTimeLogin,
   findAuthorizedUser,
+  generateOtpCode,
+  isAiStudioPreviewEnvironment,
   MAIN_ADMIN_EMAIL,
   requestOtpDelivery,
+  resolveEmailJsConfig,
+  sendOtpViaEmailJs,
   verifyOtpCode,
   type ERPUser,
 } from '../utils/auth';
@@ -26,12 +31,17 @@ interface LoginModalProps {
   onLoginSuccess: (user: ERPUser) => void;
   authorizedUsers?: AuthorizedUserRecord[];
   onUpdateAuthorizedUsers?: (users: AuthorizedUserRecord[]) => void;
+  otpEmailConfig?: OtpEmailConfig;
 }
+
+const EMAILJS_UNAVAILABLE_ERROR =
+  'No se pudo enviar el código OTP al correo. Ingresa con tu Contraseña o configura EmailJS en Configuración.';
 
 export function LoginModal({
   onLoginSuccess,
   authorizedUsers,
   onUpdateAuthorizedUsers,
+  otpEmailConfig,
 }: LoginModalProps) {
   const [tab, setTab] = useState<'password' | 'otp' | 'first-time'>('password');
   const [email, setEmail] = useState('');
@@ -40,6 +50,7 @@ export function LoginModal({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [otpSent, setOtpSent] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [temporaryOtpNotice, setTemporaryOtpNotice] = useState<{
@@ -47,29 +58,62 @@ export function LoginModal({
     message: string;
   } | null>(null);
 
-  const startFirstTimeFlow = (targetEmail: string) => {
-    const delivery = requestOtpDelivery(targetEmail);
-    setTab('first-time');
-    setOtpCode('');
-    setNewPassword('');
-    setConfirmPassword('');
-    if (delivery.showTemporaryCodeOnScreen) {
+  const inPreview = isAiStudioPreviewEnvironment();
+
+  const startFirstTimeFlow = async (targetEmail: string, targetName?: string) => {
+    setError(null);
+    setInfoMessage(null);
+    setTemporaryOtpNotice(null);
+
+    if (inPreview) {
+      const delivery = requestOtpDelivery(targetEmail);
+      setTab('first-time');
+      setOtpCode('');
+      setNewPassword('');
+      setConfirmPassword('');
       setTemporaryOtpNotice({
         code: delivery.code,
         message: delivery.message,
       });
       setInfoMessage(
-        `Se detectó tu primer ingreso al ERP (${targetEmail}). Como estás en modo vista previa o sin envío de correo activo, usa el código temporal mostrado en pantalla para activar tu contraseña.`,
+        `Se detectó tu primer ingreso al ERP (${targetEmail}). Como estás en vista previa de AI Studio, usa el código temporal mostrado en pantalla para activar tu contraseña.`,
       );
-    } else {
+      return;
+    }
+
+    if (!resolveEmailJsConfig(otpEmailConfig)) {
+      setError(EMAILJS_UNAVAILABLE_ERROR);
+      return;
+    }
+
+    const generatedCode = generateOtpCode(targetEmail);
+    setSendingOtp(true);
+    try {
+      const sendResult = await sendOtpViaEmailJs({
+        toEmail: targetEmail,
+        toName: targetName ?? targetEmail,
+        otpCode: generatedCode,
+        config: otpEmailConfig,
+      });
+      if (!sendResult.ok) {
+        clearOtpEntry(targetEmail);
+        setError(EMAILJS_UNAVAILABLE_ERROR);
+        return;
+      }
+      setTab('first-time');
+      setOtpCode('');
+      setNewPassword('');
+      setConfirmPassword('');
       setTemporaryOtpNotice(null);
       setInfoMessage(
         `Se detectó tu primer ingreso al ERP. Hemos enviado el código de verificación OTP al correo autorizado (${targetEmail}). Ingrésalo manualmente para activar tu contraseña personal.`,
       );
+    } finally {
+      setSendingOtp(false);
     }
   };
 
-  const handlePasswordLogin = (e: React.FormEvent) => {
+  const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setInfoMessage(null);
@@ -84,7 +128,8 @@ export function LoginModal({
     const res = authenticateByPassword(cleanEmail, password, authorizedUsers);
 
     if (res.isFirstLoginPending) {
-      startFirstTimeFlow(cleanEmail);
+      const record = findAuthorizedUser(cleanEmail, authorizedUsers);
+      await startFirstTimeFlow(cleanEmail, record?.name);
       return;
     }
 
@@ -99,10 +144,11 @@ export function LoginModal({
     onLoginSuccess(res.user);
   };
 
-  const handleSendOtp = (e: React.FormEvent) => {
+  const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setInfoMessage(null);
+    setTemporaryOtpNotice(null);
 
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail) {
@@ -119,23 +165,48 @@ export function LoginModal({
     }
 
     if (record.firstLoginPending) {
-      startFirstTimeFlow(cleanEmail);
+      await startFirstTimeFlow(cleanEmail, record.name);
       return;
     }
 
-    const delivery = requestOtpDelivery(cleanEmail);
-    setOtpSent(true);
-    if (delivery.showTemporaryCodeOnScreen) {
+    if (inPreview) {
+      const delivery = requestOtpDelivery(cleanEmail);
+      setOtpSent(true);
       setTemporaryOtpNotice({
         code: delivery.code,
         message: delivery.message,
       });
       setInfoMessage(null);
-    } else {
+      return;
+    }
+
+    if (!resolveEmailJsConfig(otpEmailConfig)) {
+      setOtpSent(false);
+      setError(EMAILJS_UNAVAILABLE_ERROR);
+      return;
+    }
+
+    const generatedCode = generateOtpCode(cleanEmail);
+    setSendingOtp(true);
+    try {
+      const sendResult = await sendOtpViaEmailJs({
+        toEmail: cleanEmail,
+        toName: record.name,
+        otpCode: generatedCode,
+        config: otpEmailConfig,
+      });
+      if (!sendResult.ok) {
+        clearOtpEntry(cleanEmail);
+        setOtpSent(false);
+        setTemporaryOtpNotice(null);
+        setError(EMAILJS_UNAVAILABLE_ERROR);
+        return;
+      }
+      setOtpSent(true);
       setTemporaryOtpNotice(null);
-      setInfoMessage(
-        `Código OTP enviado al correo autorizado (${email.trim()}). Revisa tu bandeja e ingrésalo manualmente para continuar.`,
-      );
+      setInfoMessage(null);
+    } finally {
+      setSendingOtp(false);
     }
   };
 
@@ -152,7 +223,7 @@ export function LoginModal({
 
     const isValid = verifyOtpCode(cleanEmail, cleanOtp);
     if (!isValid) {
-      setError('Código OTP inválido o expirado. Ingresa un código válido de 6 dígitos.');
+      setError('Código OTP inválido, expirado o bloqueado por intentos fallidos. Solicita un nuevo código.');
       return;
     }
 
@@ -346,10 +417,11 @@ export function LoginModal({
             <button
               type="submit"
               data-testid="btn-login-submit"
-              className="w-full min-h-[46px] flex items-center justify-center gap-2 rounded-xl bg-blue-600 text-xs font-semibold text-white transition-colors hover:bg-blue-500 shadow-lg shadow-blue-600/20 active:scale-[0.99]"
+              disabled={sendingOtp}
+              className="w-full min-h-[46px] flex items-center justify-center gap-2 rounded-xl bg-blue-600 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60 shadow-lg shadow-blue-600/20 active:scale-[0.99]"
             >
               <UserCheck className="h-4 w-4" />
-              <span>Iniciar Sesión en ERP</span>
+              <span>{sendingOtp ? 'Enviando código...' : 'Iniciar Sesión en ERP'}</span>
             </button>
           </form>
         )}
@@ -382,15 +454,17 @@ export function LoginModal({
 
                 <button
                   type="submit"
-                  className="w-full min-h-[46px] flex items-center justify-center gap-2 rounded-xl bg-blue-600 text-xs font-semibold text-white transition-colors hover:bg-blue-500 shadow-lg shadow-blue-600/20"
+                  data-testid="btn-send-otp"
+                  disabled={sendingOtp}
+                  className="w-full min-h-[46px] flex items-center justify-center gap-2 rounded-xl bg-blue-600 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60 shadow-lg shadow-blue-600/20"
                 >
                   <Zap className="h-4 w-4" />
-                  <span>Enviar Código OTP al Correo</span>
+                  <span>{sendingOtp ? 'Enviando código...' : 'Enviar Código OTP al Correo'}</span>
                 </button>
               </form>
             ) : (
               <form onSubmit={handleVerifyOtp} className="space-y-4">
-                {temporaryOtpNotice ? (
+                {inPreview && temporaryOtpNotice ? (
                   <div
                     role="status"
                     data-testid="otp-temporary-notice"
@@ -495,7 +569,7 @@ export function LoginModal({
               </p>
             </div>
 
-            {temporaryOtpNotice && (
+            {inPreview && temporaryOtpNotice && (
               <div
                 role="status"
                 data-testid="otp-temporary-notice"

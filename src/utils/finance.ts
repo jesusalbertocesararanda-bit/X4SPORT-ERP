@@ -321,6 +321,24 @@ export function normalizeGeneralConfig(raw: unknown): GeneralConfig {
           ? rawBrand.invoiceFooterMessage.trim()
           : def.brandIdentity.invoiceFooterMessage,
     },
+    ...(() => {
+      const rawOtp = obj.otpEmailConfig;
+      if (!rawOtp || typeof rawOtp !== 'object') return {};
+      const serviceId =
+        typeof rawOtp.serviceId === 'string' ? rawOtp.serviceId.trim() : '';
+      const templateId =
+        typeof rawOtp.templateId === 'string' ? rawOtp.templateId.trim() : '';
+      const publicKey =
+        typeof rawOtp.publicKey === 'string' ? rawOtp.publicKey.trim() : '';
+      if (!serviceId && !templateId && !publicKey) return {};
+      return {
+        otpEmailConfig: {
+          serviceId,
+          templateId,
+          publicKey,
+        },
+      };
+    })(),
     updatedAt: typeof obj.updatedAt === 'string' ? obj.updatedAt : undefined,
     updatedBy: typeof obj.updatedBy === 'string' ? obj.updatedBy : undefined,
   };
