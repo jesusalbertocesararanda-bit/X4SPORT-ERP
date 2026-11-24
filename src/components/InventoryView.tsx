@@ -44,6 +44,7 @@ export function InventoryView({
   const [query, setQuery] = useState('');
   const [teamFilter, setTeamFilter] = useState<'Todos' | TeamCategory>('Todos');
   const [onlyLowStock, setOnlyLowStock] = useState(false);
+  const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -68,6 +69,7 @@ export function InventoryView({
     return matrixRows.filter((row) => {
       if (teamFilter !== 'Todos' && row.team !== teamFilter) return false;
       if (onlyLowStock && !row.isLowStock) return false;
+      if (onlyAvailable && row.totalStock <= 0) return false;
       if (!q) return true;
       return (
         row.model.toLowerCase().includes(q) ||
@@ -75,13 +77,14 @@ export function InventoryView({
         row.version.toLowerCase().includes(q)
       );
     });
-  }, [matrixRows, onlyLowStock, query, teamFilter]);
+  }, [matrixRows, onlyAvailable, onlyLowStock, query, teamFilter]);
 
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
     return state.inventory.filter((item) => {
       if (teamFilter !== 'Todos' && item.team !== teamFilter) return false;
       if (onlyLowStock && item.stock > threshold) return false;
+      if (onlyAvailable && item.stock <= 0) return false;
       if (!q) return true;
       return (
         item.model.toLowerCase().includes(q) ||
@@ -90,7 +93,7 @@ export function InventoryView({
         item.size.toLowerCase().includes(q)
       );
     });
-  }, [onlyLowStock, query, state.inventory, teamFilter, threshold]);
+  }, [onlyAvailable, onlyLowStock, query, state.inventory, teamFilter, threshold]);
 
   const totalUnits = getTotalUnits(state);
   const totalValue = getTotalInventoryCostValue(state);
@@ -269,21 +272,47 @@ export function InventoryView({
               </button>
             </div>
 
-            <button
-              type="button"
-              data-testid="btn-filter-low-stock"
-              onClick={() => setOnlyLowStock((prev) => !prev)}
-              aria-pressed={onlyLowStock}
-              className={`min-h-[42px] rounded-lg border px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 ${
-                onlyLowStock
-                  ? 'border-red-500/50 bg-red-500/15 text-red-300'
-                  : 'border-slate-700 bg-[#070D19] text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              {onlyLowStock
-                ? `Mostrando Stock Bajo (≤ ${threshold})`
-                : `Filtrar Stock Bajo (≤ ${threshold})`}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-testid="btn-filter-only-available"
+                onClick={() => setOnlyAvailable((prev) => !prev)}
+                aria-pressed={onlyAvailable}
+                className={`inline-flex min-h-[42px] items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                  onlyAvailable
+                    ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                    : 'border-slate-700 bg-[#070D19] text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <span
+                  className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                    onlyAvailable
+                      ? 'border-emerald-400 bg-emerald-500 text-white'
+                      : 'border-slate-600 bg-slate-800 text-transparent'
+                  }`}
+                  aria-hidden="true"
+                >
+                  <CheckCircle2 className="h-3 w-3" />
+                </span>
+                <span>Solo disponibles</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="btn-filter-low-stock"
+                onClick={() => setOnlyLowStock((prev) => !prev)}
+                aria-pressed={onlyLowStock}
+                className={`min-h-[42px] rounded-lg border px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 ${
+                  onlyLowStock
+                    ? 'border-red-500/50 bg-red-500/15 text-red-300'
+                    : 'border-slate-700 bg-[#070D19] text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                {onlyLowStock
+                  ? `Mostrando Stock Bajo (≤ ${threshold})`
+                  : `Filtrar Stock Bajo (≤ ${threshold})`}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -333,6 +362,7 @@ export function InventoryView({
               setQuery('');
               setTeamFilter('Todos');
               setOnlyLowStock(false);
+              setOnlyAvailable(false);
             }}
             className="mt-4 min-h-[40px] rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700"
           >
