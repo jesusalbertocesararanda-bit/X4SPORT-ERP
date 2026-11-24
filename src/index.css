@@ -6,16 +6,37 @@
     --font-display: 'Outfit', system-ui, -apple-system, sans-serif;
     --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --erp-canvas: #f8fafc;
+    --erp-surface: #ffffff;
+    --erp-surface-subtle: #f1f5f9;
+    --erp-border: #e2e8f0;
+    --erp-border-strong: #cbd5e1;
+    --erp-text-primary: #0f172a;
+    --erp-text-secondary: #334155;
+    --erp-text-muted: #64748b;
   }
 
   html {
     font-family: var(--font-sans);
+    color-scheme: light;
+  }
+
+  html.dark {
     color-scheme: dark;
+    --erp-canvas: #060b16;
+    --erp-surface: #0d1526;
+    --erp-surface-subtle: #080e1c;
+    --erp-border: #1e293b;
+    --erp-border-strong: #334155;
+    --erp-text-primary: #f8fafc;
+    --erp-text-secondary: #cbd5e1;
+    --erp-text-muted: #94a3b8;
   }
 
   body {
-    background-color: #060b16;
-    color: #f1f5f9;
+    background-color: var(--erp-canvas);
+    color: var(--erp-text-primary);
+    transition: background-color 0.15s ease, color 0.15s ease;
   }
 
   html,
@@ -27,6 +48,159 @@
     overscroll-behavior-x: none;
     position: relative;
   }
+}
+
+/* ============================================================================
+ * Modo Claro / Normal para vistas internas del panel administrativo ERP
+ * (Aislado a .erp-admin-shell y .erp-auth-shell; mantiene intacto el
+ * Catálogo Público y respeta colores sólidos de botones CTA y badges activos)
+ * ============================================================================ */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) {
+  color: #0f172a;
+}
+
+/* Lienzos oscuros -> Slate 50 */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#060B16\], .bg-\[\#040812\]) {
+  background-color: #f8fafc;
+}
+
+/* Overlays / backdrops de modales en Modo Claro */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#040812\]\/85, .bg-\[\#040812\]\/80, .bg-black\/75, .bg-black\/70, .bg-black\/80) {
+  background-color: rgba(15, 23, 42, 0.45);
+}
+
+/* Superficies secundarias / inputs / sub-paneles -> Slate 50 / 100 */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#080E1C\], .bg-\[\#080F1E\], .bg-\[\#080F1E\]\/95, .bg-\[\#070D19\], .bg-\[\#070C17\], .bg-\[\#070C17\]\/80, .bg-slate-900) {
+  background-color: #f8fafc;
+}
+
+/* Tarjetas, modales y tablas -> Blanco puro con elevación sutil */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#0D1526\], .bg-\[\#0B1222\], .bg-\[\#0D1526\]\/95) {
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+}
+
+/* Gradiente hero de Caja General (FinanceView) en Modo Claro */
+html:not(.dark) .erp-admin-shell [class*="from-[#0D1A2D]"] {
+  background-image: linear-gradient(135deg, #ecfdf5 0%, #ffffff 58%, #f8fafc 100%);
+}
+
+/* Chips, hover y barras de tabla neutras */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-slate-800, .bg-slate-700) {
+  background-color: #f1f5f9;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-slate-800\/30, .bg-slate-800\/35, .bg-slate-800\/40, .bg-slate-800\/50, .bg-slate-800\/60, .bg-slate-800\/70) {
+  background-color: #f1f5f9;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.hover\:bg-slate-800:hover, .hover\:bg-slate-800\/40:hover, .hover\:bg-slate-800\/50:hover, .hover\:bg-slate-800\/60:hover, .hover\:bg-slate-700:hover) {
+  background-color: #e2e8f0;
+}
+
+/* Fondos de banners de alerta especiales */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .bg-\[\#071913\]\/95 {
+  background-color: #ecfdf5;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .bg-\[\#1f1504\]\/95 {
+  background-color: #fffbeb;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .bg-red-950\/60 {
+  background-color: #fef2f2;
+}
+
+/* Bordes y divisores claros */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.border-slate-800, .border-slate-800\/60, .border-slate-800\/70, .border-slate-800\/80, .border-slate-800\/90) {
+  border-color: #e2e8f0;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.border-slate-700, .border-slate-700\/80, .border-slate-600) {
+  border-color: #cbd5e1;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.divide-slate-800, .divide-slate-800\/80) > :not(:first-child) {
+  border-color: #e2e8f0;
+}
+
+/* Textos neutros: legibilidad AA sobre blanco/claro SIN alterar botones de color sólido */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-white:not(:is(
+  [class*="bg-blue-6"],
+  [class*="bg-blue-500"]:not([class*="/"]),
+  [class*="bg-emerald-6"],
+  [class*="bg-emerald-500"]:not([class*="/"]),
+  [class*="bg-red-6"],
+  [class*="bg-red-500"]:not([class*="/"]),
+  [class*="bg-amber-6"],
+  [class*="bg-cyan-6"],
+  [class*="bg-purple-6"]
+)):not(:is(
+  [class*="bg-blue-6"],
+  [class*="bg-blue-500"]:not([class*="/"]),
+  [class*="bg-emerald-6"],
+  [class*="bg-emerald-500"]:not([class*="/"]),
+  [class*="bg-red-6"],
+  [class*="bg-red-500"]:not([class*="/"]),
+  [class*="bg-amber-6"],
+  [class*="bg-cyan-6"],
+  [class*="bg-purple-6"]
+) *) {
+  color: #0f172a;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-100:not(:is([class*="bg-blue-6"], [class*="bg-emerald-6"], [class*="bg-red-6"]) *) {
+  color: #0f172a;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-200:not(:is([class*="bg-blue-6"], [class*="bg-emerald-6"], [class*="bg-red-6"]) *) {
+  color: #1e293b;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-300:not(:is([class*="bg-blue-6"], [class*="bg-emerald-6"], [class*="bg-red-6"]) *) {
+  color: #334155;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-400:not(:is([class*="bg-blue-6"], [class*="bg-emerald-6"], [class*="bg-red-6"]) *) {
+  color: #475569;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-500 {
+  color: #64748b;
+}
+
+/* Semántica de estados / insignias con alto contraste sobre fondos claros */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-blue-200, .text-blue-300, .text-blue-300\/85, .text-blue-400):not(:is([class*="bg-blue-600"]:not([class*="/"]), [class*="bg-blue-500"]:not([class*="/"])):not(:is([class*="bg-blue-600"]:not([class*="/"]), [class*="bg-blue-500"]:not([class*="/"])) *)) {
+  color: #1d4ed8;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-emerald-100, .text-emerald-200, .text-emerald-300, .text-emerald-300\/85, .text-emerald-300\/90, .text-emerald-400):not(:is([class*="bg-emerald-600"]:not([class*="/"]), [class*="bg-emerald-500"]:not([class*="/"])):not(:is([class*="bg-emerald-600"]:not([class*="/"]), [class*="bg-emerald-500"]:not([class*="/"])) *)) {
+  color: #047857;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-amber-100, .text-amber-200, .text-amber-200\/85, .text-amber-200\/90, .text-amber-300, .text-amber-400):not(:is([class*="bg-amber-600"]:not([class*="/"])):not(:is([class*="bg-amber-600"]:not([class*="/"])) *)) {
+  color: #b45309;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-red-200, .text-red-300, .text-red-400, .text-rose-300, .text-rose-400):not(:is([class*="bg-red-600"]:not([class*="/"])):not(:is([class*="bg-red-600"]:not([class*="/"])) *)) {
+  color: #b91c1c;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-cyan-300, .text-cyan-400) {
+  color: #0e7490;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-purple-400 {
+  color: #6d28d9;
+}
+
+/* Hover text on neutral buttons in Light mode */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .hover\:text-white:not(:is([class*="bg-blue-6"], [class*="bg-emerald-6"], [class*="bg-red-6"], [class*="bg-amber-6"], [class*="hover:bg-blue-6"], [class*="hover:bg-blue-5"], [class*="hover:bg-emerald-6"], [class*="hover:bg-red-6"])):hover {
+  color: #0f172a;
+}
+
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(input, select, textarea)::placeholder {
+  color: #94a3b8;
 }
 
 .font-display {

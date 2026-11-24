@@ -34,8 +34,11 @@ import {
   type RankingPeriodMode,
 } from '../utils/statistics';
 
+import type { ResolvedTheme } from '../utils/theme';
+
 interface StatsViewProps {
   state: AppState;
+  resolvedTheme?: ResolvedTheme;
 }
 
 const CHART_TEAMS: TeamCategory[] = [
@@ -49,7 +52,15 @@ const CHART_TEAMS: TeamCategory[] = [
 
 const SELLERS: PartnerName[] = ['Jesús', 'Josué', 'Gabriel'];
 
-export function StatsView({ state }: StatsViewProps) {
+export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
+  const isLightMode = resolvedTheme === 'light';
+  const chartTextColor = isLightMode ? '#334155' : '#CBD5E1';
+  const chartTickColor = isLightMode ? '#475569' : '#94A3B8';
+  const chartAxisLabelColor = isLightMode ? '#1E293B' : '#E2E8F0';
+  const chartGridColor = isLightMode
+    ? 'rgba(15, 23, 42, 0.08)'
+    : 'rgba(148, 163, 184, 0.1)';
+  const chartSurfaceBorder = isLightMode ? '#FFFFFF' : '#0D1526';
   const todayIso = useMemo(() => getTodayLocalDateIso(), []);
   const currentMonthIso = useMemo(() => todayIso.slice(0, 7), [todayIso]);
 
@@ -182,13 +193,13 @@ export function StatsView({ state }: StatsViewProps) {
             data: activePairs.map((p) => p.value),
             backgroundColor: [
               '#2563EB',
-              '#F8FAFC',
+              isLightMode ? '#CBD5E1' : '#F8FAFC',
               '#38BDF8',
               '#6366F1',
               '#10B981',
               '#94A3B8',
             ],
-            borderColor: '#0D1526',
+            borderColor: chartSurfaceBorder,
             borderWidth: 2,
           },
         ],
@@ -201,7 +212,7 @@ export function StatsView({ state }: StatsViewProps) {
           legend: {
             position: 'bottom',
             labels: {
-              color: '#CBD5E1',
+              color: chartTextColor,
               padding: 14,
               font: { family: 'Plus Jakarta Sans', size: 12 },
             },
@@ -211,7 +222,7 @@ export function StatsView({ state }: StatsViewProps) {
     });
 
     return () => chart.destroy();
-  }, [state.inventory]);
+  }, [chartSurfaceBorder, chartTextColor, isLightMode, state.inventory]);
 
   // Existing Chart 2: 4-Layer Matrix Accumulated Funds + Partner Dividends
   useEffect(() => {
@@ -261,16 +272,16 @@ export function StatsView({ state }: StatsViewProps) {
         maintainAspectRatio: false,
         scales: {
           x: {
-            ticks: { color: '#CBD5E1', font: { size: 11 } },
+            ticks: { color: chartTextColor, font: { size: 11 } },
             grid: { display: false },
           },
           y: {
             beginAtZero: true,
             ticks: {
-              color: '#94A3B8',
+              color: chartTickColor,
               callback: (val) => `$${val}`,
             },
-            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+            grid: { color: chartGridColor },
           },
         },
         plugins: {
@@ -280,7 +291,7 @@ export function StatsView({ state }: StatsViewProps) {
     });
 
     return () => chart.destroy();
-  }, [state.funds]);
+  }, [chartGridColor, chartTextColor, chartTickColor, state.funds]);
 
   // Existing Chart 3: Receivables breakdown OR Sales by Seller
   useEffect(() => {
@@ -332,13 +343,13 @@ export function StatsView({ state }: StatsViewProps) {
           x: {
             beginAtZero: true,
             ticks: {
-              color: '#94A3B8',
+              color: chartTickColor,
               callback: (val) => `$${val}`,
             },
-            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+            grid: { color: chartGridColor },
           },
           y: {
-            ticks: { color: '#E2E8F0', font: { size: 11 } },
+            ticks: { color: chartAxisLabelColor, font: { size: 11 } },
             grid: { display: false },
           },
         },
@@ -349,7 +360,7 @@ export function StatsView({ state }: StatsViewProps) {
     });
 
     return () => chart.destroy();
-  }, [state.receivables, state.sales]);
+  }, [chartAxisLabelColor, chartGridColor, chartTickColor, state.receivables, state.sales]);
 
   // New Chart 4: Size Ranking (Units)
   useEffect(() => {
@@ -375,16 +386,16 @@ export function StatsView({ state }: StatsViewProps) {
         maintainAspectRatio: false,
         scales: {
           x: {
-            ticks: { color: '#CBD5E1', font: { size: 11 } },
+            ticks: { color: chartTextColor, font: { size: 11 } },
             grid: { display: false },
           },
           y: {
             beginAtZero: true,
             ticks: {
               precision: 0,
-              color: '#94A3B8',
+              color: chartTickColor,
             },
-            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+            grid: { color: chartGridColor },
           },
         },
         plugins: {
@@ -394,7 +405,7 @@ export function StatsView({ state }: StatsViewProps) {
     });
 
     return () => chart.destroy();
-  }, [ranking.sizeRanking]);
+  }, [chartGridColor, chartTextColor, chartTickColor, ranking.sizeRanking]);
 
   // New Chart 5: Model Cost Evolution vs Sale Price
   useEffect(() => {
@@ -436,23 +447,23 @@ export function StatsView({ state }: StatsViewProps) {
         maintainAspectRatio: false,
         scales: {
           x: {
-            ticks: { color: '#CBD5E1', font: { size: 10 } },
+            ticks: { color: chartTextColor, font: { size: 10 } },
             grid: { display: false },
           },
           y: {
             beginAtZero: true,
             ticks: {
-              color: '#94A3B8',
+              color: chartTickColor,
               callback: (val) => `$${val}`,
             },
-            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+            grid: { color: chartGridColor },
           },
         },
         plugins: {
           legend: {
             position: 'bottom',
             labels: {
-              color: '#CBD5E1',
+              color: chartTextColor,
               font: { family: 'Plus Jakarta Sans', size: 11 },
             },
           },
@@ -461,7 +472,7 @@ export function StatsView({ state }: StatsViewProps) {
     });
 
     return () => chart.destroy();
-  }, [modelCostHistory]);
+  }, [chartGridColor, chartTextColor, chartTickColor, modelCostHistory]);
 
   const handleDownloadRecommendedOrder = () => {
     setExportFeedback(null);

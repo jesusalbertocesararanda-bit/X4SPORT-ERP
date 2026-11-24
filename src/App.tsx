@@ -24,6 +24,8 @@ import { SalesView } from './components/SalesView';
 import { Sidebar } from './components/Sidebar';
 import { StatsView } from './components/StatsView';
 import { SupplierPriceHistoryView } from './components/SupplierPriceHistoryView';
+import { ThemeSelector } from './components/ThemeSelector';
+import { useThemePreference } from './hooks/useThemePreference';
 import { createInitialState } from './data/initialState';
 import {
   canAccessConfiguration,
@@ -186,6 +188,8 @@ export default function App() {
   const [loginToast, setLoginToast] = useState<string | null>(null);
   const [restrictedToast, setRestrictedToast] = useState<string | null>(null);
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
+  const { themePreference, resolvedTheme, setThemePreference } =
+    useThemePreference();
 
   useEffect(() => {
     if (!loginToast) return;
@@ -1230,7 +1234,15 @@ export default function App() {
 
   if (!isPublicCatalogRoute && !isCatalogPreview && !currentUser) {
     return (
-      <div className="min-h-screen bg-[#060B16] text-slate-100 flex flex-col items-center justify-center relative">
+      <div className="erp-auth-shell min-h-screen bg-slate-50 text-slate-900 dark:bg-[#060B16] dark:text-slate-100 flex flex-col items-center justify-center relative">
+        <div className="fixed top-4 right-4 z-40">
+          <ThemeSelector
+            value={themePreference}
+            onChange={setThemePreference}
+            showLabels="xl"
+            testIdPrefix="login-theme-selector"
+          />
+        </div>
         {loginToast && (
           <div
             role="status"
@@ -1319,7 +1331,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#060B16] text-slate-100 flex relative">
+    <div className="erp-admin-shell min-h-screen bg-slate-50 text-slate-900 dark:bg-[#060B16] dark:text-slate-100 flex relative">
       {loginToast && (
         <div
           role="status"
@@ -1377,6 +1389,8 @@ export default function App() {
           alerts={activeAlerts}
           alertThresholds={generalConfig.alertThresholds}
           seenAlertIds={effectiveSeenAlertIds}
+          themePreference={themePreference}
+          onChangeThemePreference={setThemePreference}
           onToggleAlertSeen={handleToggleAlertSeen}
           onMarkAllAlertsSeen={handleMarkAllAlertsSeen}
           onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
@@ -1525,7 +1539,9 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'estadisticas' && <StatsView state={state} />}
+              {activeTab === 'estadisticas' && (
+                <StatsView state={state} resolvedTheme={resolvedTheme} />
+              )}
               {activeTab === 'reportes' && <ReportsView state={state} />}
               {activeTab === 'cargas' && (
                 <BulkImportView

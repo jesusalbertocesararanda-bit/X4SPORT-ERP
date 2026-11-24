@@ -146,13 +146,13 @@ export function Sidebar({
       <aside
         data-testid="app-sidebar"
         aria-label="Navegación lateral X4SPORT"
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-slate-800/90 bg-[#080F1E] transition-all duration-300 ease-in-out lg:sticky lg:top-0 lg:h-screen lg:shrink-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-slate-200 bg-white dark:border-slate-800/90 dark:bg-[#080F1E] transition-all duration-300 ease-in-out lg:sticky lg:top-0 lg:h-screen lg:shrink-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         } ${isCollapsed ? 'w-72 lg:w-[74px]' : 'w-72'}`}
       >
         {/* Esquina superior izquierda: Toggle colapsable + Brand */}
         <div
-          className={`flex h-16 items-center border-b border-slate-800/80 px-3 ${
+          className={`flex h-16 items-center border-b border-slate-200 dark:border-slate-800/80 px-3 ${
             isCollapsed ? 'justify-between lg:justify-center' : 'justify-between'
           }`}
         >
@@ -169,7 +169,7 @@ export function Sidebar({
               aria-label={
                 isCollapsed ? 'Desplegar barra lateral' : 'Ocultar barra lateral'
               }
-              className="hidden lg:inline-flex min-h-[38px] min-w-[38px] shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-[#0D1526] text-slate-300 transition-colors hover:border-slate-700 hover:bg-slate-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="hidden lg:inline-flex min-h-[38px] min-w-[38px] shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-800 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             >
               {isCollapsed ? (
                 <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
@@ -184,13 +184,13 @@ export function Sidebar({
                 e.preventDefault();
                 handleNavigate('dashboard');
               }}
-              className={`font-display text-lg font-bold tracking-tight text-white whitespace-nowrap truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded ${
+              className={`font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded ${
                 isCollapsed ? 'lg:hidden' : ''
               }`}
             >
               {storeName === 'X4SPORT' ? (
                 <>
-                  X4<span className="text-blue-400">SPORT</span>
+                  X4<span className="text-blue-600 dark:text-blue-400">SPORT</span>
                 </>
               ) : (
                 storeName
@@ -202,7 +202,7 @@ export function Sidebar({
             type="button"
             onClick={onCloseMobile}
             aria-label="Cerrar menú lateral"
-            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-800 bg-[#0D1526] text-slate-300 hover:bg-slate-800 hover:text-white"
+            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
           >
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -227,15 +227,15 @@ export function Sidebar({
                 : 'gap-2.5 px-3 py-2'
             } ${
               activeSubModule === 'dashboard'
-                ? 'border-blue-500/40 bg-blue-600/15 text-white'
-                : 'border-transparent text-slate-300 hover:bg-slate-800/60 hover:text-white'
+                ? 'border-blue-500/35 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-600/15 dark:text-white'
+                : 'border-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/60 dark:hover:text-white'
             }`}
           >
             <LayoutDashboard
               className={`h-4 w-4 shrink-0 ${
                 activeSubModule === 'dashboard'
-                  ? 'text-blue-400'
-                  : 'text-slate-400'
+                  ? 'text-blue-600 dark:text-blue-400'
+                  : 'text-slate-500 dark:text-slate-400'
               }`}
               aria-hidden="true"
             />
@@ -273,8 +273,8 @@ export function Sidebar({
                       }}
                       className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                         isBranchActive
-                          ? 'border-blue-500/40 bg-blue-600/20 text-blue-300'
-                          : 'border-transparent text-slate-400 hover:bg-slate-800/60 hover:text-slate-100'
+                          ? 'border-blue-500/40 bg-blue-50 text-blue-700 dark:bg-blue-600/20 dark:text-blue-300'
+                          : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100'
                       }`}
                     >
                       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -292,14 +292,14 @@ export function Sidebar({
                     onClick={() => toggleBranch(branch.id)}
                     className={`flex min-h-[38px] w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                       isBranchActive
-                        ? 'bg-slate-800/60 text-white'
-                        : 'text-slate-200 hover:bg-slate-800/40 hover:text-white'
+                        ? 'bg-slate-100 text-slate-900 dark:bg-slate-800/60 dark:text-white'
+                        : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-800/40 dark:hover:text-white'
                     }`}
                   >
                     <span className="flex items-center gap-2.5 min-w-0">
                       <Icon
                         className={`h-4 w-4 shrink-0 ${
-                          isBranchActive ? 'text-blue-400' : 'text-slate-400'
+                          isBranchActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'
                         }`}
                         aria-hidden="true"
                       />
@@ -307,19 +307,19 @@ export function Sidebar({
                     </span>
                     {isOpen ? (
                       <ChevronDown
-                        className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                        className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-slate-400"
                         aria-hidden="true"
                       />
                     ) : (
                       <ChevronRight
-                        className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                        className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-slate-400"
                         aria-hidden="true"
                       />
                     )}
                   </button>
 
                   {isOpen && (
-                    <div className="ml-[19px] border-l border-slate-700/80 pl-3 space-y-1 py-0.5">
+                    <div className="ml-[19px] border-l border-slate-200 dark:border-slate-700/80 pl-3 space-y-1 py-0.5">
                       {branch.children.map((child) => {
                         const childActive = activeSubModule === child.id;
                         return (
@@ -329,10 +329,10 @@ export function Sidebar({
                             data-testid={`nav-item-${child.id}`}
                             aria-current={childActive ? 'page' : undefined}
                             onClick={() => handleNavigate(child.id)}
-                            className={`relative flex min-h-[34px] w-full items-center rounded-lg border px-2.5 py-1.5 text-left text-[11.5px] font-medium transition-colors before:content-[''] before:absolute before:-left-3 before:top-1/2 before:h-px before:w-2.5 before:bg-slate-700/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                            className={`relative flex min-h-[34px] w-full items-center rounded-lg border px-2.5 py-1.5 text-left text-[11.5px] font-medium transition-colors before:content-[''] before:absolute before:-left-3 before:top-1/2 before:h-px before:w-2.5 before:bg-slate-200 dark:before:bg-slate-700/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                               childActive
-                                ? 'border-blue-500/40 bg-blue-600/15 text-blue-200 font-semibold'
-                                : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-100'
+                                ? 'border-blue-500/35 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-600/15 dark:text-blue-200 font-semibold'
+                                : 'border-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100'
                             }`}
                           >
                             <span className="truncate">{child.label}</span>
@@ -347,7 +347,7 @@ export function Sidebar({
           </div>
 
           {/* Módulos independientes: Reportes, Estadísticas, Cargas Masivas, Catálogo Público */}
-          <div className="border-t border-slate-800/70 pt-2.5 space-y-1">
+          <div className="border-t border-slate-200 dark:border-slate-800/70 pt-2.5 space-y-1">
             {STANDALONE_MODULES.map((item) => {
               const Icon = item.icon;
               const active = activeSubModule === item.id;
@@ -366,13 +366,13 @@ export function Sidebar({
                       : 'gap-2.5 px-3 py-2'
                   } ${
                     active
-                      ? 'border-blue-500/40 bg-blue-600/15 text-white'
-                      : 'border-transparent text-slate-300 hover:bg-slate-800/60 hover:text-white'
+                      ? 'border-blue-500/35 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-600/15 dark:text-white'
+                      : 'border-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/60 dark:hover:text-white'
                   }`}
                 >
                   <Icon
                     className={`h-4 w-4 shrink-0 ${
-                      active ? 'text-blue-400' : 'text-slate-400'
+                      active ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'
                     }`}
                     aria-hidden="true"
                   />
@@ -386,10 +386,10 @@ export function Sidebar({
         </nav>
 
         {/* Footer de Sidebar: Usuario activo + Cerrar Sesión + Configuración fija al final */}
-        <div className="mt-auto border-t border-slate-800/90 p-2.5 space-y-2">
+        <div className="mt-auto border-t border-slate-200 dark:border-slate-800/90 p-2.5 space-y-2">
           {currentUser && (
             <div
-              className={`rounded-lg border border-slate-800/90 bg-[#0D1526] p-2 ${
+              className={`rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800/90 dark:bg-[#0D1526] p-2 ${
                 isCollapsed ? 'lg:flex lg:flex-col lg:items-center lg:gap-2' : ''
               }`}
             >
@@ -412,7 +412,7 @@ export function Sidebar({
                     }
                   />
                   <span
-                    className={`text-xs font-semibold text-white truncate ${
+                    className={`text-xs font-semibold text-slate-900 dark:text-white truncate ${
                       isCollapsed ? 'lg:hidden' : ''
                     }`}
                   >
@@ -420,7 +420,7 @@ export function Sidebar({
                   </span>
                 </div>
                 <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 font-semibold shrink-0 ${
+                  className={`text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-500/20 dark:text-blue-300 dark:border-blue-500/30 font-semibold shrink-0 ${
                     isCollapsed ? 'lg:hidden' : ''
                   }`}
                 >
@@ -437,12 +437,12 @@ export function Sidebar({
                 }}
                 title="Cerrar Sesión"
                 aria-label="Cerrar Sesión"
-                className={`mt-2 flex min-h-[34px] w-full items-center justify-center gap-1.5 rounded-md border border-red-500/25 bg-red-500/10 text-[11px] font-semibold text-red-200 transition-colors hover:bg-red-500/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 ${
+                className={`mt-2 flex min-h-[34px] w-full items-center justify-center gap-1.5 rounded-md border border-red-200 bg-red-50 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-100 hover:text-red-900 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 ${
                   isCollapsed ? 'lg:mt-0 lg:h-8 lg:w-8 lg:px-0' : 'px-2.5 py-1'
                 }`}
               >
                 <LogOut
-                  className="h-3.5 w-3.5 shrink-0 text-red-400"
+                  className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400"
                   aria-hidden="true"
                 />
                 <span className={isCollapsed ? 'lg:hidden' : ''}>
@@ -467,15 +467,15 @@ export function Sidebar({
                 : 'gap-2.5 px-3'
             } ${
               activeSubModule === 'configuracion'
-                ? 'border-blue-500/45 bg-blue-600/20 text-white'
-                : 'border-slate-800 bg-[#0D1526] text-slate-200 hover:border-slate-700 hover:bg-slate-800 hover:text-white'
+                ? 'border-blue-500/35 bg-blue-50 text-blue-700 dark:border-blue-500/45 dark:bg-blue-600/20 dark:text-white'
+                : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:border-slate-700 dark:hover:bg-slate-800 dark:hover:text-white'
             }`}
           >
             <Settings
               className={`h-4 w-4 shrink-0 ${
                 activeSubModule === 'configuracion'
-                  ? 'text-blue-400'
-                  : 'text-slate-400'
+                  ? 'text-blue-600 dark:text-blue-400'
+                  : 'text-slate-500 dark:text-slate-400'
               }`}
               aria-hidden="true"
             />

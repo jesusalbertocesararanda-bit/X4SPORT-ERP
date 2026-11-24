@@ -15,8 +15,32 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      (function () {
+        try {
+          var key = 'x4sport_theme_preference';
+          var raw = window.localStorage.getItem(key);
+          var pref = raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'dark';
+          var isDark =
+            pref === 'dark' ||
+            (pref === 'system' &&
+              typeof window.matchMedia === 'function' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var root = document.documentElement;
+          if (isDark) {
+            root.classList.add('dark');
+            root.setAttribute('data-theme', 'dark');
+            root.style.colorScheme = 'dark';
+          } else {
+            root.classList.remove('dark');
+            root.setAttribute('data-theme', 'light');
+            root.style.colorScheme = 'light';
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="bg-[#060B16] text-slate-100 antialiased selection:bg-blue-600/30 selection:text-white">
+  <body class="bg-slate-50 text-slate-900 dark:bg-[#060B16] dark:text-slate-100 antialiased selection:bg-blue-600/30 selection:text-white">
     <div id="root"></div>
     <!-- SheetJS (xlsx) via CDN para importación y mapeo automático de Excel -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" crossorigin="anonymous"></script>

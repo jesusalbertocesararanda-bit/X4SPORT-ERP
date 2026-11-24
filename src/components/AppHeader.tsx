@@ -18,6 +18,8 @@ import type { AlertThresholdsConfig, SubModuleId } from '../types/erp';
 import type { ERPUser } from '../utils/auth';
 import type { OperationalAlert } from '../utils/finance';
 import { getUnseenAlertCount } from '../utils/notifications';
+import type { ThemePreference } from '../utils/theme';
+import { ThemeSelector } from './ThemeSelector';
 
 interface AppHeaderProps {
   moduleLabel: string;
@@ -26,6 +28,8 @@ interface AppHeaderProps {
   alerts: OperationalAlert[];
   alertThresholds: AlertThresholdsConfig;
   seenAlertIds: string[];
+  themePreference: ThemePreference;
+  onChangeThemePreference: (next: ThemePreference) => void;
   onToggleAlertSeen: (alertId: string) => void;
   onMarkAllAlertsSeen: () => void;
   onOpenMobileSidebar: () => void;
@@ -41,6 +45,8 @@ export function AppHeader({
   alerts,
   alertThresholds,
   seenAlertIds,
+  themePreference,
+  onChangeThemePreference,
   onToggleAlertSeen,
   onMarkAllAlertsSeen,
   onOpenMobileSidebar,
@@ -121,11 +127,11 @@ export function AppHeader({
     <header
       data-testid="app-header"
       data-visible={isVisible ? 'true' : 'false'}
-      className={`sticky top-0 z-30 border-b border-slate-800/90 bg-[#080F1E]/95 backdrop-blur-md transition-transform duration-300 ${
+      className={`sticky top-0 z-30 border-b border-slate-200 bg-white/95 dark:border-slate-800/90 dark:bg-[#080F1E]/95 backdrop-blur-md transition-transform duration-300 ${
         isVisible ? 'translate-y-0' : '-translate-y-full'
       }`}
     >
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 sm:h-16 max-w-7xl items-center justify-between gap-2.5 sm:gap-3 px-4 sm:px-6">
         {/* Izquierda: toggle móvil + breadcrumb dinámico */}
         <div className="flex min-w-0 items-center gap-2.5">
           <button
@@ -133,7 +139,7 @@ export function AppHeader({
             data-testid="btn-mobile-menu"
             onClick={onOpenMobileSidebar}
             aria-label="Abrir menú lateral"
-            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-800 bg-[#0D1526] text-slate-200 hover:bg-slate-800 shrink-0"
+            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
           >
             <Menu className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -146,8 +152,8 @@ export function AppHeader({
             <span
               className={`font-display truncate tracking-tight ${
                 subModuleLabel
-                  ? 'font-medium text-slate-400'
-                  : 'font-semibold text-white'
+                  ? 'font-medium text-slate-500 dark:text-slate-400'
+                  : 'font-semibold text-slate-900 dark:text-white'
               }`}
             >
               {moduleLabel}
@@ -155,10 +161,10 @@ export function AppHeader({
             {subModuleLabel && (
               <>
                 <ChevronRight
-                  className="h-4 w-4 shrink-0 text-slate-600"
+                  className="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-600"
                   aria-hidden="true"
                 />
-                <span className="font-display truncate font-semibold tracking-tight text-white">
+                <span className="font-display truncate font-semibold tracking-tight text-slate-900 dark:text-white">
                   {subModuleLabel}
                 </span>
               </>
@@ -166,11 +172,20 @@ export function AppHeader({
           </nav>
         </div>
 
-        {/* Derecha: Nueva Venta, Cambiar mi contraseña y Notificaciones */}
+        {/* Derecha: Apariencia (desktop/tablet), Cambiar mi contraseña, Nueva Venta y Notificaciones */}
         <div
           ref={popoverRef}
           className="relative flex items-center gap-2 sm:gap-2.5 shrink-0"
         >
+          <div className="hidden sm:flex items-center">
+            <ThemeSelector
+              value={themePreference}
+              onChange={onChangeThemePreference}
+              showLabels="xl"
+              testIdPrefix="theme-selector"
+            />
+          </div>
+
           {currentUser && onOpenChangePassword && (
             <button
               type="button"
@@ -178,10 +193,10 @@ export function AppHeader({
               onClick={onOpenChangePassword}
               title={`Cambiar mi contraseña (${currentUser.email})`}
               aria-label="Cambiar mi contraseña"
-              className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 sm:px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:border-blue-500/45 hover:bg-slate-800 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              className="inline-flex min-h-[38px] sm:min-h-[40px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 sm:px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-500/45 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
-              <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-400" aria-hidden="true" />
-              <span className="hidden md:inline">Cambiar mi contraseña</span>
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+              <span className="hidden lg:inline">Cambiar mi contraseña</span>
             </button>
           )}
 
@@ -189,7 +204,7 @@ export function AppHeader({
             type="button"
             data-testid="btn-header-make-sale"
             onClick={onStartSale}
-            className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.98] whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+            className="inline-flex min-h-[38px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 sm:px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.98] whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
           >
             <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>Nueva Venta</span>
@@ -206,10 +221,10 @@ export function AppHeader({
                 : 'Notificaciones (sin alertas pendientes)'
             }
             onClick={() => setNotifOpen((prev) => !prev)}
-            className={`relative inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+            className={`relative inline-flex min-h-[38px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg border px-2.5 sm:px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
               unseenCount > 0
-                ? 'border-red-500/45 bg-red-500/10 text-red-200 hover:bg-red-500/20'
-                : 'border-slate-700 bg-[#0D1526] text-slate-200 hover:bg-slate-800'
+                ? 'border-red-500/45 bg-red-500/10 text-red-700 hover:bg-red-500/20 dark:text-red-200'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800'
             }`}
           >
             <Bell className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -397,6 +412,19 @@ export function AppHeader({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Barra compacta de apariencia accesible en móvil (<640px) */}
+      <div className="flex sm:hidden items-center justify-between border-t border-slate-200/80 dark:border-slate-800/80 px-4 py-1.5">
+        <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+          Apariencia
+        </span>
+        <ThemeSelector
+          value={themePreference}
+          onChange={onChangeThemePreference}
+          showLabels="always"
+          testIdPrefix="theme-selector-mobile"
+        />
       </div>
     </header>
   );
