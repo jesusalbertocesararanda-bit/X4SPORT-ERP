@@ -21,11 +21,13 @@ import type {
   InventoryAuditSession,
   TeamCategory,
 } from '../types/erp';
-import type { ERPUser } from '../utils/auth';
+import { isAdminUser, type ERPUser } from '../utils/auth';
 import {
+  buildBaseModelQuickCountGroups,
   calculateAuditMetrics,
   detectSizeDiscrepancyCrosses,
   normalizeVersionDisplay,
+  type BaseModelQuickCountGroup,
 } from '../utils/finance';
 
 interface AuditViewProps {
@@ -34,11 +36,13 @@ interface AuditViewProps {
   onSaveProgress: (
     counts: Record<string, number>,
     notes?: string,
+    modelQuickCounts?: Record<string, number | null>,
   ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
   onCloseAuditSession: (
     counts: Record<string, number>,
     applyAdjustmentsToInventory: boolean,
     reason?: string,
+    modelQuickCounts?: Record<string, number | null>,
   ) =>
     | Promise<{ ok: boolean; error?: string; session?: InventoryAuditSession }>
     | { ok: boolean; error?: string; session?: InventoryAuditSession };
@@ -72,24 +76,42 @@ export function AuditView({
   onPerformUncross,
 }: AuditViewProps) {
   // Active session or initialize
+  const isAdmin = isAdminUser(currentUser);
   const activeSession = state.activeAuditSession ?? null;
   const isClosed = activeSession?.status === 'closed';
 
   // Physical counts mapping: skuId -> string input
   const [counts, setCounts] = useState<Record<string, string>>({});
+  const [quickCounts, setQuickCounts] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<string>('');
+  const [countViewMode, setCountViewMode] = useState<'variant' | 'quick_model'>(
+    'variant',
+  );
 
   // Sync with active session when it changes
   useEffect(() => {
     if (activeSession) {
       const initial: Record<string, string> = {};
       for (const [skuId, val] of Object.entries(activeSession.counts ?? {})) {
-        initial[skuId] = String(val);
+        if (val !== null && val !== undefined) {
+          initial[skuId] = String(val);
+        }
       }
       setCounts(initial);
+
+      const initialQuick: Record<string, string> = {};
+      for (const [groupKey, val] of Object.entries(
+        activeSession.modelQuickCounts ?? {},
+      )) {
+        if (val !== null && val !== undefined) {
+          initialQuick[groupKey] = String(val);
+        }
+      }
+      setQuickCounts(initialQuick);
       setNotes(activeSession.notes ?? '');
     } else {
       setCounts({});
+      setQuickCounts({});
       setNotes('');
     }
   }, [activeSession]);
@@ -103,7 +125,7 @@ export function AuditView({
 
   // Modals & feedback
   const [showCloseModal, setShowCloseModal] = useState(false);
-  const [applyAdjustments, setApplyAdjustments] = useState(true);
+  const [applyAdjustments, setApplyAdjustments] = useState(isAdmin);
   const [closeReason, setCloseReason] = useState('Auditoría física y conteo mensual');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
@@ -136,6 +158,63 @@ export function AuditView({
     }
     return res;
   }, [counts]);
+
+  // Parsed quick model counts (preserve null for cleared keys)
+  const parsedQuickModelCounts = useMemo(() => {
+    const res: Record<string, number | null> = {};
+    const allKeys = new Set([
+      ...Object.keys(activeSession?.modelQuickCounts ?? {}),
+      ...Object.keys(quickCounts),
+    ]);
+    for (const k of allKeys) {
+      const raw = quickCounts[k];
+      if (raw !== undefined && raw.trim() !== '') {
+        const n = Math.floor(Number(raw));
+        if (Number.isFinite(n) && n >= 0) {
+          res[k] = n;
+          continue;
+        }
+      }
+      if (activeSession?.modelQuickCounts && k in activeSession.modelQuickCounts) {
+        res[k] = null;
+      }
+    }
+    return res;
+  }, [activeSession?.modelQuickCounts, quickCounts]);
+
+  const quickCountGroups: BaseModelQuickCountGroup[] = useMemo(
+    () =>
+      buildBaseModelQuickCountGroups(
+        state.inventory,
+        parsedNumericCounts,
+        parsedQuickModelCounts,
+      ),
+    [parsedNumericCounts, parsedQuickModelCounts, state.inventory],
+  );
+
+  const filteredQuickGroups = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return quickCountGroups.filter((group) => {
+      if (teamFilter !== 'Todos' && group.team !== teamFilter) return false;
+      const isCounted = group.physicalCount !== null;
+      const hasDiscrepancy =
+        group.status === 'shortage' ||
+        group.status === 'surplus' ||
+        group.status === 'cross_alert';
+
+      if (statusFilter === 'counted' && !isCounted) return false;
+      if (statusFilter === 'uncounted' && isCounted) return false;
+      if (statusFilter === 'discrepancy' && !hasDiscrepancy) return false;
+
+      if (!q) return true;
+      return (
+        group.baseModel.toLowerCase().includes(q) ||
+        group.team.toLowerCase().includes(q) ||
+        group.versions.some((v) => v.toLowerCase().includes(q)) ||
+        group.skus.some((s) => s.model.toLowerCase().includes(q))
+      );
+    });
+  }, [quickCountGroups, searchQuery, statusFilter, teamFilter]);
 
   // Calculate the 6 exact indicators
   const metrics = useMemo(() => {
@@ -195,24 +274,39 @@ export function AuditView({
     }));
   };
 
+  const handleQuickModelCountChange = (groupKey: string, val: string) => {
+    if (isClosed) return;
+    setFeedback(null);
+    setQuickCounts((prev) => ({
+      ...prev,
+      [groupKey]: val,
+    }));
+  };
+
   const handleSaveProgress = async () => {
     setFeedback(null);
-    const res = await Promise.resolve(onSaveProgress(parsedNumericCounts, notes));
+    const res = await Promise.resolve(
+      onSaveProgress(parsedNumericCounts, notes, parsedQuickModelCounts),
+    );
     if (!res.ok) {
       setFeedback({ type: 'error', text: res.error ?? 'Error al guardar el progreso.' });
       return;
     }
     const countedSkus = Object.keys(parsedNumericCounts).length;
+    const countedModels = Object.values(parsedQuickModelCounts).filter(
+      (v) => v !== null && v !== undefined,
+    ).length;
     setFeedback({
       type: 'success',
-      text: `Progreso guardado exitosamente en Firebase (${countedSkus} SKUs registrados). Puedes continuar en cualquier momento.`,
+      text: `Progreso guardado exitosamente en Firebase (${countedSkus} SKUs · ${countedModels} modelos rápidos). Puedes continuar en cualquier momento.`,
     });
   };
 
   const handleStartNewSession = async () => {
     if (
       !isClosed &&
-      Object.keys(parsedNumericCounts).length > 0 &&
+      (Object.keys(parsedNumericCounts).length > 0 ||
+        Object.values(parsedQuickModelCounts).some((v) => v !== null)) &&
       !window.confirm(
         'Hay un conteo en borrador activo. ¿Deseas descartarlo e iniciar una nueva auditoría desde cero?',
       )
@@ -222,10 +316,11 @@ export function AuditView({
     const res = await Promise.resolve(onStartNewAuditSession());
     if (res.ok) {
       setCounts({});
+      setQuickCounts({});
       setNotes('');
       setFeedback({
         type: 'info',
-        text: 'Nueva sesión de auditoría iniciada. Ingresa el conteo físico de cada franela.',
+        text: 'Nueva sesión de auditoría iniciada. Ingresa el conteo físico de cada franela o por modelo base.',
       });
       setViewTab('conteo');
     } else {
@@ -237,9 +332,15 @@ export function AuditView({
     if (isSubmitting) return;
     setFeedback(null);
     setIsSubmitting(true);
+    const shouldApplyToInventory = isAdmin && applyAdjustments;
     try {
       const res = await Promise.resolve(
-        onCloseAuditSession(parsedNumericCounts, applyAdjustments, closeReason),
+        onCloseAuditSession(
+          parsedNumericCounts,
+          shouldApplyToInventory,
+          closeReason,
+          parsedQuickModelCounts,
+        ),
       );
       if (!res.ok) {
         setFeedback({ type: 'error', text: res.error ?? 'Error al cerrar el recuento.' });
@@ -249,7 +350,7 @@ export function AuditView({
       setShowCloseModal(false);
       setFeedback({
         type: 'success',
-        text: applyAdjustments
+        text: shouldApplyToInventory
           ? 'Recuento cerrado exitosamente: Se archivaron las métricas y se actualizaron las unidades en inventario.'
           : 'Recuento cerrado y archivado exitosamente sin modificar el stock de inventario.',
       });
@@ -415,14 +516,20 @@ export function AuditView({
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleUncrossOneClick(alert)}
-                  className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white shadow hover:bg-amber-500 active:scale-[0.99] whitespace-nowrap shrink-0 transition-colors"
-                >
-                  <ArrowLeftRight className="h-4 w-4" />
-                  Descruzar 1-Clic
-                </button>
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => handleUncrossOneClick(alert)}
+                    className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white shadow hover:bg-amber-500 active:scale-[0.99] whitespace-nowrap shrink-0 transition-colors"
+                  >
+                    <ArrowLeftRight className="h-4 w-4" />
+                    Descruzar 1-Clic
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-200 whitespace-nowrap shrink-0">
+                    <Lock className="h-3.5 w-3.5" /> Solo Admin ejecuta descruce
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -650,6 +757,48 @@ export function AuditView({
       ) : (
         /* HOJA DE CONTEO ACTIVA */
         <section className="space-y-4">
+          {/* Selector de Modo de Vista dentro de Auditoría */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-[#0D1526] p-3.5 sm:px-5">
+            <div className="text-xs text-slate-300">
+              <strong className="text-white">Modo de conteo físico:</strong>{' '}
+              <span className="text-slate-400">
+                {countViewMode === 'variant'
+                  ? 'Detallado SKU por variante, versión y talla.'
+                  : 'Agrupado por Modelo Base (ignorando dorsal/jugador y tallas S–XXL).'}
+              </span>
+            </div>
+            <div
+              role="group"
+              aria-label="Modo de conteo de auditoría"
+              className="inline-flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-800 bg-[#070D19] p-1"
+            >
+              <button
+                type="button"
+                data-testid="audit-mode-variant"
+                onClick={() => setCountViewMode('variant')}
+                className={`min-h-[36px] rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                  countViewMode === 'variant'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                Por Variante (Talla/Jugador)
+              </button>
+              <button
+                type="button"
+                data-testid="audit-mode-quick-model"
+                onClick={() => setCountViewMode('quick_model')}
+                className={`min-h-[36px] rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                  countViewMode === 'quick_model'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                Conteo Rápido por Modelo ({quickCountGroups.length})
+              </button>
+            </div>
+          </div>
+
           {/* Search & Filters */}
           <div className="rounded-2xl border border-slate-800 bg-[#0D1526] p-4 sm:p-5 space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -659,7 +808,11 @@ export function AuditView({
                   type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar franela por modelo, equipo o talla para conteo..."
+                  placeholder={
+                    countViewMode === 'quick_model'
+                      ? 'Buscar modelo base o equipo...'
+                      : 'Buscar franela por modelo, equipo o talla para conteo...'
+                  }
                   className="w-full min-h-[44px] rounded-xl border border-slate-700 bg-[#070D19] pl-10 pr-4 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
                 />
               </div>
@@ -675,7 +828,7 @@ export function AuditView({
                       : 'bg-[#080E1C] text-slate-400 hover:text-white'
                   }`}
                 >
-                  Todos ({state.inventory.length})
+                  Todos ({countViewMode === 'quick_model' ? quickCountGroups.length : state.inventory.length})
                 </button>
                 <button
                   type="button"
@@ -686,7 +839,11 @@ export function AuditView({
                       : 'bg-[#080E1C] text-slate-400 hover:text-white'
                   }`}
                 >
-                  Contados ({Object.keys(parsedNumericCounts).length})
+                  Contados (
+                  {countViewMode === 'quick_model'
+                    ? quickCountGroups.filter((g) => g.physicalCount !== null).length
+                    : Object.keys(parsedNumericCounts).length}
+                  )
                 </button>
                 <button
                   type="button"
@@ -697,7 +854,11 @@ export function AuditView({
                       : 'bg-[#080E1C] text-slate-400 hover:text-white'
                   }`}
                 >
-                  No contados ({metrics.uncountedItems})
+                  No contados (
+                  {countViewMode === 'quick_model'
+                    ? quickCountGroups.filter((g) => g.physicalCount === null).length
+                    : metrics.uncountedItems}
+                  )
                 </button>
                 <button
                   type="button"
@@ -708,7 +869,16 @@ export function AuditView({
                       : 'bg-[#080E1C] text-slate-400 hover:text-white'
                   }`}
                 >
-                  Con diferencia ({metrics.unreconciledItems})
+                  Con diferencia (
+                  {countViewMode === 'quick_model'
+                    ? quickCountGroups.filter(
+                        (g) =>
+                          g.status === 'shortage' ||
+                          g.status === 'surplus' ||
+                          g.status === 'cross_alert',
+                      ).length
+                    : metrics.unreconciledItems}
+                  )
                 </button>
               </div>
             </div>
@@ -732,16 +902,232 @@ export function AuditView({
             </div>
           </div>
 
-          {/* Table / List */}
-          <div className="rounded-2xl border border-slate-800 bg-[#0D1526] overflow-hidden shadow-xl">
-            {filteredItems.length === 0 ? (
-              <div className="p-8 text-center text-sm text-slate-400">
-                No se encontraron franelas con los criterios de búsqueda seleccionados.
-              </div>
-            ) : (
-              <>
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full text-left text-sm">
+          {countViewMode === 'quick_model' ? (
+            /* MODO: CONTEO RÁPIDO POR MODELO BASE */
+            <div className="rounded-2xl border border-slate-800 bg-[#0D1526] overflow-hidden shadow-xl">
+              {filteredQuickGroups.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-400">
+                  No hay modelos activos que coincidan con los filtros seleccionados.
+                </div>
+              ) : (
+                <>
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="border-b border-slate-800 bg-[#080E1C] text-xs font-medium text-slate-400">
+                        <tr>
+                          <th scope="col" className="px-5 py-3.5">Equipo</th>
+                          <th scope="col" className="px-5 py-3.5">Modelo Base (Tallas y dorsales agrupados)</th>
+                          <th scope="col" className="px-5 py-3.5 text-right">Total Sistema</th>
+                          <th scope="col" className="px-5 py-3.5 text-right">Total Físico</th>
+                          <th scope="col" className="px-5 py-3.5 text-right">Diferencia</th>
+                          <th scope="col" className="px-5 py-3.5">Diagnóstico en Tiempo Real</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/70">
+                        {filteredQuickGroups.map((group) => {
+                          const raw = quickCounts[group.groupKey] ?? '';
+                          const isComplete = group.status === 'complete';
+                          const isCrossAlert = group.status === 'cross_alert';
+                          const isRealDiff =
+                            group.status === 'shortage' || group.status === 'surplus';
+
+                          return (
+                            <tr
+                              key={group.groupKey}
+                              data-testid={`quick-model-row-${group.groupKey}`}
+                              className={`transition-colors ${
+                                isRealDiff
+                                  ? 'bg-red-500/5 hover:bg-red-500/10'
+                                  : isCrossAlert
+                                    ? 'bg-amber-500/5 hover:bg-amber-500/10'
+                                    : isComplete
+                                      ? 'bg-emerald-500/5 hover:bg-emerald-500/10'
+                                      : 'hover:bg-slate-800/35'
+                              }`}
+                            >
+                              <td className="px-5 py-3 text-xs font-medium text-blue-300 whitespace-nowrap">
+                                {group.team}
+                              </td>
+                              <td className="px-5 py-3">
+                                <p className="font-semibold text-white">{group.baseModel}</p>
+                                <p className="text-[11px] text-slate-400">
+                                  {group.versions.join(' · ')} · {group.skuCount}{' '}
+                                  {group.skuCount === 1 ? 'variante' : 'variantes'}
+                                </p>
+                              </td>
+                              <td className="px-5 py-3 text-right font-mono-num font-bold text-white whitespace-nowrap">
+                                {group.totalSystemUnits} uds
+                              </td>
+                              <td className="px-5 py-3 text-right">
+                                <label
+                                  htmlFor={`quick-model-input-${group.groupKey}`}
+                                  className="sr-only"
+                                >
+                                  Total físico para {group.baseModel}
+                                </label>
+                                <input
+                                  id={`quick-model-input-${group.groupKey}`}
+                                  data-testid={`quick-model-input-${group.groupKey}`}
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  disabled={isClosed}
+                                  placeholder={String(group.totalSystemUnits)}
+                                  value={raw}
+                                  onChange={(e) =>
+                                    handleQuickModelCountChange(group.groupKey, e.target.value)
+                                  }
+                                  className={`font-mono-num min-h-[38px] w-24 rounded-lg border px-2.5 py-1 text-right text-sm font-semibold transition-colors focus:outline-none ${
+                                    isClosed
+                                      ? 'border-slate-800 bg-slate-900 text-slate-500'
+                                      : isRealDiff
+                                        ? 'border-red-500/60 bg-[#070D19] text-red-200 focus:border-red-500'
+                                        : isCrossAlert
+                                          ? 'border-amber-500/60 bg-[#070D19] text-amber-200 focus:border-amber-500'
+                                          : isComplete
+                                            ? 'border-emerald-500/60 bg-[#070D19] text-emerald-200 focus:border-emerald-500'
+                                            : 'border-slate-700 bg-[#070D19] text-white focus:border-blue-500'
+                                  }`}
+                                />
+                              </td>
+                              <td className="px-5 py-3 text-right font-mono-num font-bold whitespace-nowrap">
+                                {group.delta === null ? (
+                                  <span className="text-xs text-slate-500">Sin contar</span>
+                                ) : group.delta === 0 ? (
+                                  <span className="text-emerald-400">0 ✓</span>
+                                ) : group.delta > 0 ? (
+                                  <span className="text-red-400">+{group.delta} uds</span>
+                                ) : (
+                                  <span className="text-red-400">{group.delta} uds</span>
+                                )}
+                              </td>
+                              <td className="px-5 py-3">
+                                {group.status === 'pending' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+                                    <Clock className="h-3.5 w-3.5" /> Pendiente de conteo
+                                  </span>
+                                )}
+                                {group.status === 'complete' && (
+                                  <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                                    Lote de modelo completo
+                                  </span>
+                                )}
+                                {group.status === 'cross_alert' && (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-200">
+                                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                                      Posible cruce de talla/jugador detectado (revisar en Descruce)
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSearchQuery(group.baseModel);
+                                        setCountViewMode('variant');
+                                      }}
+                                      className="rounded-md border border-amber-500/40 bg-[#080E1C] px-2 py-1 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20"
+                                    >
+                                      Ver tallas
+                                    </button>
+                                  </div>
+                                )}
+                                {group.status === 'shortage' && group.delta !== null && (
+                                  <span className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/15 px-2.5 py-1 text-xs font-semibold text-red-300">
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                                    Faltante real de {Math.abs(group.delta)} uds
+                                  </span>
+                                )}
+                                {group.status === 'surplus' && group.delta !== null && (
+                                  <span className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/15 px-2.5 py-1 text-xs font-semibold text-red-300">
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                                    Sobrante real de {group.delta} uds
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile cards for Conteo Rápido por Modelo */}
+                  <div className="divide-y divide-slate-800/80 md:hidden">
+                    {filteredQuickGroups.map((group) => {
+                      const raw = quickCounts[group.groupKey] ?? '';
+                      return (
+                        <div key={group.groupKey} className="p-4 space-y-2.5 text-xs">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="text-[11px] font-medium text-blue-300">
+                                {group.team} · {group.versions.join(' · ')}
+                              </span>
+                              <p className="font-semibold text-white text-sm">
+                                {group.baseModel}
+                              </p>
+                              <p className="text-slate-400 font-mono-num">
+                                Total Sistema:{' '}
+                                <strong className="text-white">{group.totalSystemUnits} uds</strong> ·{' '}
+                                {group.skuCount} variantes
+                              </p>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              disabled={isClosed}
+                              placeholder={String(group.totalSystemUnits)}
+                              value={raw}
+                              onChange={(e) =>
+                                handleQuickModelCountChange(group.groupKey, e.target.value)
+                              }
+                              className="font-mono-num min-h-[42px] w-24 shrink-0 rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-right text-sm font-semibold text-white focus:border-blue-500 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            {group.status === 'pending' && (
+                              <span className="text-slate-500">Pendiente de conteo</span>
+                            )}
+                            {group.status === 'complete' && (
+                              <span className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-300">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Lote de modelo completo
+                              </span>
+                            )}
+                            {group.status === 'cross_alert' && (
+                              <span className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-200">
+                                <AlertTriangle className="h-3.5 w-3.5" /> Posible cruce de talla/jugador detectado (revisar en Descruce)
+                              </span>
+                            )}
+                            {group.status === 'shortage' && group.delta !== null && (
+                              <span className="inline-flex items-center gap-1 rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 font-semibold text-red-300">
+                                <AlertCircle className="h-3.5 w-3.5" /> Faltante real de {Math.abs(group.delta)} uds
+                              </span>
+                            )}
+                            {group.status === 'surplus' && group.delta !== null && (
+                              <span className="inline-flex items-center gap-1 rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 font-semibold text-red-300">
+                                <AlertCircle className="h-3.5 w-3.5" /> Sobrante real de {group.delta} uds
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            /* Table / List (Por Variante S-XXL / Jugador) */
+            <div className="rounded-2xl border border-slate-800 bg-[#0D1526] overflow-hidden shadow-xl">
+              {filteredItems.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-400">
+                  No se encontraron franelas con los criterios de búsqueda seleccionados.
+                </div>
+              ) : (
+                <>
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left text-sm">
                     <thead className="border-b border-slate-800 bg-[#080E1C] text-xs font-medium text-slate-400">
                       <tr>
                         <th scope="col" className="px-5 py-3.5">Categoría / Equipo</th>
@@ -905,10 +1291,11 @@ export function AuditView({
                       </div>
                     );
                   })}
-                </div>
-              </>
-            )}
-          </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -965,18 +1352,27 @@ export function AuditView({
             </div>
 
             <div className="space-y-4">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={applyAdjustments}
-                  onChange={(e) => setApplyAdjustments(e.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-slate-700 bg-[#070D19] text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-xs text-slate-300">
-                  <strong className="block text-white">Actualizar stock físico en inventario:</strong>
-                  Aplica automáticamente los sobrantes y faltantes al inventario de Firebase con trazabilidad FIFO en mermas. Si se desmarca, el recuento solo se guardará como reporte de auditoría sin alterar el stock.
-                </span>
-              </label>
+              {isAdmin ? (
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={applyAdjustments}
+                    onChange={(e) => setApplyAdjustments(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-slate-700 bg-[#070D19] text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-xs text-slate-300">
+                    <strong className="block text-white">Actualizar stock físico en inventario:</strong>
+                    Aplica automáticamente los sobrantes y faltantes al inventario de Firebase con trazabilidad FIFO en mermas. Si se desmarca, el recuento solo se guardará como reporte de auditoría sin alterar el stock.
+                  </span>
+                </label>
+              ) : (
+                <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                  <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                  <span>
+                    El recuento se cerrará únicamente como reporte de auditoría sin alterar el stock del inventario (solo el Administrador Principal puede aplicar ajustes directos al inventario).
+                  </span>
+                </div>
+              )}
 
               <div>
                 <label htmlFor="close-reason-input" className="block text-xs font-medium text-slate-300">

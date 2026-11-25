@@ -220,6 +220,12 @@ export interface SaleRecord {
   breakdown: FourLayerBreakdown;
   userName?: string;
   clientOperationId?: string;
+  voided?: boolean;
+  voidedAt?: string;
+  voidedBy?: string;
+  voidReason?: string;
+  convertedToCreditAt?: string;
+  convertedToCreditBy?: string;
   createdAt: string;
 }
 
@@ -414,6 +420,7 @@ export interface InventoryAuditSession {
   closedAt?: string;
   notes?: string;
   counts: Record<string, number | null>;
+  modelQuickCounts?: Record<string, number | null>;
   summary?: InventoryAuditSummaryMetrics;
   closedBy?: string;
 }
@@ -447,6 +454,8 @@ export interface AuditMovement {
   id: string;
   type:
     | 'sale'
+    | 'sale_void'
+    | 'sale_to_cxc'
     | 'purchase'
     | 'collection'
     | 'reinvestment'

@@ -109,13 +109,17 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
   const totalUnits = getTotalUnits(state);
   const totalInvCost = getTotalInventoryCostValue(state);
   const totalReceivables = getTotalReceivables(state);
+  const activeSales = useMemo(
+    () => state.sales.filter((s) => !s.voided),
+    [state.sales],
+  );
   const totalSalesRevenue = round2(
-    state.sales.reduce((sum, s) => sum + s.finalPrice, 0),
+    activeSales.reduce((sum, s) => sum + s.finalPrice, 0),
   );
 
   const sellerStats = useMemo(() => {
     return SELLERS.map((seller) => {
-      const sellerSales = state.sales.filter((s) => s.seller === seller);
+      const sellerSales = activeSales.filter((s) => s.seller === seller);
       const totalSold = round2(
         sellerSales.reduce((sum, s) => sum + s.finalPrice, 0),
       );
@@ -129,7 +133,7 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
         commissionEarned,
       };
     });
-  }, [state.funds.commissionsBySeller, state.sales]);
+  }, [activeSales, state.funds.commissionsBySeller]);
 
   const ranking = useMemo(
     () =>
@@ -300,18 +304,18 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
 
     const salesBySeller = SELLERS.map((seller) =>
       round2(
-        state.sales
+        activeSales
           .filter((s) => s.seller === seller)
           .reduce((sum, s) => sum + s.finalPrice, 0),
       ),
     );
     const noSellerSales = round2(
-      state.sales
+      activeSales
         .filter((s) => isUnassignedSeller(s.seller))
         .reduce((sum, s) => sum + s.finalPrice, 0),
     );
 
-    const hasSales = state.sales.length > 0;
+    const hasSales = activeSales.length > 0;
 
     const labels = hasSales
       ? ['Jesús', 'Josué', 'Gabriel', 'Sin Asignar']
@@ -360,7 +364,7 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
     });
 
     return () => chart.destroy();
-  }, [chartAxisLabelColor, chartGridColor, chartTickColor, state.receivables, state.sales]);
+  }, [activeSales, chartAxisLabelColor, chartGridColor, chartTickColor, state.receivables]);
 
   // New Chart 4: Size Ranking (Units)
   useEffect(() => {

@@ -59,6 +59,7 @@ import {
   attachSaleCalendarMetadata,
   closeAuditSession,
   collectReceivable,
+  convertCashSaleToReceivable,
   DEFAULT_GENERAL_CONFIG,
   getActiveOperationalAlerts,
   normalizeGeneralConfig,
@@ -79,6 +80,7 @@ import {
   syncUnassignedCashToGrowthFund,
   updateExchangeRates,
   upsertCustomerProfile,
+  voidSaleTransaction,
   withdrawPartnerDividends,
 } from './utils/finance';
 import {
@@ -92,6 +94,7 @@ import type {
   ActionResult,
   AdjustInventoryCountInput,
   ApplyAuditAdjustmentsInput,
+  ConvertSaleToReceivableInput,
   OperationalAlert,
   ProcessReturnExchangeInput,
   ReceiveImportBatchInput,
@@ -101,6 +104,7 @@ import type {
   RegisterMultiSaleInput,
   RegisterOperatingExpenseInput,
   UpsertCustomerInput,
+  VoidSaleInput,
 } from './utils/finance';
 import {
   markAllAlertsSeenIds,
@@ -866,10 +870,55 @@ export default function App() {
     );
   };
 
-  const handleReconcileCash = (input: ReconcileCashInput) =>
-    runAtomicErpOperation('reconcile-cash', (current) =>
+  const handleReconcileCash = async (
+    input: ReconcileCashInput,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Arqueo y Conciliación de Caja')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
+    return runAtomicErpOperation('reconcile-cash', (current) =>
       reconcileCashOnHand(current, input),
     );
+  };
+
+  const handleConvertSaleToReceivable = async (
+    input: ConvertSaleToReceivableInput,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Pasar Venta de Contado a CxC')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
+    return runAtomicErpOperation(`sale-to-cxc-${input.saleId}`, (current) =>
+      convertCashSaleToReceivable(current, {
+        ...input,
+        actorName: currentUser?.name,
+        actorRole: currentUser?.role,
+      }),
+    );
+  };
+
+  const handleVoidSale = async (
+    input: VoidSaleInput,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Anular Venta')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
+    return runAtomicErpOperation(`void-sale-${input.saleId}`, (current) =>
+      voidSaleTransaction(current, {
+        ...input,
+        actorName: currentUser?.name,
+        actorRole: currentUser?.role,
+      }),
+    );
+  };
 
   const handleAdjustInventoryCount = async (
     input: AdjustInventoryCountInput,
@@ -888,7 +937,7 @@ export default function App() {
     );
   };
 
-  const handleRegisterManualInventoryAdjustment = (input: {
+  const handleRegisterManualInventoryAdjustment = async (input: {
     adjustmentType: 'entrada' | 'salida' | 'descruce';
     skuId: string;
     quantity: number;
@@ -896,7 +945,13 @@ export default function App() {
     user?: string;
     targetSkuId?: string;
     unitCost?: number;
-  }) => {
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Ajustes Manuales de Inventario')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
     const opKey = `adj-${input.skuId}-${Date.now()}`;
     return runAtomicErpOperation(opKey, (current) => {
       const actorName = input.user?.trim() || currentUser?.name;
@@ -927,13 +982,19 @@ export default function App() {
     });
   };
 
-  const handlePerformInventoryUncross = (input: {
+  const handlePerformInventoryUncross = async (input: {
     sourceSkuId: string;
     targetSkuId: string;
     quantity: number;
     reason?: string;
     user?: string;
-  }) => {
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Descruce de Inventario')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
     const opKey = `uncross-${input.sourceSkuId}-${input.targetSkuId}-${Date.now()}`;
     return runAtomicErpOperation(opKey, (current) =>
       performInventoryUncross(current, {
@@ -949,16 +1010,27 @@ export default function App() {
   const handleSaveAuditProgress = (
     counts: Record<string, number>,
     notes?: string,
+    modelQuickCounts?: Record<string, number | null>,
   ) =>
     runAtomicErpOperation('audit-save-progress', (current) =>
-      saveAuditProgress(current, counts, notes),
+      saveAuditProgress(current, counts, notes, modelQuickCounts),
     );
 
-  const handleCloseAuditSession = (
+  const handleCloseAuditSession = async (
     counts: Record<string, number>,
     applyAdjustmentsToInventory: boolean,
     reason?: string,
-  ) => {
+    modelQuickCounts?: Record<string, number | null>,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (
+      applyAdjustmentsToInventory &&
+      !checkAdminPermission('Aplicar Ajustes de Auditoría al Inventario')
+    ) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
     const opKey = `audit-close-${Date.now()}`;
     return runAtomicErpOperation(opKey, (current) =>
       closeAuditSession(
@@ -967,6 +1039,7 @@ export default function App() {
         applyAdjustmentsToInventory,
         reason,
         currentUser?.name,
+        modelQuickCounts,
       ),
     );
   };
@@ -976,13 +1049,22 @@ export default function App() {
       startNewAuditSession(current),
     );
 
-  const handleApplyAuditAdjustments = (input: ApplyAuditAdjustmentsInput) =>
-    runAtomicErpOperation('apply-audit-adjustments', (current) =>
+  const handleApplyAuditAdjustments = async (
+    input: ApplyAuditAdjustmentsInput,
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Ajustes Manuales de Inventario')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
+    return runAtomicErpOperation('apply-audit-adjustments', (current) =>
       applyAuditAdjustments(current, {
         ...input,
         actorName: input.actorName ?? currentUser?.name,
       }),
     );
+  };
 
   const handleProcessReturnOrExchange = (input: ProcessReturnExchangeInput) => {
     const opKey =
@@ -1436,6 +1518,7 @@ export default function App() {
               {activeTab === 'ventas' && (
                 <SalesView
                   state={state}
+                  currentUser={currentUser}
                   activeSection={
                     activeSubModule === 'ventas-historial'
                       ? 'historial'
@@ -1450,6 +1533,8 @@ export default function App() {
                   onAttachSaleCalendarMetadata={handleAttachSaleCalendarMetadata}
                   onRegisterMultiSale={handleRegisterMultiSale}
                   onSaveCustomerProfile={handleSaveCustomerProfile}
+                  onConvertSaleToReceivable={handleConvertSaleToReceivable}
+                  onVoidSale={handleVoidSale}
                 />
               )}
 
@@ -1520,6 +1605,7 @@ export default function App() {
               {activeTab === 'finanzas' && activeSubModule !== 'ventas-cxc' && (
                 <FinanceView
                   state={state}
+                  currentUser={currentUser}
                   activeSection={
                     activeSubModule === 'finanzas-gastos'
                       ? 'gastos'

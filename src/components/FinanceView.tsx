@@ -28,6 +28,7 @@ import type {
   PaymentMethod,
   SinglePaymentMethod,
 } from '../types/erp';
+import { isAdminUser, type ERPUser } from '../utils/auth';
 import type {
   ReconcileCashInput,
   RegisterCapitalInjectionInput,
@@ -49,6 +50,7 @@ import {
 
 interface FinanceViewProps {
   state: AppState;
+  currentUser?: ERPUser | null;
   activeSection?: 'matriz' | 'gastos' | 'socios' | 'cxc';
   matrixParams?: MatrixConfigParams;
   onCollectReceivable: (
@@ -128,6 +130,7 @@ const PETTY_CASH_QUICK_PRESETS: Array<{
 
 export function FinanceView({
   state,
+  currentUser,
   activeSection,
   matrixParams,
   onCollectReceivable,
@@ -139,6 +142,7 @@ export function FinanceView({
   onReconcileCash,
   onResetDemoData,
 }: FinanceViewProps) {
+  const isAdmin = isAdminUser(currentUser);
   const effectiveMatrixParams = matrixParams ?? DEFAULT_GENERAL_CONFIG.matrixParams;
   const vitalReserveMinUsd = round2(
     Math.max(0, effectiveMatrixParams.vitalReserveMinUsd ?? 150),
@@ -555,39 +559,40 @@ export function FinanceView({
             {downloadingHtml ? 'Generando index.html...' : 'Descargar index.html (Netlify Drop)'}
           </button>
 
-          {!confirmReset ? (
-            <button
-              type="button"
-              onClick={() => setConfirmReset(true)}
-              className="min-h-[40px] rounded-lg border border-slate-700 bg-[#0D1526] px-3.5 py-2 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-            >
-              Restablecer Datos Iniciales
-            </button>
-          ) : (
-            <div className="flex items-center gap-2">
+          {isAdmin &&
+            (!confirmReset ? (
               <button
                 type="button"
-                onClick={() => {
-                  onResetDemoData();
-                  setConfirmReset(false);
-                  setFeedback({
-                    type: 'success',
-                    text: 'Saldos oficiales X4SPORT ($135.19 caja, $263.50 CxC, sin ítems de prueba) restablecidos.',
-                  });
-                }}
-                className="min-h-[40px] rounded-lg bg-red-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-500"
+                onClick={() => setConfirmReset(true)}
+                className="min-h-[40px] rounded-lg border border-slate-700 bg-[#0D1526] px-3.5 py-2 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
               >
-                Confirmar Restablecimiento
+                Restablecer Datos Iniciales
               </button>
-              <button
-                type="button"
-                onClick={() => setConfirmReset(false)}
-                className="min-h-[40px] rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
-              >
-                Cancelar
-              </button>
-            </div>
-          )}
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onResetDemoData();
+                    setConfirmReset(false);
+                    setFeedback({
+                      type: 'success',
+                      text: 'Saldos oficiales X4SPORT ($135.19 caja, $263.50 CxC, sin ítems de prueba) restablecidos.',
+                    });
+                  }}
+                  className="min-h-[40px] rounded-lg bg-red-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-500"
+                >
+                  Confirmar Restablecimiento
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmReset(false)}
+                  className="min-h-[40px] rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+              </div>
+            ))}
         </div>
       </div>
 
@@ -685,19 +690,21 @@ export function FinanceView({
                 Igualar Fondos (+{formatUSD(unassignedCash)})
               </button>
             )}
-            <button
-              type="button"
-              data-testid="btn-open-arqueo"
-              onClick={() => {
-                setModalCountedCashInput(state.cashOnHand.toFixed(2));
-                setModalReconcileReason('');
-                setIsArqueoModalOpen(true);
-              }}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-950/40 transition-colors hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-            >
-              <Scale className="h-4 w-4 shrink-0" aria-hidden="true" />
-              Arqueo / Ajustar Caja
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                data-testid="btn-open-arqueo"
+                onClick={() => {
+                  setModalCountedCashInput(state.cashOnHand.toFixed(2));
+                  setModalReconcileReason('');
+                  setIsArqueoModalOpen(true);
+                }}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-950/40 transition-colors hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+              >
+                <Scale className="h-4 w-4 shrink-0" aria-hidden="true" />
+                Arqueo / Ajustar Caja
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -1551,149 +1558,158 @@ export function FinanceView({
             </span>
           </div>
 
-          <form
-            onSubmit={handleCapitalInjectionSubmit}
-            className="grid grid-cols-1 gap-4 sm:grid-cols-12 sm:items-start"
-          >
-            <div className="sm:col-span-4">
-              <label
-                htmlFor="injection-contributor"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Aportante / Origen *
-              </label>
-              <input
-                id="injection-contributor"
-                type="text"
-                required
-                value={injContributor}
-                onChange={(e) => setInjContributor(e.target.value)}
-                placeholder="Ej. Jesús / Aporte Externo"
-                className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {CONTRIBUTOR_PRESETS.map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setInjContributor(preset)}
-                    className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                      injContributor === preset
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-[#080E1C] text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {preset}
-                  </button>
-                ))}
+          {isAdmin ? (
+            <form
+              onSubmit={handleCapitalInjectionSubmit}
+              className="grid grid-cols-1 gap-4 sm:grid-cols-12 sm:items-start"
+            >
+              <div className="sm:col-span-4">
+                <label
+                  htmlFor="injection-contributor"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Aportante / Origen *
+                </label>
+                <input
+                  id="injection-contributor"
+                  type="text"
+                  required
+                  value={injContributor}
+                  onChange={(e) => setInjContributor(e.target.value)}
+                  placeholder="Ej. Jesús / Aporte Externo"
+                  className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {CONTRIBUTOR_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setInjContributor(preset)}
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                        injContributor === preset
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-[#080E1C] text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
 
-            <div className="sm:col-span-5">
-              <label
-                htmlFor="injection-concept"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Concepto del aporte *
-              </label>
-              <input
-                id="injection-concept"
-                type="text"
-                required
-                placeholder="Ej. Capital de trabajo / Liquidez envío"
-                value={injConcept}
-                onChange={(e) => {
-                  setInjConcept(e.target.value);
-                  setFeedback(null);
-                }}
-                className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
+              <div className="sm:col-span-5">
+                <label
+                  htmlFor="injection-concept"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Concepto del aporte *
+                </label>
+                <input
+                  id="injection-concept"
+                  type="text"
+                  required
+                  placeholder="Ej. Capital de trabajo / Liquidez envío"
+                  value={injConcept}
+                  onChange={(e) => {
+                    setInjConcept(e.target.value);
+                    setFeedback(null);
+                  }}
+                  className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
 
-            <div className="sm:col-span-3">
-              <label
-                htmlFor="injection-amount"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Monto (USDT) *
-              </label>
-              <input
-                id="injection-amount"
-                type="number"
-                min="0.01"
-                step="0.01"
-                required
-                placeholder="0.00"
-                value={injAmount}
-                onChange={(e) => {
-                  setInjAmount(e.target.value);
-                  setFeedback(null);
-                }}
-                className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
+              <div className="sm:col-span-3">
+                <label
+                  htmlFor="injection-amount"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Monto (USDT) *
+                </label>
+                <input
+                  id="injection-amount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  required
+                  placeholder="0.00"
+                  value={injAmount}
+                  onChange={(e) => {
+                    setInjAmount(e.target.value);
+                    setFeedback(null);
+                  }}
+                  className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
 
-            <div className="sm:col-span-4">
-              <label
-                htmlFor="injection-method"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Método de ingreso
-              </label>
-              <select
-                id="injection-method"
-                value={injMethod}
-                onChange={(e) =>
-                  setInjMethod(e.target.value as SinglePaymentMethod)
-                }
-                className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                {PAYMENT_METHODS.map((pm) => (
-                  <option key={pm} value={pm}>
-                    {pm}
+              <div className="sm:col-span-4">
+                <label
+                  htmlFor="injection-method"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Método de ingreso
+                </label>
+                <select
+                  id="injection-method"
+                  value={injMethod}
+                  onChange={(e) =>
+                    setInjMethod(e.target.value as SinglePaymentMethod)
+                  }
+                  className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  {PAYMENT_METHODS.map((pm) => (
+                    <option key={pm} value={pm}>
+                      {pm}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="sm:col-span-4">
+                <label
+                  htmlFor="injection-destination"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Destino contable
+                </label>
+                <select
+                  id="injection-destination"
+                  value={injDestination}
+                  onChange={(e) =>
+                    setInjDestination(
+                      e.target.value as CapitalInjectionDestination,
+                    )
+                  }
+                  className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="cashOnly">Solo Caja Operativa</option>
+                  <option value="growthReinvestment">
+                    Caja + Fondo Reinversión
                   </option>
-                ))}
-              </select>
-            </div>
+                  <option value="operatingFund">
+                    Caja + Fondo Operativo 10%
+                  </option>
+                </select>
+              </div>
 
-            <div className="sm:col-span-4">
-              <label
-                htmlFor="injection-destination"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Destino contable
-              </label>
-              <select
-                id="injection-destination"
-                value={injDestination}
-                onChange={(e) =>
-                  setInjDestination(
-                    e.target.value as CapitalInjectionDestination,
-                  )
-                }
-                className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="cashOnly">Solo Caja Operativa</option>
-                <option value="growthReinvestment">
-                  Caja + Fondo Reinversión
-                </option>
-                <option value="operatingFund">
-                  Caja + Fondo Operativo 10%
-                </option>
-              </select>
+              <div className="sm:col-span-4 sm:self-end">
+                <button
+                  type="submit"
+                  data-testid="btn-register-injection"
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                >
+                  <PlusCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  Registrar Inyección
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-xl border border-slate-800 bg-[#080E1C] p-3.5 text-xs text-slate-300">
+              <Lock className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+              <span>
+                Registro de inyecciones de capital habilitado únicamente para el Administrador Principal.
+              </span>
             </div>
-
-            <div className="sm:col-span-4 sm:self-end">
-              <button
-                type="submit"
-                data-testid="btn-register-injection"
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-              >
-                <PlusCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-                Registrar Inyección
-              </button>
-            </div>
-          </form>
+          )}
 
           {(state.capitalInjections ?? []).length === 0 ? (
             <p className="text-xs text-slate-400">
@@ -1773,71 +1789,80 @@ export function FinanceView({
             </div>
           </div>
 
-          <form onSubmit={handleReconcileCashSubmit} className="space-y-3">
-            <div>
-              <label
-                htmlFor="reconcile-counted-cash"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Efectivo físico contado (USDT) *
-              </label>
-              <input
-                id="reconcile-counted-cash"
-                type="number"
-                min="0"
-                step="0.01"
-                required
-                value={countedCashInput}
-                onChange={(e) => {
-                  setCountedCashInput(e.target.value);
-                  setFeedback(null);
-                }}
-                className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              {Number.isFinite(Number(countedCashInput)) &&
-                Math.abs(round2(Number(countedCashInput) - state.cashOnHand)) > 0 && (
-                  <p
-                    className={`mt-1 font-mono-num text-[11px] font-medium ${
-                      round2(Number(countedCashInput) - state.cashOnHand) > 0
-                        ? 'text-emerald-400'
-                        : 'text-amber-300'
-                    }`}
-                  >
-                    Diferencia a conciliar:{' '}
-                    {round2(Number(countedCashInput) - state.cashOnHand) > 0
-                      ? '+'
-                      : ''}
-                    {formatUSD(round2(Number(countedCashInput) - state.cashOnHand))}
-                  </p>
-                )}
-            </div>
+          {isAdmin ? (
+            <form onSubmit={handleReconcileCashSubmit} className="space-y-3">
+              <div>
+                <label
+                  htmlFor="reconcile-counted-cash"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Efectivo físico contado (USDT) *
+                </label>
+                <input
+                  id="reconcile-counted-cash"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={countedCashInput}
+                  onChange={(e) => {
+                    setCountedCashInput(e.target.value);
+                    setFeedback(null);
+                  }}
+                  className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                {Number.isFinite(Number(countedCashInput)) &&
+                  Math.abs(round2(Number(countedCashInput) - state.cashOnHand)) > 0 && (
+                    <p
+                      className={`mt-1 font-mono-num text-[11px] font-medium ${
+                        round2(Number(countedCashInput) - state.cashOnHand) > 0
+                          ? 'text-emerald-400'
+                          : 'text-amber-300'
+                      }`}
+                    >
+                      Diferencia a conciliar:{' '}
+                      {round2(Number(countedCashInput) - state.cashOnHand) > 0
+                        ? '+'
+                        : ''}
+                      {formatUSD(round2(Number(countedCashInput) - state.cashOnHand))}
+                    </p>
+                  )}
+              </div>
 
-            <div>
-              <label
-                htmlFor="reconcile-reason"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Motivo / Referencia del arqueo
-              </label>
-              <input
-                id="reconcile-reason"
-                type="text"
-                placeholder="Ej. Cuadre diario hoja de cálculo / Diferencia de vuelto"
-                value={reconcileReason}
-                onChange={(e) => setReconcileReason(e.target.value)}
-                className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
+              <div>
+                <label
+                  htmlFor="reconcile-reason"
+                  className="block text-xs font-medium text-slate-300"
+                >
+                  Motivo / Referencia del arqueo
+                </label>
+                <input
+                  id="reconcile-reason"
+                  type="text"
+                  placeholder="Ej. Cuadre diario hoja de cálculo / Diferencia de vuelto"
+                  value={reconcileReason}
+                  onChange={(e) => setReconcileReason(e.target.value)}
+                  className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
 
-            <button
-              type="submit"
-              data-testid="btn-reconcile-cash"
-              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-            >
-              <Landmark className="h-4 w-4 shrink-0" aria-hidden="true" />
-              Conciliar Saldo de Caja
-            </button>
-          </form>
+              <button
+                type="submit"
+                data-testid="btn-reconcile-cash"
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                <Landmark className="h-4 w-4 shrink-0" aria-hidden="true" />
+                Conciliar Saldo de Caja
+              </button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-xl border border-slate-800 bg-[#080E1C] p-3.5 text-xs text-slate-300">
+              <Lock className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+              <span>
+                El arqueo y conciliación manual de caja están restringidos al Administrador Principal.
+              </span>
+            </div>
+          )}
 
           {(state.movements ?? []).length > 0 && (() => {
             const allMovements = state.movements ?? [];
@@ -1900,7 +1925,7 @@ export function FinanceView({
       </div>
 
       {/* Modal Arqueo / Ajustar Caja */}
-      {isArqueoModalOpen && (
+      {isAdmin && isArqueoModalOpen && (
         <div
           role="dialog"
           aria-modal="true"

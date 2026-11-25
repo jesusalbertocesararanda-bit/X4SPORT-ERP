@@ -9,6 +9,7 @@ import { parseDolarApiPayload } from './exchangeRatesApi';
 import {
   adjustInventoryPhysicalCount,
   applyAuditAdjustments,
+  buildBaseModelQuickCountGroups,
   calculateAuditMetrics,
   calculateDiscountedUnitPrice,
   calculateElapsedTransitDays,
@@ -16,6 +17,7 @@ import {
   calculateFourLayerMatrixConsolidated,
   closeAuditSession,
   collectReceivable,
+  convertCashSaleToReceivable,
   createImportOrder,
   deductWithRepoReinvestmentBridge,
   DEFAULT_GENERAL_CONFIG,
@@ -24,6 +26,7 @@ import {
   doesItemMatchTeamFilter,
   doesSaleMatchSearchQuery,
   EXPENSE_CATEGORIES,
+  extractBaseModelName,
   extractTeamFromModel,
   formatInvoiceNumber,
   getActiveOperationalAlerts,
@@ -54,6 +57,7 @@ import {
   registerManualInventoryAdjustment,
   registerMultiItemSale,
   registerOperatingExpense,
+  resolveNextInvoiceSeq,
   saveAuditProgress,
   startNewAuditSession,
   registerPurchase,
@@ -64,8 +68,12 @@ import {
   scaleBreakdownToCashAmount,
   syncUnassignedCashToGrowthFund,
   updateExchangeRates,
+  voidSaleTransaction,
   withdrawPartnerDividends,
 } from './finance';
+import { buildCustomerDirectory } from './customers';
+import { buildSalesReportRows } from './reports';
+import { computeSalesRanking } from './statistics';
 import { buildPublicCatalogGroups } from './publicCatalog';
 
 test('initial baseline state matches exact mandatory X4SPORT balances without fake demo items', () => {
@@ -2843,4 +2851,355 @@ test('Manual inventory entry honors custom unitCost and uncross preserves draft 
   // Physical counts stored in activeAuditSession must NOT be shifted away from reality
   assert.equal(uncross.state.activeAuditSession?.counts[skuA.id], expectedCountA);
   assert.equal(uncross.state.activeAuditSession?.counts[skuB.id], expectedCountB);
+});
+
+test('extractBaseModelName strips dorsal/player suffixes and sizes while preserving season years', () => {
+  assert.equal(
+    extractBaseModelName('Barcelona Local 25/26 (#19 Lamine Yamal)'),
+    'Barcelona Local 25/26',
+  );
+  assert.equal(
+    extractBaseModelName('Real Madrid Local 24/25 - Bellingham #5'),
+    'Real Madrid Local 24/25',
+  );
+  assert.equal(
+    extractBaseModelName('Barcelona Retro 08/09 #10 Messi'),
+    'Barcelona Retro 08/09',
+  );
+  assert.equal(
+    extractBaseModelName('Argentina Titular 26/27 - Talla XXL'),
+    'Argentina Titular 26/27',
+  );
+  assert.equal(
+    extractBaseModelName('Milan Local 25/26 L'),
+    'Milan Local 25/26',
+  );
+});
+
+test('buildBaseModelQuickCountGroups detects complete, cross_alert, shortage, surplus, and persists modelQuickCounts', () => {
+  let state = createInitialState();
+  const invRes = registerDirectPurchaseBatch(state, {
+    entryDate: '2026-11-22',
+    referenceName: 'Lote Quick Count',
+    shippingType: 'Aéreo',
+    totalFreightCost: 0,
+    fundingSource: 'cashOnHand',
+    items: [
+      {
+        team: 'Barcelona',
+        model: 'Barcelona Local 25/26 (#19 Lamine Yamal)',
+        version: 'Player',
+        size: 'M',
+        quantity: 3,
+        factoryUnitCost: 6,
+      },
+      {
+        team: 'Barcelona',
+        model: 'Barcelona Local 25/26',
+        version: 'Fans',
+        size: 'L',
+        quantity: 2,
+        factoryUnitCost: 6,
+      },
+      {
+        team: 'Real Madrid',
+        model: 'Real Madrid Local 25/26 - Bellingham #5',
+        version: 'Player',
+        size: 'M',
+        quantity: 4,
+        factoryUnitCost: 6,
+      },
+      {
+        team: 'PSG',
+        model: 'PSG Local 25/26',
+        version: 'Fans',
+        size: 'XL',
+        quantity: 2,
+        factoryUnitCost: 6,
+      },
+    ],
+  });
+  assert.equal(invRes.ok, true);
+  state = invRes.state;
+
+  const fcbM = state.inventory.find((i) => i.team === 'Barcelona' && i.size === 'M')!;
+  const fcbL = state.inventory.find((i) => i.team === 'Barcelona' && i.size === 'L')!;
+  const stockUnitsBefore = getTotalUnits(state);
+
+  // Case 1: Cross alert — Barcelona Total Físico == 5 (Sistema == 5), pero con cruce en variantCounts (M: 2 [-1], L: 3 [+1])
+  // Case 2: Real Madrid exact match (4 == 4) without variant deltas -> 'complete'
+  // Case 3: PSG shortage (1 vs 2 -> -1) -> 'shortage'
+  const variantCounts: Record<string, number | null> = {
+    [fcbM.id]: 2,
+    [fcbL.id]: 3,
+  };
+  const quickCounts: Record<string, number | null> = {
+    'barcelona local 25_26': 5,
+    'real madrid local 25_26': 4,
+    'psg local 25_26': 1,
+  };
+
+  const saved = saveAuditProgress(
+    state,
+    variantCounts,
+    'Conteo rápido inicial',
+    quickCounts,
+  );
+  assert.equal(saved.ok, true);
+  state = saved.state;
+  assert.equal(getTotalUnits(state), stockUnitsBefore);
+  assert.deepEqual(state.activeAuditSession?.counts, variantCounts);
+  assert.deepEqual(state.activeAuditSession?.modelQuickCounts, quickCounts);
+
+  // Firebase roundtrip keeps modelQuickCounts intact
+  const hydrated = normalizeAppState(sanitizeForFirebase(state));
+  assert.deepEqual(hydrated.activeAuditSession?.modelQuickCounts, quickCounts);
+
+  const groups = buildBaseModelQuickCountGroups(
+    hydrated.inventory,
+    hydrated.activeAuditSession?.counts ?? {},
+    hydrated.activeAuditSession?.modelQuickCounts ?? {},
+  );
+  const fcbGroup = groups.find((g) => g.groupKey === 'barcelona local 25_26')!;
+  const rmGroup = groups.find((g) => g.groupKey === 'real madrid local 25_26')!;
+  const psgGroup = groups.find((g) => g.groupKey === 'psg local 25_26')!;
+
+  assert.equal(fcbGroup.totalSystemUnits, 5);
+  assert.equal(fcbGroup.status, 'cross_alert');
+  assert.equal(fcbGroup.hasVariantCrossHint, true);
+  assert.equal(fcbGroup.variantShortageUnits, 1);
+  assert.equal(fcbGroup.variantSurplusUnits, 1);
+
+  assert.equal(rmGroup.totalSystemUnits, 4);
+  assert.equal(rmGroup.status, 'complete');
+
+  assert.equal(psgGroup.totalSystemUnits, 2);
+  assert.equal(psgGroup.delta, -1);
+  assert.equal(psgGroup.status, 'shortage');
+
+  // Surplus check
+  const surplusGroups = buildBaseModelQuickCountGroups(
+    hydrated.inventory,
+    {},
+    { 'psg local 25_26': 4 },
+  );
+  const psgSurplus = surplusGroups.find((g) => g.groupKey === 'psg local 25_26')!;
+  assert.equal(psgSurplus.delta, 2);
+  assert.equal(psgSurplus.status, 'surplus');
+});
+
+test('convertCashSaleToReceivable converts Cobrado sale to Pendiente, reverses cash & 4 layers, keeps FIFO stock, and blocks partner role', () => {
+  let state = createDemoSeedState();
+  state = reconcileCashOnHand(state, { countedCash: 0 }).state;
+
+  const saleRes = registerMultiItemSale(state, {
+    items: [{ skuId: 'sku-fcb-1', quantity: 2, unitPrice: 30 }],
+    customerName: 'Cliente Mostrador',
+    seller: 'Jesús',
+    paymentStatus: 'Cobrado',
+    paymentMethod: 'Efectivo ($)',
+  });
+  assert.equal(saleRes.ok, true);
+  state = saleRes.state;
+  const sale = saleRes.createdSale!;
+  const stockAfterSale = getTotalUnits(state);
+  assert.equal(state.cashOnHand, 60);
+  assert.equal(getTotalAllocatedFunds(state.funds), 60);
+
+  // Partner blocked
+  const partnerBlocked = convertCashSaleToReceivable(state, {
+    saleId: sale.id,
+    customerName: 'Pedro Morales',
+    actorRole: 'partner',
+  });
+  assert.equal(partnerBlocked.ok, false);
+
+  // Walk-in name rejected
+  const walkInRejected = convertCashSaleToReceivable(state, {
+    saleId: sale.id,
+    customerName: 'Cliente Mostrador',
+    actorRole: 'admin',
+  });
+  assert.equal(walkInRejected.ok, false);
+
+  // Convert to CxC with real customer name
+  const converted = convertCashSaleToReceivable(state, {
+    saleId: sale.id,
+    customerName: 'Pedro Morales',
+    note: 'Pagará el viernes',
+    actorName: 'Jesús César',
+    actorRole: 'admin',
+  });
+  assert.equal(converted.ok, true);
+  state = converted.state;
+
+  // Cash & 4-layer funds reversed to $0, FIFO stock untouched
+  assert.equal(state.cashOnHand, 0);
+  assert.equal(getTotalAllocatedFunds(state.funds), 0);
+  assert.equal(getTotalUnits(state), stockAfterSale);
+  assert.equal(state.movements[0].type, 'sale_to_cxc');
+
+  const updatedSale = state.sales.find((s) => s.id === sale.id)!;
+  assert.equal(updatedSale.paymentStatus, 'Pendiente');
+  assert.equal(updatedSale.paidAmount, 0);
+  assert.equal(updatedSale.customerName, 'Pedro Morales');
+  assert.ok(updatedSale.convertedToCreditAt);
+
+  const rec = state.receivables.find((r) => r.saleId === sale.id)!;
+  assert.ok(rec);
+  assert.equal(rec.debtor, 'Pedro Morales');
+  assert.equal(rec.amount, 60);
+
+  // Insufficient cash check on another sale
+  const cashBeforeEmpty = state.cashOnHand;
+  assert.equal(cashBeforeEmpty, 0);
+  const saleRes2 = registerMultiItemSale(state, {
+    items: [{ skuId: 'sku-fcb-1', quantity: 1, unitPrice: 30 }],
+    customerName: 'María',
+    seller: 'Jesús',
+    paymentStatus: 'Cobrado',
+  }).state;
+  const noCashState = reconcileCashOnHand(saleRes2, { countedCash: 5 }).state;
+  const insufficient = convertCashSaleToReceivable(noCashState, {
+    saleId: noCashState.sales[0].id,
+    customerName: 'María',
+    actorRole: 'admin',
+  });
+  assert.equal(insufficient.ok, false);
+
+  // Subsequent collection restores cash & funds cleanly
+  const collected = collectReceivable(state, rec.id, 'Zelle', 60);
+  assert.equal(collected.ok, true);
+  assert.equal(collected.state.cashOnHand, 60);
+  assert.equal(getTotalAllocatedFunds(collected.state.funds), 60);
+  assert.equal(
+    collected.state.sales.find((s) => s.id === sale.id)?.paymentStatus,
+    'Cobrado',
+  );
+});
+
+test('voidSaleTransaction restores FIFO stock without double-counting returns, reverses cash/funds, preserves invoice seq, and excludes from analytics', () => {
+  let state = createDemoSeedState();
+  state = reconcileCashOnHand(state, { countedCash: 0 }).state;
+  const skuBefore = state.inventory.find((i) => i.id === 'sku-fcb-1')!;
+  const initialStock = skuBefore.stock;
+  const totalStockBefore = getTotalUnits(state);
+
+  // Sale #0001 (Cobrado, 2 units @ $30 = $60)
+  const saleRes1 = registerMultiItemSale(state, {
+    items: [{ skuId: 'sku-fcb-1', quantity: 2, unitPrice: 30 }],
+    customerName: 'Cliente Anulable',
+    seller: 'Jesús',
+    paymentStatus: 'Cobrado',
+  });
+  assert.equal(saleRes1.ok, true);
+  state = saleRes1.state;
+  const sale1 = saleRes1.createdSale!;
+  assert.equal(sale1.invoiceNumber, '#0001');
+
+  // Partial return of 1 unit first ($30 refunded, 1 unit returned to stock)
+  const partialRet = processReturnOrExchange(state, {
+    type: 'Devolución',
+    saleId: sale1.id,
+    returnedSkuId: 'sku-fcb-1',
+    returnedQuantity: 1,
+    returnedUnitPrice: 30,
+    reason: 'Talla incorrecta',
+  });
+  assert.equal(partialRet.ok, true);
+  state = partialRet.state;
+  assert.equal(state.cashOnHand, 30);
+  assert.equal(getTotalUnits(state), totalStockBefore - 1);
+
+  // Partner role blocked
+  const partnerBlocked = voidSaleTransaction(state, {
+    saleId: sale1.id,
+    reason: 'Intento socio',
+    actorRole: 'partner',
+  });
+  assert.equal(partnerBlocked.ok, false);
+
+  // Admin voids sale #0001: restores ONLY the remaining 1 unreturned unit and reverses $30
+  const voidRes = voidSaleTransaction(state, {
+    saleId: sale1.id,
+    reason: 'Error de facturación',
+    actorName: 'Jesús César',
+    actorRole: 'admin',
+  });
+  assert.equal(voidRes.ok, true);
+  state = voidRes.state;
+
+  assert.equal(state.cashOnHand, 0);
+  assert.equal(getTotalAllocatedFunds(state.funds), 0);
+  assert.equal(getTotalUnits(state), totalStockBefore);
+  assert.equal(
+    state.inventory.find((i) => i.id === 'sku-fcb-1')?.stock,
+    initialStock,
+  );
+  assert.equal(state.movements[0].type, 'sale_void');
+
+  const voidedSale = state.sales.find((s) => s.id === sale1.id)!;
+  assert.equal(voidedSale.voided, true);
+  assert.equal(voidedSale.voidReason, 'Error de facturación');
+
+  // Double void rejected & return on voided sale rejected
+  assert.equal(
+    voidSaleTransaction(state, { saleId: sale1.id, actorRole: 'admin' }).ok,
+    false,
+  );
+  assert.equal(
+    processReturnOrExchange(state, {
+      type: 'Devolución',
+      saleId: sale1.id,
+      returnedSkuId: 'sku-fcb-1',
+      returnedQuantity: 1,
+      returnedUnitPrice: 30,
+      reason: 'Intento post anulación',
+    }).ok,
+    false,
+  );
+
+  // Sequence #0001 MUST NOT be reused by the next sale
+  assert.equal(resolveNextInvoiceSeq(state), 2);
+  const saleRes2 = registerMultiItemSale(state, {
+    items: [{ skuId: 'sku-fcb-1', quantity: 1, unitPrice: 30 }],
+    customerName: 'Cliente Activo',
+    seller: 'Jesús',
+    paymentStatus: 'Pendiente',
+    paidAmount: 10, // $10 paid, $20 in CxC
+  });
+  assert.equal(saleRes2.ok, true);
+  state = saleRes2.state;
+  const sale2 = saleRes2.createdSale!;
+  assert.equal(sale2.invoiceNumber, '#0002');
+  assert.equal(state.cashOnHand, 10);
+  assert.ok(state.receivables.some((r) => r.saleId === sale2.id));
+
+  // Void credit sale #0002 -> removes linked CxC, reverses $10 partial cash, restores stock
+  const voidCredit = voidSaleTransaction(state, {
+    saleId: sale2.id,
+    reason: 'Cliente canceló pedido',
+    actorRole: 'admin',
+  });
+  assert.equal(voidCredit.ok, true);
+  state = voidCredit.state;
+  assert.equal(state.cashOnHand, 0);
+  assert.equal(getTotalAllocatedFunds(state.funds), 0);
+  assert.equal(getTotalUnits(state), totalStockBefore);
+  assert.equal(
+    state.receivables.some((r) => r.saleId === sale2.id),
+    false,
+  );
+
+  // Analytics, reports, and customer directory exclude both voided sales
+  const ranking = computeSalesRanking(state, 'custom');
+  assert.equal(ranking.totalUnitsSold, 0);
+  assert.equal(ranking.totalRevenueUsd, 0);
+
+  const reportRows = buildSalesReportRows(state);
+  assert.equal(reportRows.length, 0);
+
+  const customerDir = buildCustomerDirectory(state.sales, state.customers ?? []);
+  const voidedBuyer = customerDir.find((c) => c.name === 'Cliente Anulable');
+  assert.equal(voidedBuyer?.purchaseCount ?? 0, 0);
 });

@@ -216,6 +216,7 @@ export function computeSalesRanking(
   let totalRevenueUsd = 0;
 
   for (const sale of state.sales ?? []) {
+    if (sale.voided) continue;
     const sDate = extractSaleDate(sale.saleDate, sale.createdAt);
     if (dateFrom && (!sDate || sDate < dateFrom)) continue;
     if (dateTo && (!sDate || sDate > dateTo)) continue;
@@ -377,6 +378,7 @@ export function computeModelCostHistory(
   let unitsSoldTotal = 0;
   let revenueSoldTotal = 0;
   for (const sale of state.sales ?? []) {
+    if (sale.voided) continue;
     const lines =
       sale.items && sale.items.length > 0
         ? sale.items
@@ -645,6 +647,7 @@ export function computeSmartOrderRecommendation(
 
   // Accumulate historical sales
   for (const sale of state.sales ?? []) {
+    if (sale.voided) continue;
     const sDate = extractSaleDate(sale.saleDate, sale.createdAt);
     const lines =
       sale.items && sale.items.length > 0

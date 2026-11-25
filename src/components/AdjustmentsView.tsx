@@ -4,6 +4,7 @@ import {
   ArrowLeftRight,
   CheckCircle2,
   ClipboardList,
+  Lock,
   MinusCircle,
   PlusCircle,
   Search,
@@ -14,7 +15,7 @@ import type {
   InventoryAdjustmentType,
   InventoryItem,
 } from '../types/erp';
-import type { ERPUser } from '../utils/auth';
+import { isAdminUser, type ERPUser } from '../utils/auth';
 import {
   formatUSD,
   normalizeVersionDisplay,
@@ -71,6 +72,7 @@ export function AdjustmentsView({
   onRegisterAdjustment,
   onPerformUncross,
 }: AdjustmentsViewProps) {
+  const isAdmin = isAdminUser(currentUser);
   const [activeTab, setActiveTab] = useState<'entrada' | 'salida' | 'descruce'>('entrada');
   
   // Single movement (entrada / salida)
@@ -377,6 +379,23 @@ export function AdjustmentsView({
 
       {/* Movement Mode Selector & Form Card */}
       <section className="rounded-2xl border border-slate-800 bg-[#0D1526] p-5 sm:p-7 shadow-xl">
+        {!isAdmin ? (
+          <div
+            data-testid="adjustments-partner-locked"
+            className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200"
+          >
+            <Lock className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" aria-hidden="true" />
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-white">
+                Ajustes Manuales restringidos al Administrador Principal
+              </p>
+              <p>
+                Los usuarios con rol Socio pueden consultar la bitácora completa de movimientos y realizar conteos físicos en Auditoría, pero solo el Administrador Principal (Jesús César) puede ejecutar entradas, salidas o descruces manuales de stock.
+              </p>
+            </div>
+          </div>
+        ) : (
+        <>
         <div className="border-b border-slate-800 pb-5">
           <div
             role="tablist"
@@ -747,6 +766,8 @@ export function AdjustmentsView({
               </button>
             </div>
           </form>
+        )}
+        </>
         )}
       </section>
 

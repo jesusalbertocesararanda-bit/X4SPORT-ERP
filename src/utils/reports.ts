@@ -356,6 +356,7 @@ export function countActiveReportFilters(
 export function buildSalesReportRows(state: AppState): SalesReportRow[] {
   const rows: SalesReportRow[] = [];
   for (const s of state.sales ?? []) {
+    if (s.voided) continue;
     const date = extractDateOnly(s.saleDate || s.createdAt);
     const paymentCondition: 'Contado' | 'Crédito' =
       s.paymentStatus === 'Pendiente' ? 'Crédito' : 'Contado';
@@ -651,6 +652,7 @@ export function filterCustomersReportRows(
   }
 
   for (const s of state.sales ?? []) {
+    if (s.voided) continue;
     const name = s.customerName || s.debtorName || 'Cliente Mostrador';
     const b = ensureBucket(name, `cust-sale-${s.id}`, extractDateOnly(s.saleDate || s.createdAt));
     if (!b.city && s.customerCity) b.city = s.customerCity;
@@ -1096,6 +1098,7 @@ export function buildStockMovementsReportRows(
 
   // 2) Salidas por Ventas
   for (const s of state.sales ?? []) {
+    if (s.voided) continue;
     const date = extractDateOnly(s.saleDate || s.createdAt);
     const paymentCondition: 'Contado' | 'Crédito' =
       s.paymentStatus === 'Pendiente' ? 'Crédito' : 'Contado';
@@ -1392,8 +1395,8 @@ export function buildBulkImportsReportRows(state: AppState): BulkImportReportRow
   const xlsxBatches = (state.purchaseBatches ?? []).filter((b) =>
     b.id.startsWith('batch-xlsx-'),
   );
-  const xlsxSales = (state.sales ?? []).filter((s) =>
-    s.id.startsWith('sale-xlsx-'),
+  const xlsxSales = (state.sales ?? []).filter(
+    (s) => !s.voided && s.id.startsWith('sale-xlsx-'),
   );
   const comprasUnits = xlsxBatches.reduce((sum, b) => sum + b.totalUnits, 0);
   const comprasCostUsd = round2(

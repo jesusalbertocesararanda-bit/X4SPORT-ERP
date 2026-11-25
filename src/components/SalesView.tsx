@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowRightLeft,
+  Ban,
   Calendar,
   CheckCircle2,
   Download,
@@ -33,10 +35,13 @@ import type {
   SinglePaymentMethod,
   TeamCategory,
 } from '../types/erp';
+import { isAdminUser, type ERPUser } from '../utils/auth';
 import type {
+  ConvertSaleToReceivableInput,
   PricingAdjustMode,
   RegisterMultiSaleInput,
   UpsertCustomerInput,
+  VoidSaleInput,
 } from '../utils/finance';
 import {
   calculateDiscountedUnitPrice,
@@ -55,6 +60,7 @@ import {
 import {
   buildCustomerDirectory,
   evaluateCustomerStatus,
+  isWalkInCustomerName,
   normalizeCustomerText,
   searchCustomerDirectory,
   type CustomerHistorySummary,
@@ -73,6 +79,7 @@ import { GoogleCalendarBanner } from './GoogleCalendarBanner';
 
 interface SalesViewProps {
   state: AppState;
+  currentUser?: ERPUser | null;
   activeSection?: 'registrar' | 'historial';
   matrixParams?: MatrixConfigParams;
   brandIdentity?: BrandIdentityConfig;
@@ -92,6 +99,12 @@ interface SalesViewProps {
     | { ok: boolean; error?: string; createdSale?: SaleRecord };
   onSaveCustomerProfile?: (
     input: UpsertCustomerInput,
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
+  onConvertSaleToReceivable?: (
+    input: ConvertSaleToReceivableInput,
+  ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
+  onVoidSale?: (
+    input: VoidSaleInput,
   ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
 }
 
@@ -169,6 +182,7 @@ function formatDisplayDate(sale: SaleRecord): string {
 
 export function SalesView({
   state,
+  currentUser,
   activeSection = 'registrar',
   brandIdentity,
   calendarAuth,
@@ -178,7 +192,10 @@ export function SalesView({
   onAttachSaleCalendarMetadata,
   onRegisterMultiSale,
   onSaveCustomerProfile,
+  onConvertSaleToReceivable,
+  onVoidSale,
 }: SalesViewProps) {
+  const isAdmin = isAdminUser(currentUser);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [modelSearch, setModelSearch] = useState<string>('');
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string>('Todos');
@@ -239,6 +256,18 @@ export function SalesView({
   const [generatingReceiptId, setGeneratingReceiptId] = useState<string | null>(
     null,
   );
+  const [cxcTargetSale, setCxcTargetSale] = useState<SaleRecord | null>(null);
+  const [cxcCustomerNameInput, setCxcCustomerNameInput] = useState<string>('');
+  const [cxcError, setCxcError] = useState<string | null>(null);
+  const [voidTargetSale, setVoidTargetSale] = useState<SaleRecord | null>(null);
+  const [voidReasonInput, setVoidReasonInput] = useState<string>('');
+  const [voidError, setVoidError] = useState<string | null>(null);
+  const [isProcessingHistoryAction, setIsProcessingHistoryAction] =
+    useState<boolean>(false);
+  const [historyFeedback, setHistoryFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   const qtyInCartBySku = useMemo(() => {
     const map = new Map<string, number>();
@@ -905,10 +934,87 @@ export function SalesView({
   const filteredHistoryRevenue = useMemo(
     () =>
       round2(
-        filteredSalesHistory.reduce((sum, s) => sum + s.finalPrice, 0),
+        filteredSalesHistory
+          .filter((s) => !s.voided)
+          .reduce((sum, s) => sum + s.finalPrice, 0),
       ),
     [filteredSalesHistory],
   );
+
+  const openConvertToCxcModal = (sale: SaleRecord) => {
+    setHistoryFeedback(null);
+    setCxcError(null);
+    const initialName = sale.debtorName || sale.customerName || '';
+    setCxcCustomerNameInput(isWalkInCustomerName(initialName) ? '' : initialName);
+    setCxcTargetSale(sale);
+  };
+
+  const handleConfirmConvertToCxc = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cxcTargetSale || !onConvertSaleToReceivable || isProcessingHistoryAction) {
+      return;
+    }
+    setCxcError(null);
+    setIsProcessingHistoryAction(true);
+    try {
+      const res = await Promise.resolve(
+        onConvertSaleToReceivable({
+          saleId: cxcTargetSale.id,
+          customerName: cxcCustomerNameInput.trim(),
+        }),
+      );
+      if (!res.ok) {
+        setCxcError(res.error ?? 'No se pudo pasar la venta a CxC.');
+        return;
+      }
+      const inv = cxcTargetSale.invoiceNumber || cxcTargetSale.id;
+      setCxcTargetSale(null);
+      setCxcCustomerNameInput('');
+      setHistoryFeedback({
+        type: 'success',
+        text: `Factura ${inv} convertida a Crédito (CxC) para ${cxcCustomerNameInput.trim()}. Efectivo y capas revertidas; inventario FIFO intacto.`,
+      });
+    } finally {
+      setIsProcessingHistoryAction(false);
+    }
+  };
+
+  const openVoidSaleModal = (sale: SaleRecord) => {
+    setHistoryFeedback(null);
+    setVoidError(null);
+    setVoidReasonInput('');
+    setVoidTargetSale(sale);
+  };
+
+  const handleConfirmVoidSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!voidTargetSale || !onVoidSale || isProcessingHistoryAction) {
+      return;
+    }
+    setVoidError(null);
+    setIsProcessingHistoryAction(true);
+    try {
+      const res = await Promise.resolve(
+        onVoidSale({
+          saleId: voidTargetSale.id,
+          reason: voidReasonInput.trim() || undefined,
+        }),
+      );
+      if (!res.ok) {
+        setVoidError(res.error ?? 'No se pudo anular la venta.');
+        return;
+      }
+      const inv = voidTargetSale.invoiceNumber || voidTargetSale.id;
+      setVoidTargetSale(null);
+      setVoidReasonInput('');
+      setHistoryFeedback({
+        type: 'success',
+        text: `Factura ${inv} anulada correctamente. Unidades restauradas al inventario FIFO y cobro revertido en caja.`,
+      });
+    } finally {
+      setIsProcessingHistoryAction(false);
+    }
+  };
 
   const linePreviewSubtotal = round2(
     Math.max(0, Math.floor(Number(quantity) || 0)) *
@@ -2245,6 +2351,26 @@ export function SalesView({
               </div>
             </div>
 
+            {historyFeedback && (
+              <div
+                role="status"
+                className={`mt-4 flex items-center justify-between gap-2 rounded-xl px-4 py-3 text-xs font-medium ${
+                  historyFeedback.type === 'error'
+                    ? 'border border-red-500/30 bg-red-500/10 text-red-200'
+                    : 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                }`}
+              >
+                <span>{historyFeedback.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setHistoryFeedback(null)}
+                  className="text-xs opacity-70 hover:opacity-100"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             {state.sales.length === 0 ? (
               <p className="mt-6 text-sm text-slate-400">
                 Aún no hay ventas registradas. Registra la primera desde Ventas &gt; Registrar Venta.
@@ -2266,7 +2392,7 @@ export function SalesView({
                         <th className="px-4 py-3">Método</th>
                         <th className="px-4 py-3 text-right">Total (USDT)</th>
                         <th className="px-4 py-3 text-right">Condición</th>
-                        <th className="px-4 py-3 text-right">Comprobante</th>
+                        <th className="px-4 py-3 text-right">Acciones / Comprobante</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/70">
@@ -2310,14 +2436,33 @@ export function SalesView({
                               )
                             : 0;
 
+                        const canConvertToCxc =
+                          isAdmin &&
+                          !sale.voided &&
+                          sale.paymentStatus === 'Cobrado' &&
+                          sale.returnStatus !== 'Total' &&
+                          Boolean(onConvertSaleToReceivable);
+                        const canVoidSale =
+                          isAdmin && !sale.voided && Boolean(onVoidSale);
+
                         return (
                           <tr
                             key={sale.id}
                             data-testid={`sale-history-row-${sale.invoiceNumber || sale.id}`}
-                            className="align-top hover:bg-slate-800/30"
+                            className={`align-top transition-colors ${
+                              sale.voided
+                                ? 'bg-red-950/15 opacity-65'
+                                : 'hover:bg-slate-800/30'
+                            }`}
                           >
                             <td className="px-4 py-3 font-mono-num text-xs whitespace-nowrap">
-                              <span className="block font-bold text-blue-300">
+                              <span
+                                className={`block font-bold ${
+                                  sale.voided
+                                    ? 'text-red-400 line-through'
+                                    : 'text-blue-300'
+                                }`}
+                              >
                                 {sale.invoiceNumber || '#0001'}
                               </span>
                               <span className="text-slate-400">
@@ -2363,11 +2508,28 @@ export function SalesView({
                                 {sale.paymentMethod ?? 'Efectivo ($)'}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right font-mono-num font-bold text-white whitespace-nowrap">
+                            <td
+                              className={`px-4 py-3 text-right font-mono-num font-bold whitespace-nowrap ${
+                                sale.voided
+                                  ? 'text-slate-400 line-through'
+                                  : 'text-white'
+                              }`}
+                            >
                               {formatUSD(sale.finalPrice)}
                             </td>
                             <td className="px-4 py-3 text-right text-xs font-semibold whitespace-nowrap">
-                              {sale.returnStatus === 'Total' ? (
+                              {sale.voided ? (
+                                <div className="text-red-400">
+                                  <span className="inline-flex items-center gap-1 rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[11px] font-bold">
+                                    Anulada
+                                  </span>
+                                  {sale.voidReason && (
+                                    <span className="block mt-0.5 text-[10px] font-normal text-red-300 max-w-[140px] truncate ml-auto">
+                                      {sale.voidReason}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : sale.returnStatus === 'Total' ? (
                                 <div className="text-rose-400">
                                   <span>Devuelto Total</span>
                                   {sale.returnedAmount ? (
@@ -2406,21 +2568,45 @@ export function SalesView({
                               )}
                             </td>
                             <td className="px-4 py-3 text-right whitespace-nowrap">
-                              <button
-                                type="button"
-                                data-testid={`btn-receipt-jpg-${sale.invoiceNumber || sale.id}`}
-                                disabled={generatingReceiptId === sale.id}
-                                onClick={() =>
-                                  void openOrDownloadSaleReceipt(sale, false)
-                                }
-                                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#080E1C] px-3 py-1.5 text-xs font-semibold text-blue-200 transition-colors hover:border-blue-500/50 hover:bg-blue-600/20 hover:text-white"
-                              >
-                                <FileImage
-                                  className="h-3.5 w-3.5"
-                                  aria-hidden="true"
-                                />
-                                Descargar Factura JPG
-                              </button>
+                              <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  data-testid={`btn-receipt-jpg-${sale.invoiceNumber || sale.id}`}
+                                  disabled={generatingReceiptId === sale.id}
+                                  onClick={() =>
+                                    void openOrDownloadSaleReceipt(sale, false)
+                                  }
+                                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#080E1C] px-2.5 py-1 text-xs font-semibold text-blue-200 transition-colors hover:border-blue-500/50 hover:bg-blue-600/20 hover:text-white"
+                                >
+                                  <FileImage
+                                    className="h-3.5 w-3.5"
+                                    aria-hidden="true"
+                                  />
+                                  Factura JPG
+                                </button>
+                                {canConvertToCxc && (
+                                  <button
+                                    type="button"
+                                    data-testid={`btn-sale-to-cxc-${sale.invoiceNumber || sale.id}`}
+                                    onClick={() => openConvertToCxcModal(sale)}
+                                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/20"
+                                  >
+                                    <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                                    Pasar a CxC
+                                  </button>
+                                )}
+                                {canVoidSale && (
+                                  <button
+                                    type="button"
+                                    data-testid={`btn-void-sale-${sale.invoiceNumber || sale.id}`}
+                                    onClick={() => openVoidSaleModal(sale)}
+                                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/20"
+                                  >
+                                    <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+                                    Anular
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2430,69 +2616,117 @@ export function SalesView({
                 </div>
 
                 <div className="mt-4 divide-y divide-slate-800/80 md:hidden">
-                  {filteredSalesHistory.map((sale) => (
-                    <div key={sale.id} className="py-3.5 space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <span className="font-mono-num text-xs font-bold text-blue-300">
-                            {sale.invoiceNumber || '#0001'} ·{' '}
-                            {formatDisplayDate(sale)}
-                          </span>
-                          <span className="block text-sm font-semibold text-white">
-                            {sale.customerName || 'Cliente Mostrador'} ·{' '}
-                            {sale.seller}
+                  {filteredSalesHistory.map((sale) => {
+                    const canConvertToCxc =
+                      isAdmin &&
+                      !sale.voided &&
+                      sale.paymentStatus === 'Cobrado' &&
+                      sale.returnStatus !== 'Total' &&
+                      Boolean(onConvertSaleToReceivable);
+                    const canVoidSale =
+                      isAdmin && !sale.voided && Boolean(onVoidSale);
+
+                    return (
+                      <div
+                        key={sale.id}
+                        className={`py-3.5 space-y-2 ${sale.voided ? 'opacity-65' : ''}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <span
+                              className={`font-mono-num text-xs font-bold ${
+                                sale.voided
+                                  ? 'text-red-400 line-through'
+                                  : 'text-blue-300'
+                              }`}
+                            >
+                              {sale.invoiceNumber || '#0001'} ·{' '}
+                              {formatDisplayDate(sale)}
+                            </span>
+                            <span className="block text-sm font-semibold text-white">
+                              {sale.customerName || 'Cliente Mostrador'} ·{' '}
+                              {sale.seller}
+                            </span>
+                          </div>
+                          <span
+                            className={`font-mono-num text-sm font-bold ${
+                              sale.voided ? 'text-slate-400 line-through' : 'text-white'
+                            }`}
+                          >
+                            {formatUSD(sale.finalPrice)}
                           </span>
                         </div>
-                        <span className="font-mono-num text-sm font-bold text-white">
-                          {formatUSD(sale.finalPrice)}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-300">
-                        {(sale.items ?? [])
-                          .map(
-                            (i) =>
-                              `${i.quantity}x ${i.modelLabel} (${normalizeVersionDisplay(
-                                i.version,
-                              )} ${i.size})`,
-                          )
-                          .join(', ') || sale.modelLabel}
-                      </p>
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-xs text-slate-400">
-                          {sale.paymentMethod ?? 'Efectivo ($)'} ·{' '}
-                          <span
-                            className={
-                              sale.returnStatus === 'Total'
-                                ? 'text-rose-400'
-                                : sale.paymentStatus === 'Cobrado'
-                                  ? 'text-emerald-400'
-                                  : 'text-amber-400'
-                            }
-                          >
-                            {sale.returnStatus === 'Total'
-                              ? 'Devuelto Total'
-                              : sale.paymentStatus === 'Cobrado'
-                                ? sale.returnStatus === 'Parcial'
-                                  ? 'Contado · Dev. Parcial'
-                                  : 'Contado'
-                                : sale.returnStatus === 'Parcial'
-                                  ? 'Crédito CxC · Dev. Parcial'
-                                  : 'Crédito CxC'}
-                          </span>
+                        <p className="text-xs text-slate-300">
+                          {(sale.items ?? [])
+                            .map(
+                              (i) =>
+                                `${i.quantity}x ${i.modelLabel} (${normalizeVersionDisplay(
+                                  i.version,
+                                )} ${i.size})`,
+                            )
+                            .join(', ') || sale.modelLabel}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void openOrDownloadSaleReceipt(sale, false)
-                          }
-                          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-slate-700 bg-[#080E1C] px-2.5 py-1 text-xs font-semibold text-blue-200"
-                        >
-                          <FileImage className="h-3.5 w-3.5" aria-hidden="true" />
-                          Factura JPG
-                        </button>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-slate-400">
+                            {sale.paymentMethod ?? 'Efectivo ($)'} ·{' '}
+                            <span
+                              className={
+                                sale.voided || sale.returnStatus === 'Total'
+                                  ? 'text-rose-400 font-semibold'
+                                  : sale.paymentStatus === 'Cobrado'
+                                    ? 'text-emerald-400'
+                                    : 'text-amber-400'
+                              }
+                            >
+                              {sale.voided
+                                ? 'Anulada'
+                                : sale.returnStatus === 'Total'
+                                  ? 'Devuelto Total'
+                                  : sale.paymentStatus === 'Cobrado'
+                                    ? sale.returnStatus === 'Parcial'
+                                      ? 'Contado · Dev. Parcial'
+                                      : 'Contado'
+                                    : sale.returnStatus === 'Parcial'
+                                      ? 'Crédito CxC · Dev. Parcial'
+                                      : 'Crédito CxC'}
+                            </span>
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void openOrDownloadSaleReceipt(sale, false)
+                              }
+                              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-700 bg-[#080E1C] px-2.5 py-1 text-xs font-semibold text-blue-200"
+                            >
+                              <FileImage className="h-3.5 w-3.5" aria-hidden="true" />
+                              Factura JPG
+                            </button>
+                            {canConvertToCxc && (
+                              <button
+                                type="button"
+                                onClick={() => openConvertToCxcModal(sale)}
+                                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-200"
+                              >
+                                <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                                Pasar a CxC
+                              </button>
+                            )}
+                            {canVoidSale && (
+                              <button
+                                type="button"
+                                onClick={() => openVoidSaleModal(sale)}
+                                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-300"
+                              >
+                                <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+                                Anular
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -2564,6 +2798,244 @@ export function SalesView({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Modal Confirmación: Pasar Venta a CxC */}
+      {cxcTargetSale && isAdmin && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cxc-convert-modal-title"
+          data-testid="modal-convert-sale-cxc"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs"
+        >
+          <form
+            onSubmit={(e) => void handleConfirmConvertToCxc(e)}
+            className="w-full max-w-md rounded-2xl border border-amber-500/40 bg-[#0D1526] p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h3
+                  id="cxc-convert-modal-title"
+                  className="font-display text-base font-bold text-white"
+                >
+                  Pasar Factura {cxcTargetSale.invoiceNumber || cxcTargetSale.id} a CxC
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Convierte esta venta de Contado a Crédito manteniendo la deducción FIFO de inventario intacta.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCxcTargetSale(null)}
+                aria-label="Cerrar"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3.5 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Monto de la venta:</span>
+                <strong className="font-mono-num text-white">
+                  {formatUSD(
+                    round2(
+                      Math.max(
+                        0,
+                        cxcTargetSale.finalPrice - (cxcTargetSale.returnedAmount ?? 0),
+                      ),
+                    ),
+                  )}
+                </strong>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Efectivo a revertir de caja:</span>
+                <strong className="font-mono-num text-amber-300">
+                  -
+                  {formatUSD(
+                    round2(
+                      Math.max(
+                        0,
+                        cxcTargetSale.paidAmount !== undefined
+                          ? cxcTargetSale.paidAmount
+                          : cxcTargetSale.finalPrice -
+                              (cxcTargetSale.returnedAmount ?? 0),
+                      ),
+                    ),
+                  )}
+                </strong>
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="cxc-debtor-name-input"
+                className="block text-xs font-medium text-slate-300"
+              >
+                Nombre del Cliente / Deudor *
+              </label>
+              <input
+                id="cxc-debtor-name-input"
+                data-testid="input-cxc-customer-name"
+                type="text"
+                required
+                value={cxcCustomerNameInput}
+                onChange={(e) => {
+                  setCxcCustomerNameInput(e.target.value);
+                  setCxcError(null);
+                }}
+                placeholder="Ej. Carlos Pérez"
+                className="mt-1.5 w-full min-h-[42px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+              />
+            </div>
+
+            {cxcError && (
+              <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                {cxcError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setCxcTargetSale(null)}
+                className="min-h-[40px] rounded-lg border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                data-testid="btn-confirm-convert-cxc"
+                disabled={isProcessingHistoryAction}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+                Confirmar Pasar a CxC
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal Confirmación: Anular Venta */}
+      {voidTargetSale && isAdmin && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="void-sale-modal-title"
+          data-testid="modal-void-sale"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs"
+        >
+          <form
+            onSubmit={(e) => void handleConfirmVoidSale(e)}
+            className="w-full max-w-md rounded-2xl border border-red-500/40 bg-[#0D1526] p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h3
+                  id="void-sale-modal-title"
+                  className="font-display text-base font-bold text-white"
+                >
+                  Anular Factura {voidTargetSale.invoiceNumber || voidTargetSale.id}
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Restaurará las unidades vendidas al inventario FIFO, revertirá el efectivo cobrado y eliminará cualquier CxC vinculada.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVoidTargetSale(null)}
+                aria-label="Cerrar"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3.5 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Cliente:</span>
+                <strong className="text-white">
+                  {voidTargetSale.customerName ||
+                    voidTargetSale.debtorName ||
+                    'Cliente Mostrador'}
+                </strong>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Total facturado:</span>
+                <strong className="font-mono-num text-white">
+                  {formatUSD(voidTargetSale.finalPrice)}
+                </strong>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Cobro a revertir en caja:</span>
+                <strong className="font-mono-num text-red-300">
+                  -
+                  {formatUSD(
+                    round2(
+                      Math.max(
+                        0,
+                        voidTargetSale.paidAmount !== undefined
+                          ? voidTargetSale.paidAmount
+                          : voidTargetSale.paymentStatus === 'Cobrado'
+                            ? voidTargetSale.finalPrice -
+                              (voidTargetSale.returnedAmount ?? 0)
+                            : 0,
+                      ),
+                    ),
+                  )}
+                </strong>
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="void-reason-input"
+                className="block text-xs font-medium text-slate-300"
+              >
+                Motivo de la anulación (Opcional)
+              </label>
+              <input
+                id="void-reason-input"
+                data-testid="input-void-sale-reason"
+                type="text"
+                value={voidReasonInput}
+                onChange={(e) => {
+                  setVoidReasonInput(e.target.value);
+                  setVoidError(null);
+                }}
+                placeholder="Ej. Pedido duplicado / Cliente canceló envío"
+                className="mt-1.5 w-full min-h-[42px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-red-500 focus:outline-none"
+              />
+            </div>
+
+            {voidError && (
+              <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                {voidError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setVoidTargetSale(null)}
+                className="min-h-[40px] rounded-lg border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                data-testid="btn-confirm-void-sale"
+                disabled={isProcessingHistoryAction}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                <Ban className="h-3.5 w-3.5" />
+                Confirmar Anulación
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

@@ -126,6 +126,7 @@ export function buildCustomerDirectory(
   );
 
   for (const sale of orderedSales) {
+    if (sale.voided) continue;
     const rawName = (sale.customerName || sale.debtorName || '').trim();
     if (isWalkInCustomerName(rawName)) continue;
 

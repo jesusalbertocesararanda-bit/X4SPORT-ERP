@@ -1613,6 +1613,461 @@ export function registerSale(
   });
 }
 
+export interface ConvertSaleToReceivableInput {
+  saleId: string;
+  customerName: string;
+  actorName?: string;
+  actorRole?: 'admin' | 'partner';
+  note?: string;
+}
+
+/**
+ * Convierte una venta de Contado ('Cobrado') en Crédito / CxC ('Pendiente')
+ * manteniendo intacta la deducción FIFO de inventario, descontando de caja
+ * y revirtiendo las 4 capas líquidas previamente asignadas.
+ */
+export function convertCashSaleToReceivable(
+  state: AppState,
+  input: ConvertSaleToReceivableInput,
+): ActionResult {
+  if (input.actorRole && input.actorRole !== 'admin') {
+    return {
+      ok: false,
+      error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      state,
+    };
+  }
+
+  const sale = state.sales.find((s) => s.id === input.saleId);
+  if (!sale) {
+    return { ok: false, error: 'Venta no encontrada.', state };
+  }
+  if (sale.voided) {
+    return {
+      ok: false,
+      error: 'No se puede pasar a CxC una venta que ya fue anulada.',
+      state,
+    };
+  }
+  if (sale.paymentStatus !== 'Cobrado') {
+    return {
+      ok: false,
+      error: 'Esta venta ya se encuentra registrada en condición Crédito / CxC.',
+      state,
+    };
+  }
+  if (sale.returnStatus === 'Total') {
+    return {
+      ok: false,
+      error:
+        'Esta venta ya fue devuelta en su totalidad y no tiene saldo cobrable para pasar a CxC.',
+      state,
+    };
+  }
+
+  const cleanCustomer = input.customerName.trim();
+  if (!cleanCustomer || isWalkInCustomerName(cleanCustomer)) {
+    return {
+      ok: false,
+      error:
+        'Ingresa el nombre real del cliente o deudor para crear la Cuenta por Cobrar.',
+      state,
+    };
+  }
+
+  const returnedAmount = round2(Math.max(0, sale.returnedAmount ?? 0));
+  const netSaleTotal = round2(Math.max(0, sale.finalPrice - returnedAmount));
+  const cashToReverse = round2(
+    Math.max(0, sale.paidAmount !== undefined ? sale.paidAmount : netSaleTotal),
+  );
+
+  if (netSaleTotal <= 0) {
+    return {
+      ok: false,
+      error: 'El saldo neto de la venta debe ser mayor a $0.00 para pasar a CxC.',
+      state,
+    };
+  }
+
+  if (cashToReverse > round2(state.cashOnHand + 0.001)) {
+    return {
+      ok: false,
+      error: `Efectivo físico insuficiente en caja (${formatUSD(state.cashOnHand)}) para revertir ${formatUSD(cashToReverse)} al pasar la factura ${sale.invoiceNumber || sale.id} a CxC.`,
+      state,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const actorName = input.actorName?.trim() || 'Jesús César';
+  const nextCash = round2(Math.max(0, state.cashOnHand - cashToReverse));
+
+  let nextFunds: FinancialFunds = {
+    ...state.funds,
+    commissionsBySeller: { ...state.funds.commissionsBySeller },
+    dividendsByPartner: { ...state.funds.dividendsByPartner },
+  };
+  if (cashToReverse > 0) {
+    const reversedBreakdown = scaleBreakdownToCashAmount(
+      sale.breakdown,
+      cashToReverse,
+    );
+    nextFunds = deductReversedBreakdownFromFunds(
+      nextFunds,
+      reversedBreakdown,
+      sale.seller,
+    );
+    nextFunds = reconcileFundsToPhysicalCash(nextFunds, nextCash).funds;
+  }
+
+  const lineSummary =
+    sale.items && sale.items.length > 0
+      ? sale.items
+          .map((l) => `${l.quantity}x ${l.modelLabel} (${l.version} ${l.size})`)
+          .join(', ')
+      : `${sale.quantity}x ${sale.modelLabel} (${sale.version} ${sale.size})`;
+
+  const newReceivable: ReceivableItem = {
+    id: `rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    debtor: cleanCustomer,
+    amount: netSaleTotal,
+    originalAmount: netSaleTotal,
+    paidAmount: 0,
+    createdAt: now,
+    note:
+      input.note?.trim() ||
+      `${sale.invoiceNumber || '#0001'} · Convertida de Contado a CxC · ${lineSummary}`,
+    saleId: sale.id,
+    paymentMethod: sale.paymentMethod,
+  };
+
+  const nextReceivables = [
+    newReceivable,
+    ...state.receivables.filter((r) => r.saleId !== sale.id),
+  ];
+
+  const nextSales = state.sales.map((s) =>
+    s.id === sale.id
+      ? {
+          ...s,
+          paymentStatus: 'Pendiente' as const,
+          paidAmount: 0,
+          customerName: cleanCustomer,
+          debtorName: cleanCustomer,
+          convertedToCreditAt: now,
+          convertedToCreditBy: actorName,
+        }
+      : s,
+  );
+
+  const nextCustomers = mergeCustomerProfileIntoList(
+    state.customers,
+    {
+      name: cleanCustomer,
+      phone: sale.customerPhone,
+      city: sale.customerCity,
+      social: sale.customerSocial,
+      idDoc: sale.customerIdDoc,
+    },
+    now,
+  );
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      cashOnHand: nextCash,
+      funds: nextFunds,
+      receivables: nextReceivables,
+      sales: nextSales,
+      ...(nextCustomers ? { customers: nextCustomers } : {}),
+      movements: [
+        {
+          id: `mov-cxc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          type: 'sale_to_cxc',
+          description: `${sale.invoiceNumber || sale.id} · Pasada de Contado a CxC (${cleanCustomer}) · Caja -${formatUSD(cashToReverse)} / CxC +${formatUSD(netSaleTotal)} · Por ${actorName}`,
+          amount: -cashToReverse,
+          createdAt: now,
+        },
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
+      ],
+    },
+  };
+}
+
+export interface VoidSaleInput {
+  saleId: string;
+  reason?: string;
+  actorName?: string;
+  actorRole?: 'admin' | 'partner';
+}
+
+/**
+ * Anula una venta existente de forma atómica y auditable:
+ * 1) Conserva la factura marcada como anulada (`voided: true`) para no reciclar consecutivos.
+ * 2) Restaura al inventario FIFO las unidades exactas no devueltas previamente.
+ * 3) Revierte cualquier efectivo cobrado de caja física y de las 4 capas líquidas.
+ * 4) Elimina la Cuenta por Cobrar vinculada si estaba pendiente.
+ */
+export function voidSaleTransaction(
+  state: AppState,
+  input: VoidSaleInput,
+): ActionResult {
+  if (input.actorRole && input.actorRole !== 'admin') {
+    return {
+      ok: false,
+      error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      state,
+    };
+  }
+
+  const sale = state.sales.find((s) => s.id === input.saleId);
+  if (!sale) {
+    return { ok: false, error: 'Venta no encontrada.', state };
+  }
+  if (sale.voided) {
+    return {
+      ok: false,
+      error: 'Esta venta ya fue anulada previamente.',
+      state,
+    };
+  }
+
+  const linkedReceivable = state.receivables.find((r) => r.saleId === sale.id);
+  const netReturned = round2(Math.max(0, sale.returnedAmount ?? 0));
+  const cashToReverse = round2(
+    Math.max(
+      0,
+      sale.paidAmount !== undefined
+        ? sale.paidAmount
+        : sale.paymentStatus === 'Cobrado'
+          ? Math.max(0, sale.finalPrice - netReturned)
+          : linkedReceivable?.paidAmount ?? 0,
+    ),
+  );
+
+  if (cashToReverse > round2(state.cashOnHand + 0.001)) {
+    return {
+      ok: false,
+      error: `Efectivo físico insuficiente en caja (${formatUSD(state.cashOnHand)}) para revertir ${formatUSD(cashToReverse)} al anular la factura ${sale.invoiceNumber || sale.id}.`,
+      state,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const today = now.slice(0, 10);
+  const actorName = input.actorName?.trim() || 'Jesús César';
+  const cleanReason = input.reason?.trim() || 'Anulación administrativa';
+
+  // Calcular unidades ya devueltas por SKU para no duplicar stock si hubo devolución parcial previa
+  const alreadyReturnedBySku = new Map<string, number>();
+  for (const ret of state.returns ?? []) {
+    if (ret.saleId === sale.id && ret.type === 'Devolución') {
+      alreadyReturnedBySku.set(
+        ret.returnedSkuId,
+        (alreadyReturnedBySku.get(ret.returnedSkuId) ?? 0) +
+          Math.max(0, Math.floor(ret.returnedQuantity)),
+      );
+    }
+  }
+
+  const saleLines: SaleLineItem[] =
+    sale.items && sale.items.length > 0
+      ? sale.items
+      : [
+          {
+            skuId: sale.skuId,
+            modelLabel: sale.modelLabel,
+            team: sale.team,
+            version: sale.version,
+            size: sale.size,
+            quantity: sale.quantity,
+            unitCogs: sale.unitCogs,
+            totalLineCogs: round2(sale.unitCogs * sale.quantity),
+            unitPrice:
+              sale.quantity > 0 ? round2(sale.finalPrice / sale.quantity) : 0,
+            subtotal: sale.finalPrice,
+          },
+        ];
+
+  const workingInventory: InventoryItem[] = state.inventory.map((item) => ({
+    ...item,
+    fifoBatches: (item.fifoBatches ?? []).map((b) => ({ ...b })),
+  }));
+
+  let restoredTotalUnits = 0;
+
+  for (const line of saleLines) {
+    const lineQty = Math.max(0, Math.floor(line.quantity));
+    if (lineQty <= 0) continue;
+
+    const alreadyReturnedForSku = alreadyReturnedBySku.get(line.skuId) ?? 0;
+    const returnedConsumed = Math.min(alreadyReturnedForSku, lineQty);
+    alreadyReturnedBySku.set(
+      line.skuId,
+      alreadyReturnedForSku - returnedConsumed,
+    );
+
+    const qtyToRestore = Math.max(0, lineQty - returnedConsumed);
+    if (qtyToRestore <= 0) continue;
+
+    restoredTotalUnits += qtyToRestore;
+    const skuIdx = workingInventory.findIndex((i) => i.id === line.skuId);
+
+    if (skuIdx >= 0) {
+      const targetSku = workingInventory[skuIdx];
+      const nextBatches = (targetSku.fifoBatches ?? []).map((b) => ({ ...b }));
+      let remainingToRestore = qtyToRestore;
+
+      if (line.fifoConsumed && line.fifoConsumed.length > 0) {
+        // Restaurar en orden inverso al consumo cuando es parcial, o exacto por lote cuando es completo
+        const detailsToApply =
+          qtyToRestore === lineQty
+            ? line.fifoConsumed
+            : [...line.fifoConsumed].reverse();
+
+        for (const detail of detailsToApply) {
+          if (remainingToRestore <= 0) break;
+          const restoreAmt = Math.min(detail.quantity, remainingToRestore);
+          if (restoreAmt <= 0) continue;
+
+          const batchMatch = nextBatches.find(
+            (b) => b.batchId === detail.batchId,
+          );
+          if (batchMatch) {
+            batchMatch.remainingQuantity += restoreAmt;
+            batchMatch.initialQuantity = Math.max(
+              batchMatch.initialQuantity,
+              batchMatch.remainingQuantity,
+            );
+          } else {
+            nextBatches.push({
+              batchId:
+                detail.batchId ||
+                `fifo-void-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+              batchName:
+                detail.batchName ||
+                `Anulación ${sale.invoiceNumber || sale.id}`,
+              entryDate: sale.saleDate || today,
+              initialQuantity: restoreAmt,
+              remainingQuantity: restoreAmt,
+              unitCost: round4(detail.unitCost || line.unitCogs || targetSku.cogs),
+            });
+          }
+          remainingToRestore -= restoreAmt;
+        }
+      }
+
+      if (remainingToRestore > 0) {
+        nextBatches.push({
+          batchId: `fifo-void-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          batchName: `Anulación ${sale.invoiceNumber || sale.id}`,
+          entryDate: sale.saleDate || today,
+          initialQuantity: remainingToRestore,
+          remainingQuantity: remainingToRestore,
+          unitCost: round4(line.unitCogs || sale.unitCogs || targetSku.cogs),
+        });
+      }
+
+      nextBatches.sort((a, b) => a.entryDate.localeCompare(b.entryDate));
+      const computedStock = nextBatches.reduce(
+        (sum, b) => sum + Math.max(0, b.remainingQuantity),
+        0,
+      );
+      const firstActive = nextBatches.find((b) => b.remainingQuantity > 0);
+      workingInventory[skuIdx] = {
+        ...targetSku,
+        stock: Math.max(targetSku.stock + qtyToRestore, computedStock),
+        fifoBatches: nextBatches,
+        cogs: firstActive
+          ? round2(firstActive.unitCost)
+          : round2(line.unitCogs || targetSku.cogs),
+      };
+    } else {
+      const unitCost = round4(line.unitCogs || sale.unitCogs || 0);
+      workingInventory.push({
+        id: line.skuId,
+        team: line.team || sale.team || extractTeamFromModel(line.modelLabel),
+        model: line.modelLabel || sale.modelLabel,
+        version: line.version || sale.version,
+        size: line.size || sale.size,
+        stock: qtyToRestore,
+        cogs: round2(unitCost),
+        salePrice:
+          line.unitPrice > 0
+            ? round2(line.unitPrice)
+            : getDefaultSalePrice(line.version || sale.version, line.modelLabel),
+        fifoBatches: [
+          {
+            batchId: `fifo-void-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            batchName: `Anulación ${sale.invoiceNumber || sale.id}`,
+            entryDate: sale.saleDate || today,
+            initialQuantity: qtyToRestore,
+            remainingQuantity: qtyToRestore,
+            unitCost,
+          },
+        ],
+      });
+    }
+  }
+
+  const nextCash = round2(Math.max(0, state.cashOnHand - cashToReverse));
+  let nextFunds: FinancialFunds = {
+    ...state.funds,
+    commissionsBySeller: { ...state.funds.commissionsBySeller },
+    dividendsByPartner: { ...state.funds.dividendsByPartner },
+  };
+  if (cashToReverse > 0) {
+    const reversedBreakdown = scaleBreakdownToCashAmount(
+      sale.breakdown,
+      cashToReverse,
+    );
+    nextFunds = deductReversedBreakdownFromFunds(
+      nextFunds,
+      reversedBreakdown,
+      sale.seller,
+    );
+    nextFunds = reconcileFundsToPhysicalCash(nextFunds, nextCash).funds;
+  }
+
+  const nextReceivables = state.receivables.filter(
+    (r) => r.saleId !== sale.id,
+  );
+  const nextSales = state.sales.map((s) =>
+    s.id === sale.id
+      ? {
+          ...s,
+          voided: true,
+          voidedAt: now,
+          voidedBy: actorName,
+          voidReason: cleanReason,
+          paidAmount: 0,
+        }
+      : s,
+  );
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      cashOnHand: nextCash,
+      inventory: workingInventory,
+      receivables: nextReceivables,
+      sales: nextSales,
+      funds: nextFunds,
+      movements: [
+        {
+          id: `mov-void-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          type: 'sale_void',
+          description: `${sale.invoiceNumber || sale.id} · Venta ANULADA (${sale.customerName}) · +${restoredTotalUnits} uds FIFO · Caja -${formatUSD(cashToReverse)} · Motivo: ${cleanReason} · Por ${actorName}`,
+          amount: -cashToReverse,
+          createdAt: now,
+        },
+        ...state.movements.slice(0, MAX_RECENT_MOVEMENTS - 1),
+      ],
+    },
+  };
+}
+
 export interface BatchPurchaseLineInput {
   team: TeamCategory;
   model: string;
@@ -2936,6 +3391,13 @@ export function processReturnOrExchange(
   const linkedSale = input.saleId
     ? state.sales.find((s) => s.id === input.saleId)
     : undefined;
+  if (linkedSale?.voided) {
+    return {
+      ok: false,
+      error: 'No se pueden procesar cambios o devoluciones sobre una venta anulada.',
+      state,
+    };
+  }
   const linkedLine = linkedSale?.items?.find(
     (l) => l.skuId === input.returnedSkuId,
   );
@@ -4027,6 +4489,183 @@ export function detectSizeDiscrepancyCrosses(
 }
 
 /**
+ * Extrae el Modelo Base normalizado para Conteo Rápido por Modelo:
+ * elimina variaciones de dorsal/jugador (ej. "(#19 Lamine Yamal)", "- Bellingham #5", "Dorsal 10 Messi")
+ * y posibles sufijos finales de talla (S, M, L, XL, XXL, etc.) sin alterar años (24/25, 25/26, 08/09).
+ */
+export function extractBaseModelName(model: string): string {
+  let clean = String(model ?? '').trim().replace(/\s+/g, ' ');
+  if (!clean) return 'Sin Modelo';
+
+  // 1) Paréntesis explícitos de dorsal/jugador: (#10 Messi), (Dorsal 5), (Jugador: Yamal), (19 Lamine Yamal)
+  clean = clean.replace(
+    /\s*\((?=[^)]*(?:#|\bdorsal\b|\bjugador\b|\bnombre\b|\d+\s+[A-Za-zÀ-ÿ]))[^)]*\)/gi,
+    '',
+  );
+
+  // 2) Separador + dorsal/jugador al final: " - Bellingham #5", " - #10 Messi", " · Dorsal 19 Yamal"
+  clean = clean.replace(
+    /\s*[-–—·|/]\s*(?:#\d+.*|dorsal\b.*|[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]{1,32}\s+#\d+)$/i,
+    '',
+  );
+
+  // 3) Dorsal inline al final sin separador: "Barcelona Local 25/26 #19 Lamine Yamal" o "Dorsal 10 Messi"
+  clean = clean.replace(
+    /\s+(?:#\d+(?:\s+[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]{1,32})?|\bdorsal\s*#?\d+(?:\s+[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]{1,32})?)$/i,
+    '',
+  );
+
+  // 4) Sufijo de talla al final: " - Talla M", " Talla XL", " XXL" (token de talla en mayúsculas o con "Talla")
+  clean = clean.replace(
+    /(?:\s*[-–—·|/]\s*|\s+)talla\s+(?:XXXL|3XL|XXL|2XL|XL|XS|S|M|L|NIÑO|NINO)\s*$/i,
+    '',
+  );
+  clean = clean.replace(
+    /(?:\s*[-–—·|/]\s*|\s+)(?:XXXL|3XL|XXL|2XL|XL|XS|S|M|L)\s*$/,
+    '',
+  );
+
+  clean = clean.replace(/\s*[-–—·|/]+\s*$/, '').trim().replace(/\s+/g, ' ');
+  return clean || String(model ?? '').trim();
+}
+
+export type BaseModelQuickCountStatus =
+  | 'pending'
+  | 'complete'
+  | 'cross_alert'
+  | 'shortage'
+  | 'surplus';
+
+export interface BaseModelQuickCountGroup {
+  groupKey: string;
+  baseModel: string;
+  team: TeamCategory;
+  versions: string[];
+  skuCount: number;
+  totalSystemUnits: number;
+  physicalCount: number | null;
+  delta: number | null;
+  status: BaseModelQuickCountStatus;
+  hasVariantCrossHint: boolean;
+  variantShortageUnits: number;
+  variantSurplusUnits: number;
+  skus: InventoryItem[];
+}
+
+export function buildBaseModelQuickCountGroups(
+  inventory: InventoryItem[],
+  variantCounts: Record<string, number | null | undefined>,
+  quickCounts: Record<string, number | null | undefined>,
+): BaseModelQuickCountGroup[] {
+  const buckets = new Map<
+    string,
+    {
+      baseModel: string;
+      team: TeamCategory;
+      versions: Set<string>;
+      skus: InventoryItem[];
+      totalSystemUnits: number;
+      hasAnyVariantCount: boolean;
+      variantSurplusUnits: number;
+      variantShortageUnits: number;
+    }
+  >();
+
+  for (const item of inventory) {
+    const baseModel = extractBaseModelName(item.model);
+    const rawGroupKey = baseModel
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    const groupKey = sanitizeFirebaseObjectKey(rawGroupKey);
+
+    let bucket = buckets.get(groupKey);
+    if (!bucket) {
+      bucket = {
+        baseModel,
+        team: item.team,
+        versions: new Set<string>(),
+        skus: [],
+        totalSystemUnits: 0,
+        hasAnyVariantCount: false,
+        variantSurplusUnits: 0,
+        variantShortageUnits: 0,
+      };
+      buckets.set(groupKey, bucket);
+    }
+
+    bucket.versions.add(normalizeVersionDisplay(item.version));
+    bucket.skus.push(item);
+    bucket.totalSystemUnits += Math.max(0, Math.floor(item.stock));
+
+    const rawVarCount = variantCounts[item.id];
+    if (
+      rawVarCount !== null &&
+      rawVarCount !== undefined &&
+      Number.isFinite(rawVarCount)
+    ) {
+      bucket.hasAnyVariantCount = true;
+      const diff = Math.floor(rawVarCount) - item.stock;
+      if (diff > 0) bucket.variantSurplusUnits += diff;
+      if (diff < 0) bucket.variantShortageUnits += Math.abs(diff);
+    }
+  }
+
+  const groups: BaseModelQuickCountGroup[] = [];
+
+  for (const [groupKey, bucket] of buckets.entries()) {
+    const rawUnsanitizedKey = bucket.baseModel
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    const rawQuick = quickCounts[groupKey] ?? quickCounts[rawUnsanitizedKey];
+    const hasQuick =
+      rawQuick !== null && rawQuick !== undefined && Number.isFinite(rawQuick);
+
+    if (bucket.totalSystemUnits <= 0 && !bucket.hasAnyVariantCount && !hasQuick) {
+      continue;
+    }
+
+    const physicalCount = hasQuick ? Math.max(0, Math.floor(Number(rawQuick))) : null;
+    const delta = physicalCount !== null ? physicalCount - bucket.totalSystemUnits : null;
+    const hasVariantCrossHint =
+      bucket.variantSurplusUnits > 0 || bucket.variantShortageUnits > 0;
+
+    let status: BaseModelQuickCountStatus = 'pending';
+    if (delta !== null) {
+      if (delta === 0) {
+        status = hasVariantCrossHint ? 'cross_alert' : 'complete';
+      } else if (delta < 0) {
+        status = 'shortage';
+      } else {
+        status = 'surplus';
+      }
+    }
+
+    groups.push({
+      groupKey,
+      baseModel: bucket.baseModel,
+      team: bucket.team,
+      versions: Array.from(bucket.versions).sort(),
+      skuCount: bucket.skus.length,
+      totalSystemUnits: bucket.totalSystemUnits,
+      physicalCount,
+      delta,
+      status,
+      hasVariantCrossHint,
+      variantShortageUnits: bucket.variantShortageUnits,
+      variantSurplusUnits: bucket.variantSurplusUnits,
+      skus: bucket.skus,
+    });
+  }
+
+  return groups.sort(
+    (a, b) =>
+      a.team.localeCompare(b.team) || a.baseModel.localeCompare(b.baseModel),
+  );
+}
+
+/**
  * Guarda el progreso actual del conteo físico sin cerrar la auditoría,
  * persistiendo el avance en Firebase/localStorage para que el usuario pueda
  * continuar después sin perder nada.
@@ -4035,9 +4674,28 @@ export function saveAuditProgress(
   state: AppState,
   counts: Record<string, number | null>,
   notes?: string,
+  modelQuickCounts?: Record<string, number | null>,
 ): ActionResult {
   const now = new Date().toISOString();
   const existing = state.activeAuditSession;
+  const sanitizeQuickMap = (
+    raw?: Record<string, number | null>,
+  ): Record<string, number | null> | undefined => {
+    if (!raw) return undefined;
+    const out: Record<string, number | null> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const safeKey = sanitizeFirebaseObjectKey(k);
+      if (safeKey) out[safeKey] = v;
+    }
+    return out;
+  };
+  const mergedQuickCounts =
+    modelQuickCounts !== undefined
+      ? {
+          ...(sanitizeQuickMap(existing?.modelQuickCounts) ?? {}),
+          ...(sanitizeQuickMap(modelQuickCounts) ?? {}),
+        }
+      : sanitizeQuickMap(existing?.modelQuickCounts);
 
   const updatedSession: InventoryAuditSession = {
     id: existing?.id || `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -4046,6 +4704,9 @@ export function saveAuditProgress(
     updatedAt: now,
     notes: notes !== undefined ? notes : existing?.notes,
     counts: { ...(existing?.counts ?? {}), ...counts },
+    ...(mergedQuickCounts && Object.keys(mergedQuickCounts).length > 0
+      ? { modelQuickCounts: mergedQuickCounts }
+      : {}),
   };
 
   return {
@@ -4067,6 +4728,7 @@ export function closeAuditSession(
   applyAdjustmentsToInventory = true,
   reason = 'Cierre de auditoría física de inventario',
   actorName?: string,
+  modelQuickCounts?: Record<string, number | null>,
 ): ActionResult {
   const now = new Date().toISOString();
   const metrics = calculateAuditMetrics(state.inventory, counts);
@@ -4098,6 +4760,11 @@ export function closeAuditSession(
     }
   }
 
+  const effectiveQuickCounts =
+    modelQuickCounts !== undefined
+      ? modelQuickCounts
+      : state.activeAuditSession?.modelQuickCounts;
+
   const closedSession: InventoryAuditSession = {
     id: state.activeAuditSession?.id || `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     status: 'closed',
@@ -4106,6 +4773,9 @@ export function closeAuditSession(
     closedAt: now,
     notes: state.activeAuditSession?.notes,
     counts,
+    ...(effectiveQuickCounts && Object.keys(effectiveQuickCounts).length > 0
+      ? { modelQuickCounts: effectiveQuickCounts }
+      : {}),
     summary: metrics,
     closedBy: currentUserName,
   };
@@ -5249,7 +5919,14 @@ export function normalizeAppState(raw: unknown): AppState {
       ),
       activeAuditSession:
         parsed.activeAuditSession && typeof parsed.activeAuditSession === 'object'
-          ? (parsed.activeAuditSession as InventoryAuditSession)
+          ? {
+              ...(parsed.activeAuditSession as InventoryAuditSession),
+              counts:
+                (parsed.activeAuditSession as InventoryAuditSession).counts &&
+                typeof (parsed.activeAuditSession as InventoryAuditSession).counts === 'object'
+                  ? (parsed.activeAuditSession as InventoryAuditSession).counts
+                  : {},
+            }
           : null,
       auditHistory: parsed.auditHistory
         ? toArray<InventoryAuditSession>(parsed.auditHistory)

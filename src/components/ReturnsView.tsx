@@ -103,11 +103,13 @@ export function ReturnsView({
 
   const sortedSales = useMemo(
     () =>
-      [...state.sales].sort((a, b) => {
-        const da = a.saleDate || a.createdAt.slice(0, 10);
-        const db = b.saleDate || b.createdAt.slice(0, 10);
-        return db.localeCompare(da) || b.createdAt.localeCompare(a.createdAt);
-      }),
+      [...state.sales]
+        .filter((s) => !s.voided)
+        .sort((a, b) => {
+          const da = a.saleDate || a.createdAt.slice(0, 10);
+          const db = b.saleDate || b.createdAt.slice(0, 10);
+          return db.localeCompare(da) || b.createdAt.localeCompare(a.createdAt);
+        }),
     [state.sales],
   );
 
