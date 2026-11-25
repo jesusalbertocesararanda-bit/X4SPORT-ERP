@@ -1889,9 +1889,9 @@ export function FinanceView({
                   )}
                 </div>
                 <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/70">
-                  {visibleMovements.map((mov) => (
+                  {visibleMovements.map((mov, idx) => (
                     <div
-                      key={mov.id}
+                      key={`${mov.id || 'mov'}-${idx}`}
                       className="flex items-start justify-between gap-2 py-2 text-[11px]"
                     >
                       <div className="min-w-0">

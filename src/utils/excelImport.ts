@@ -32,6 +32,7 @@ import type {
 } from '../types/erp';
 import {
   calculateFourLayerMatrixConsolidated,
+  createUniqueMovementId,
   formatInvoiceNumber,
   formatUSD,
   isUnassignedSeller,
@@ -1611,7 +1612,7 @@ export function buildErpStateFromSheets(
 
   const nowIso = new Date().toISOString();
   movements.push({
-    id: `mov-xlsx-sync-${Date.now()}`,
+    id: createUniqueMovementId('mov-xlsx-sync'),
     type: 'reconciliation',
     description: `Respaldo Excel sincronizado: ${totalComprasUnits} uds compradas, ${totalUnitsSold} uds vendidas (FIFO COGS ${formatUSD(totalFifoCogs)}), Caja ${formatUSD(finanzasParsed.cashOnHand)}`,
     amount: finanzasParsed.cashOnHand,

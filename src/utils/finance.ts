@@ -66,6 +66,34 @@ import {
 
 export const MAX_RECENT_MOVEMENTS = 300;
 
+let movementIdSeq = 0;
+
+export function createUniqueMovementId(prefix = 'mov'): string {
+  movementIdSeq = (movementIdSeq + 1) % 1_000_000;
+  return `${prefix}-${Date.now()}-${movementIdSeq.toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+}
+
+function normalizeUniqueMovements(rawMovements: unknown): AuditMovement[] {
+  const list = toArray<AuditMovement>(rawMovements).slice(0, MAX_RECENT_MOVEMENTS);
+  const seenIds = new Set<string>();
+  return list.map((mov, idx) => {
+    const rawId =
+      typeof mov?.id === 'string' && mov.id.trim()
+        ? mov.id.trim()
+        : `mov-norm-${idx}`;
+    let uniqueId = rawId;
+    if (seenIds.has(uniqueId)) {
+      let suffix = 1;
+      while (seenIds.has(`${rawId}-dup-${suffix}`)) {
+        suffix += 1;
+      }
+      uniqueId = `${rawId}-dup-${suffix}`;
+    }
+    seenIds.add(uniqueId);
+    return uniqueId === mov?.id ? mov : { ...mov, id: uniqueId };
+  });
+}
+
 export function getTodayLocalDateIso(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1565,7 +1593,7 @@ export function registerMultiItemSale(
     funds: nextFunds,
     movements: [
       {
-        id: `mov-${Date.now()}`,
+        id: createUniqueMovementId(),
         type: 'sale',
         description: `${invoiceNumber} · Venta a ${cleanCustomer}: ${summaryItemsText} · ${paymentMethod} · ${
           input.paymentStatus === 'Cobrado'
@@ -1782,7 +1810,7 @@ export function convertCashSaleToReceivable(
       ...(nextCustomers ? { customers: nextCustomers } : {}),
       movements: [
         {
-          id: `mov-cxc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          id: createUniqueMovementId('mov-cxc'),
           type: 'sale_to_cxc',
           description: `${sale.invoiceNumber || sale.id} · Pasada de Contado a CxC (${cleanCustomer}) · Caja -${formatUSD(cashToReverse)} / CxC +${formatUSD(netSaleTotal)} · Por ${actorName}`,
           amount: -cashToReverse,
@@ -2056,7 +2084,7 @@ export function voidSaleTransaction(
       funds: nextFunds,
       movements: [
         {
-          id: `mov-void-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          id: createUniqueMovementId('mov-void'),
           type: 'sale_void',
           description: `${sale.invoiceNumber || sale.id} · Venta ANULADA (${sale.customerName}) · +${restoredTotalUnits} uds FIFO · Caja -${formatUSD(cashToReverse)} · Motivo: ${cleanReason} · Por ${actorName}`,
           amount: -cashToReverse,
@@ -2337,7 +2365,7 @@ export function createImportOrder(
     purchaseBatches: [batchRecord, ...(state.purchaseBatches ?? [])],
     movements: [
       {
-        id: `mov-${Date.now()}`,
+        id: createUniqueMovementId(),
         type: 'purchase',
         description: `Orden EN TRÁNSITO: ${refName} (${input.shippingType}) · ${totalUnits} uds · Pago ${fundingLabel} (Fábrica ${formatUSD(totalFactoryCost)} + Flete est. ${formatUSD(estimatedFreightCost)})`,
         amount: -totalLandedCost,
@@ -2684,7 +2712,7 @@ export function receiveImportBatch(
       funds: reconciledBatchFunds,
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'purchase',
           description: `${
             targetBatch.isDirectReception
@@ -2912,7 +2940,7 @@ export function collectReceivable(
     funds: nextFunds,
     movements: [
       {
-        id: `mov-${Date.now()}`,
+        id: createUniqueMovementId(),
         type: 'collection',
         description: movementDescription,
         amount: effectivePayment,
@@ -2954,7 +2982,7 @@ export function reinvestPartnerDividends(
     },
     movements: [
       {
-        id: `mov-${Date.now()}`,
+        id: createUniqueMovementId(),
         type: 'reinvestment',
         description: `Reinversión de dividendos de ${partner} al Fondo de Crecimiento`,
         amount: available,
@@ -3037,7 +3065,7 @@ export function withdrawPartnerDividends(
       funds: nextFunds,
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'dividend_withdrawal',
           description: `Retiro de dividendos de ${partner} (-${formatUSD(withdrawAmount)})`,
           amount: -withdrawAmount,
@@ -3073,7 +3101,7 @@ export function syncUnassignedCashToGrowthFund(state: AppState): ActionResult {
       },
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'funds_sync',
           description: `Sincronización de efectivo libre en caja (+${formatUSD(unassignedCash)}) al Fondo de Reinversión`,
           amount: unassignedCash,
@@ -3300,7 +3328,7 @@ export function registerOperatingExpense(
       funds: nextFunds,
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'expense',
           description: `Gasto [${normalizedCategory}]: ${concept} (${paymentMethod} · ${sourceLabelMap[input.source]}${deficitNote})`,
           amount: -amount,
@@ -3727,7 +3755,7 @@ export function processReturnOrExchange(
       funds: nextFunds,
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'return_exchange',
           description: movementDesc,
           amount: differenceUsd,
@@ -3815,7 +3843,7 @@ export function registerCapitalInjection(
       },
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'capital_injection',
           description: `Inyección de capital (${contributor}): ${concept} · ${paymentMethod} · ${destLabel}`,
           amount,
@@ -3870,7 +3898,7 @@ export function reconcileCashOnHand(
       funds: reconciledFunds.funds,
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'reconciliation',
           description: `Conciliación de caja (${reason}): ${formatUSD(state.cashOnHand)} → ${formatUSD(counted)}${
             reconciledFunds.deficitApplied > 0
@@ -3994,7 +4022,7 @@ export function adjustInventoryPhysicalCount(
       ],
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'adjustment',
           description: `Ajuste físico ${target.model} (${target.version} ${target.size}): ${previousStock} → ${newStock} uds (${delta > 0 ? `+${delta}` : delta}) · ${reason}`,
           amount: fifoLossCost ? -fifoLossCost : 0,
@@ -4117,7 +4145,7 @@ export function registerManualInventoryAdjustment(
         ],
         movements: [
           {
-            id: `mov-${Date.now()}`,
+            id: createUniqueMovementId(),
             type: 'adjustment',
             description: `Salida manual: -${quantity} uds de ${target.model} (${target.version} ${target.size}) · ${cleanReason}`,
             amount: consumption.totalCost ? -consumption.totalCost : 0,
@@ -4190,7 +4218,7 @@ export function registerManualInventoryAdjustment(
       ],
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'adjustment',
           description: `Entrada manual: +${quantity} uds a ${target.model} (${target.version} ${target.size}) · ${cleanReason}`,
           amount: 0,
@@ -4350,7 +4378,7 @@ export function performInventoryUncross(
       ],
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'adjustment',
           description: `Descruce de mercancía: -${quantity} uds de ${sourceItem.model} (${sourceItem.size}) → +${quantity} uds a ${targetItem.model} (${targetItem.size}) · ${cleanReason}`,
           amount: 0,
@@ -5683,7 +5711,7 @@ export function applyAuditAdjustments(
       ],
       movements: [
         {
-          id: `mov-${Date.now()}`,
+          id: createUniqueMovementId(),
           type: 'adjustment',
           description: `Auditoría (${newAdjustmentRecords.length} SKUs · ${reason}): ${summaryParts.join(' · ')}`,
           amount: totalFifoLossCost > 0 ? -totalFifoLossCost : 0,
@@ -5958,10 +5986,7 @@ export function normalizeAppState(raw: unknown): AppState {
       userPurgedEmpty: Boolean(parsed.userPurgedEmpty),
       isExplicitDemo: Boolean(parsed.isExplicitDemo),
       funds: normalizedFunds,
-      movements: toArray<AuditMovement>(parsed.movements).slice(
-        0,
-        MAX_RECENT_MOVEMENTS,
-      ),
+      movements: normalizeUniqueMovements(parsed.movements),
       ...(parsed.bulkImports
         ? { bulkImports: toArray<BulkImportRecord>(parsed.bulkImports) }
         : {}),
@@ -6422,7 +6447,7 @@ export function recoverStartupErpState(
         userPurgedEmpty: false,
         movements: [
           {
-            id: `mov-recovery-${Date.now()}`,
+            id: createUniqueMovementId('mov-recovery'),
             type: 'reconciliation',
             description: `Recuperación automática desde respaldo local (${migratedInventory.reduce((s, i) => s + i.stock, 0)} uds) y caja (${formatUSD(restoredCash)} USDT)`,
             amount: restoredCash,
@@ -6458,7 +6483,7 @@ export function recoverStartupErpState(
       changed = true;
       nextMovements = [
         {
-          id: `mov-cash-restore-${Date.now()}`,
+          id: createUniqueMovementId('mov-cash-restore'),
           type: 'reconciliation',
           description:
             'Corrección automática de caja física (+$15.00 USDT recuperados -> $135.19 USDT)',
@@ -6541,7 +6566,7 @@ export function recoverStartupErpState(
     changed = true;
     nextMovements = [
       {
-        id: `mov-cash-restore-${Date.now()}`,
+        id: createUniqueMovementId('mov-cash-restore'),
         type: 'reconciliation',
         description:
           'Corrección automática de caja física (+$15.00 USDT recuperados -> $135.19 USDT)',

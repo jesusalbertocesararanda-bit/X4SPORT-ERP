@@ -3203,3 +3203,55 @@ test('voidSaleTransaction restores FIFO stock without double-counting returns, r
   const voidedBuyer = customerDir.find((c) => c.name === 'Cliente Anulable');
   assert.equal(voidedBuyer?.purchaseCount ?? 0, 0);
 });
+
+test('movements always receive unique IDs in same-ms mutations and normalizeAppState disambiguates legacy duplicates', () => {
+  let state = createDemoSeedState();
+  for (let i = 0; i < 6; i += 1) {
+    const res = registerCapitalInjection(state, {
+      contributor: 'Jesús',
+      concept: `Aporte rápido ${i}`,
+      amount: 5,
+      destination: 'growthReinvestment',
+    });
+    assert.equal(res.ok, true);
+    state = res.state;
+  }
+
+  const ids = state.movements.map((m) => m.id);
+  assert.equal(new Set(ids).size, ids.length);
+
+  // Legacy snapshot containing two movements with identical ID 'mov-1795074669804'
+  const legacySnapshot = {
+    ...sanitizeForFirebase(state),
+    movements: [
+      {
+        id: 'mov-1795074669804',
+        type: 'sale',
+        description: 'Movimiento A',
+        amount: 30,
+        createdAt: '2026-11-24T21:00:00.000Z',
+      },
+      {
+        id: 'mov-1795074669804',
+        type: 'collection',
+        description: 'Movimiento B',
+        amount: 20,
+        createdAt: '2026-11-24T21:00:00.000Z',
+      },
+      {
+        id: 'mov-1795074669804',
+        type: 'expense',
+        description: 'Movimiento C',
+        amount: -10,
+        createdAt: '2026-11-24T21:00:00.000Z',
+      },
+    ],
+  };
+
+  const hydrated = normalizeAppState(legacySnapshot);
+  assert.equal(hydrated.movements.length, 3);
+  const hydratedIds = hydrated.movements.map((m) => m.id);
+  assert.equal(new Set(hydratedIds).size, 3);
+  assert.equal(hydratedIds[0], 'mov-1795074669804');
+});
+
