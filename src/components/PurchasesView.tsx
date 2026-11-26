@@ -1194,364 +1194,519 @@ export function PurchasesView({
         </div>
       )}
 
-      {/* ETAPA 1: REGISTRAR COMPRA / RECEPCIÓN (FLUJO EN 3 COLUMNAS EN ESCRITORIO) */}
+      {/* ETAPA 1: REGISTRAR COMPRA / RECEPCIÓN (BARRA HORIZONTAL STICKY + 2 COLUMNAS DE CARGA) */}
       {(subView === 'all' || subView === 'create') && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
-          {/* COLUMNA 1: ENTRADA DE DATOS */}
-          <div className="lg:col-span-4 space-y-3.5">
-            <section
-              aria-labelledby="batch-header-heading"
-              className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4"
-            >
-              <div className="flex flex-col gap-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="space-y-4">
+          {/* BARRA SUPERIOR HORIZONTAL STICKY PARA RESUMEN Y CONFIRMACIÓN */}
+          <section
+            aria-labelledby="batch-impact-heading"
+            className="w-full sticky top-0 z-20 rounded-xl border border-slate-800 bg-[#0D1526]/95 backdrop-blur-md px-4 py-2.5 shadow-md space-y-2"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Izquierda / Centro: Identificador + Métricas en fila horizontal */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs min-w-0">
+                <div className="flex items-center pr-2 border-r border-slate-800">
                   <h2
-                    id="batch-header-heading"
+                    id="batch-impact-heading"
+                    className="flex items-center gap-2 font-display text-xs sm:text-sm font-semibold text-white whitespace-nowrap"
+                  >
+                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                      4
+                    </span>
+                    <span>Resumen y Confirmación</span>
+                  </h2>
+                </div>
+
+                {/* Modalidad */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Modalidad:</span>
+                  <span
+                    className={`font-semibold whitespace-nowrap ${
+                      flowType === 'direct'
+                        ? 'text-emerald-300'
+                        : 'text-amber-300'
+                    }`}
+                  >
+                    {flowType === 'direct'
+                      ? 'Recepción Directa'
+                      : 'En Tránsito'}
+                  </span>
+                </div>
+
+                <span aria-hidden="true" className="hidden sm:inline text-slate-700">|</span>
+
+                {/* Total prendas */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Prendas:</span>
+                  <span className="font-mono-num font-semibold text-white whitespace-nowrap">
+                    {batchSummary.totalUnits} uds
+                  </span>
+                </div>
+
+                <span aria-hidden="true" className="hidden sm:inline text-slate-700">|</span>
+
+                {/* Costo fábrica */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Fábrica:</span>
+                  <span className="font-mono-num font-semibold text-white whitespace-nowrap">
+                    {formatUSD(batchSummary.totalFactory)}
+                  </span>
+                </div>
+
+                <span aria-hidden="true" className="hidden md:inline text-slate-700">|</span>
+
+                {/* Flete prorrateado */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Flete/ud:</span>
+                  <span className="font-mono-num font-semibold text-blue-300 whitespace-nowrap">
+                    {batchSummary.totalUnits > 0
+                      ? `${formatUSD(batchSummary.freightPerUnit)}/ud`
+                      : '—'}
+                  </span>
+                </div>
+
+                <span aria-hidden="true" className="hidden md:inline text-slate-700">|</span>
+
+                {/* Desembolso inmediato */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Desembolso:</span>
+                  <span
+                    data-testid="batch-total-landed"
+                    className={`font-mono-num text-sm font-bold whitespace-nowrap ${
+                      batchSummary.totalLanded > availableFundingBalance
+                        ? 'text-red-400'
+                        : 'text-white'
+                    }`}
+                  >
+                    {formatUSD(batchSummary.totalLanded)}
+                  </span>
+                </div>
+
+                <span aria-hidden="true" className="hidden xl:inline text-slate-700">|</span>
+
+                {/* Saldo proyectado */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">Saldo proy.:</span>
+                  <span
+                    className={`font-mono-num font-semibold whitespace-nowrap ${
+                      availableFundingBalance - batchSummary.totalLanded < 0
+                        ? 'text-red-400'
+                        : 'text-emerald-400'
+                    }`}
+                  >
+                    {formatUSD(availableFundingBalance - batchSummary.totalLanded)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Botón principal de acción a la derecha */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  data-testid="btn-submit-batch"
+                  onClick={() => void handleSaveBatch()}
+                  disabled={draftItems.length === 0 || isSubmittingCreate}
+                  className={`inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold text-white transition-colors active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 ${
+                    flowType === 'direct'
+                      ? 'bg-emerald-600 hover:bg-emerald-500 focus-visible:ring-emerald-400'
+                      : 'bg-blue-600 hover:bg-blue-500 focus-visible:ring-blue-400'
+                  }`}
+                >
+                  {flowType === 'direct' ? (
+                    <PackageCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <ShoppingCart className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  )}
+                  {isSubmittingCreate
+                    ? 'Procesando registro...'
+                    : flowType === 'direct'
+                      ? 'Confirmar Recepción Directa en Bodega'
+                      : 'Registrar Orden en Tránsito'}
+                </button>
+              </div>
+            </div>
+
+            {/* Avisos y alertas compactas justo debajo dentro de la misma barra superior */}
+            {batchSummary.totalLanded > availableFundingBalance &&
+              draftItems.length > 0 && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-300">
+                  El total supera el efectivo físico en caja ({formatUSD(availableFundingBalance)}). Cobra cuentas por cobrar o ajusta las cantidades.
+                </div>
+              )}
+
+            {batchSummary.totalLanded <= availableFundingBalance &&
+              (fundingSource === 'replacement' ||
+                fundingSource === 'growthReinvestment') &&
+              batchSummary.totalLanded > primaryFundingBalance &&
+              draftItems.length > 0 && (
+                <div
+                  data-testid="purchase-bridge-notice"
+                  className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-200"
+                >
+                  {batchSummary.totalLanded <= combinedRepoReinvestmentBalance
+                    ? `Respaldo mutuo activo: el saldo en ${getFundingSourceLabel(fundingSource)} (${formatUSD(primaryFundingBalance)}) se complementará con ${formatUSD(round2(batchSummary.totalLanded - primaryFundingBalance))} del fondo hermano.`
+                    : `Respaldo combinado + prorrata: se usarán Reposición y Reinversión (${formatUSD(combinedRepoReinvestmentBalance)}) y el excedente de ${formatUSD(round2(batchSummary.totalLanded - combinedRepoReinvestmentBalance))} se prorrateará en los demás fondos de caja.`}
+                </div>
+              )}
+          </section>
+
+          {/* CUADRÍCULA DE 2 COLUMNAS (IZQUIERDA: 1 Y 2; DERECHA: 3) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+            {/* COLUMNA IZQUIERDA: 1 · DATOS DEL LOTE Y 2 · AGREGAR PRENDAS */}
+            <div className="lg:col-span-7 min-w-0 space-y-4">
+              {/* BLOQUE 1: DATOS DEL LOTE Y MODALIDAD DE INGRESO */}
+              <section
+                aria-labelledby="batch-header-heading"
+                className="rounded-xl border border-slate-800 bg-[#0D1526] p-4"
+              >
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2
+                      id="batch-header-heading"
+                      className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
+                    >
+                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                        1
+                      </span>
+                      <span>Datos del Lote y Modalidad de Ingreso</span>
+                    </h2>
+                    <p className="text-[11px] text-slate-400">
+                      Caja:{' '}
+                      <strong className="font-mono-num text-emerald-400">
+                        {formatUSD(state.cashOnHand)}
+                      </strong>
+                    </p>
+                  </div>
+
+                  {/* Selector Flujo: En Tránsito vs Recepción Directa */}
+                  <div
+                    role="group"
+                    aria-label="Modalidad de ingreso"
+                    className="inline-flex w-full rounded-lg border border-slate-700 bg-[#070D19] p-1"
+                  >
+                    <button
+                      type="button"
+                      data-testid="btn-flow-transit"
+                      aria-pressed={flowType === 'transit'}
+                      onClick={() => handleFlowTypeChange('transit')}
+                      className={`inline-flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                        flowType === 'transit'
+                          ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Truck className="h-3.5 w-3.5" aria-hidden="true" />
+                      En Tránsito
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-flow-direct"
+                      aria-pressed={flowType === 'direct'}
+                      onClick={() => handleFlowTypeChange('direct')}
+                      className={`inline-flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                        flowType === 'direct'
+                          ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      Recepción Directa
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                  <div>
+                    <label
+                      htmlFor="batch-date"
+                      className="block text-[11px] font-medium text-slate-300"
+                    >
+                      Fecha de registro
+                    </label>
+                    <input
+                      id="batch-date"
+                      type="date"
+                      value={entryDate}
+                      onChange={(e) => {
+                        setEntryDate(e.target.value);
+                        if (flowType === 'direct') {
+                          setDirectReceivedDate(e.target.value);
+                        }
+                      }}
+                      className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="batch-supplier"
+                      className="flex items-center gap-1 text-[11px] font-medium text-slate-300"
+                    >
+                      <Building2 className="h-3 w-3 text-slate-400" aria-hidden="true" />
+                      Proveedor / Origen
+                    </label>
+                    <input
+                      id="batch-supplier"
+                      data-testid="batch-supplier-input"
+                      type="text"
+                      placeholder="Ej. Fábrica Guangzhou / Local"
+                      value={supplier}
+                      onChange={(e) => {
+                        setSupplier(e.target.value);
+                        setFeedback(null);
+                      }}
+                      className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="batch-ref"
+                      className="block text-[11px] font-medium text-slate-300"
+                    >
+                      Referencia del lote
+                    </label>
+                    <input
+                      id="batch-ref"
+                      type="text"
+                      required
+                      placeholder="Ej. Aéreo Noviembre"
+                      value={referenceName}
+                      onChange={(e) => {
+                        setReferenceName(e.target.value);
+                        setFeedback(null);
+                      }}
+                      className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="batch-shipping"
+                      className="block text-[11px] font-medium text-slate-300"
+                    >
+                      Tipo de envío (SLA)
+                    </label>
+                    <select
+                      id="batch-shipping"
+                      value={shippingType}
+                      onChange={(e) =>
+                        setShippingType(e.target.value as ShippingType)
+                      }
+                      className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      {SHIPPING_TYPES.map((st) => (
+                        <option key={st} value={st}>
+                          {st === 'Aéreo'
+                            ? 'Aéreo (Alerta > 15 días)'
+                            : 'Marítimo (Alerta > 80 días)'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="batch-freight"
+                      className="block text-[11px] font-medium text-slate-300"
+                    >
+                      {flowType === 'direct'
+                        ? 'Flete / Traslado (USDT)'
+                        : 'Flete Estimado (USDT)'}
+                    </label>
+                    <input
+                      id="batch-freight"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={totalFreightCost}
+                      onChange={(e) => {
+                        setTotalFreightCost(e.target.value);
+                        setFeedback(null);
+                      }}
+                      className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="batch-usdt-rate"
+                      className="block text-[11px] font-medium text-slate-300"
+                    >
+                      Tasa USDT del Lote (Bs/USDT)
+                    </label>
+                    <input
+                      id="batch-usdt-rate"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      required
+                      value={batchUsdtRate}
+                      onChange={(e) => {
+                        setBatchUsdtRate(e.target.value);
+                        setFeedback(null);
+                      }}
+                      className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 xl:col-span-1">
+                    <label
+                      htmlFor="batch-funding-source"
+                      className="block text-[11px] font-medium text-slate-300"
+                    >
+                      Descontar de
+                    </label>
+                    <select
+                      id="batch-funding-source"
+                      value={fundingSource}
+                      onChange={(e) => {
+                        setFundingSource(
+                          e.target.value as PurchaseFundingSource | '',
+                        );
+                        setFeedback(null);
+                      }}
+                      className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">Selecciona origen de fondos...</option>
+                      <option value="replacement">
+                        Fondo de Reposición (Costo Base) ({formatUSD(replacementFundBalance)})
+                      </option>
+                      <option value="growthReinvestment">
+                        Fondo de Reinversión ({formatUSD(reinvestmentFundBalance)})
+                      </option>
+                      <option value="cashOnHand">
+                        Caja General ({formatUSD(state.cashOnHand)})
+                      </option>
+                    </select>
+                  </div>
+
+                  {flowType === 'transit' ? (
+                    <div className="sm:col-span-2 xl:col-span-2">
+                      <label
+                        htmlFor="batch-arrival-date"
+                        className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
+                      >
+                        <Calendar className="h-3 w-3 text-blue-400" aria-hidden="true" />
+                        Fecha estimada de llegada (Agenda en Google Calendar)
+                      </label>
+                      <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                        <input
+                          id="batch-arrival-date"
+                          data-testid="batch-estimated-arrival-date"
+                          type="date"
+                          value={estimatedArrivalDate}
+                          onChange={(e) => {
+                            setEstimatedArrivalDate(e.target.value);
+                            setFeedback(null);
+                          }}
+                          className="font-mono-num w-full sm:w-44 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                        <span className="text-[11px] text-slate-400">
+                          {estimatedArrivalDate
+                            ? `Recordatorio automático el ${estimatedArrivalDate}.`
+                            : 'Opcional para agendar llegada.'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="sm:col-span-2 xl:col-span-2">
+                      <label
+                        htmlFor="batch-direct-received-date"
+                        className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-300"
+                      >
+                        <PackageCheck className="h-3 w-3" aria-hidden="true" />
+                        Fecha de ingreso directo a bodega (FIFO)
+                      </label>
+                      <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                        <input
+                          id="batch-direct-received-date"
+                          data-testid="batch-direct-received-date"
+                          type="date"
+                          value={directReceivedDate}
+                          onChange={(e) => {
+                            setDirectReceivedDate(e.target.value);
+                            setFeedback(null);
+                          }}
+                          className="font-mono-num w-full sm:w-44 min-h-[36px] rounded-lg border border-emerald-500/40 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                        <span className="text-[11px] text-emerald-300/90">
+                          Ingresa de inmediato a bodega como RECIBIDO (0 días en tránsito).
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Visor claro de saldos disponibles (Reposición + Reinversión + Respaldo Combinado) */}
+                <div
+                  data-testid="purchase-funding-balances"
+                  className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#080E1C] p-2.5 sm:grid-cols-3"
+                >
+                  <div
+                    className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
+                      fundingSource === 'replacement'
+                        ? 'border-blue-500/50 bg-blue-500/10'
+                        : 'border-slate-800 bg-[#070D19]'
+                    }`}
+                  >
+                    <p className="text-[10px] font-medium text-slate-400">
+                      Reposición (Costo)
+                    </p>
+                    <p className="font-mono-num mt-0.5 text-xs font-bold text-blue-300">
+                      {formatUSD(replacementFundBalance)}
+                    </p>
+                  </div>
+
+                  <div
+                    className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
+                      fundingSource === 'growthReinvestment'
+                        ? 'border-emerald-500/50 bg-emerald-500/10'
+                        : 'border-slate-800 bg-[#070D19]'
+                    }`}
+                  >
+                    <p className="text-[10px] font-medium text-slate-400">
+                      Reinversión
+                    </p>
+                    <p className="font-mono-num mt-0.5 text-xs font-bold text-emerald-300">
+                      {formatUSD(reinvestmentFundBalance)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-700/80 bg-[#070D19] px-2.5 py-1.5">
+                    <p className="text-[10px] font-medium text-slate-400">
+                      Combinado
+                    </p>
+                    <p className="font-mono-num mt-0.5 text-xs font-bold text-white">
+                      {formatUSD(combinedRepoReinvestmentBalance)}
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              {/* BLOQUE 2: CONSTRUCTOR DE PRENDAS (SOLO FORMULARIO DE CARGA) */}
+              <section
+                aria-labelledby="batch-items-builder-heading"
+                className="rounded-xl border border-slate-800 bg-[#0D1526] p-4"
+              >
+                <div>
+                  <h2
+                    id="batch-items-builder-heading"
                     className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
                   >
                     <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
-                      1
+                      2
                     </span>
-                    <span>Datos del Lote y Modalidad de Ingreso</span>
+                    <span>Agregar Prendas · Modelo, Versión y Tallas</span>
                   </h2>
-                  <p className="text-[11px] text-slate-400">
-                    Caja:{' '}
-                    <strong className="font-mono-num text-emerald-400">
-                      {formatUSD(state.cashOnHand)}
-                    </strong>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    La categoría o equipo se detecta automáticamente desde el nombre del modelo.
                   </p>
                 </div>
 
-                {/* Selector Flujo: En Tránsito vs Recepción Directa */}
-                <div
-                  role="group"
-                  aria-label="Modalidad de ingreso"
-                  className="inline-flex w-full rounded-lg border border-slate-700 bg-[#070D19] p-1"
-                >
-                  <button
-                    type="button"
-                    data-testid="btn-flow-transit"
-                    aria-pressed={flowType === 'transit'}
-                    onClick={() => handleFlowTypeChange('transit')}
-                    className={`inline-flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      flowType === 'transit'
-                        ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <Truck className="h-3.5 w-3.5" aria-hidden="true" />
-                    En Tránsito
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="btn-flow-direct"
-                    aria-pressed={flowType === 'direct'}
-                    onClick={() => handleFlowTypeChange('direct')}
-                    className={`inline-flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      flowType === 'direct'
-                        ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                    Recepción Directa
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                <div>
-                  <label
-                    htmlFor="batch-date"
-                    className="block text-[11px] font-medium text-slate-300"
-                  >
-                    Fecha de registro
-                  </label>
-                  <input
-                    id="batch-date"
-                    type="date"
-                    value={entryDate}
-                    onChange={(e) => {
-                      setEntryDate(e.target.value);
-                      if (flowType === 'direct') {
-                        setDirectReceivedDate(e.target.value);
-                      }
-                    }}
-                    className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="batch-supplier"
-                    className="flex items-center gap-1 text-[11px] font-medium text-slate-300"
-                  >
-                    <Building2 className="h-3 w-3 text-slate-400" aria-hidden="true" />
-                    Proveedor / Origen
-                  </label>
-                  <input
-                    id="batch-supplier"
-                    data-testid="batch-supplier-input"
-                    type="text"
-                    placeholder="Ej. Fábrica Guangzhou / Local"
-                    value={supplier}
-                    onChange={(e) => {
-                      setSupplier(e.target.value);
-                      setFeedback(null);
-                    }}
-                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="batch-ref"
-                    className="block text-[11px] font-medium text-slate-300"
-                  >
-                    Referencia del lote
-                  </label>
-                  <input
-                    id="batch-ref"
-                    type="text"
-                    required
-                    placeholder="Ej. Aéreo Noviembre"
-                    value={referenceName}
-                    onChange={(e) => {
-                      setReferenceName(e.target.value);
-                      setFeedback(null);
-                    }}
-                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="batch-shipping"
-                    className="block text-[11px] font-medium text-slate-300"
-                  >
-                    Tipo de envío (SLA)
-                  </label>
-                  <select
-                    id="batch-shipping"
-                    value={shippingType}
-                    onChange={(e) =>
-                      setShippingType(e.target.value as ShippingType)
-                    }
-                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  >
-                    {SHIPPING_TYPES.map((st) => (
-                      <option key={st} value={st}>
-                        {st === 'Aéreo'
-                          ? 'Aéreo (Alerta > 15 días)'
-                          : 'Marítimo (Alerta > 80 días)'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="batch-freight"
-                    className="block text-[11px] font-medium text-slate-300"
-                  >
-                    {flowType === 'direct'
-                      ? 'Flete / Traslado (USDT)'
-                      : 'Flete Estimado (USDT)'}
-                  </label>
-                  <input
-                    id="batch-freight"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={totalFreightCost}
-                    onChange={(e) => {
-                      setTotalFreightCost(e.target.value);
-                      setFeedback(null);
-                    }}
-                    className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="batch-usdt-rate"
-                    className="block text-[11px] font-medium text-slate-300"
-                  >
-                    Tasa USDT del Lote (Bs/USDT)
-                  </label>
-                  <input
-                    id="batch-usdt-rate"
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    required
-                    value={batchUsdtRate}
-                    onChange={(e) => {
-                      setBatchUsdtRate(e.target.value);
-                      setFeedback(null);
-                    }}
-                    className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label
-                    htmlFor="batch-funding-source"
-                    className="block text-[11px] font-medium text-slate-300"
-                  >
-                    Descontar de
-                  </label>
-                  <select
-                    id="batch-funding-source"
-                    value={fundingSource}
-                    onChange={(e) => {
-                      setFundingSource(
-                        e.target.value as PurchaseFundingSource | '',
-                      );
-                      setFeedback(null);
-                    }}
-                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  >
-                    <option value="">Selecciona origen de fondos...</option>
-                    <option value="replacement">
-                      Fondo de Reposición (Costo Base) ({formatUSD(replacementFundBalance)})
-                    </option>
-                    <option value="growthReinvestment">
-                      Fondo de Reinversión ({formatUSD(reinvestmentFundBalance)})
-                    </option>
-                    <option value="cashOnHand">
-                      Caja General ({formatUSD(state.cashOnHand)})
-                    </option>
-                  </select>
-                </div>
-
-                {flowType === 'transit' ? (
-                  <div className="sm:col-span-2">
-                    <label
-                      htmlFor="batch-arrival-date"
-                      className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
-                    >
-                      <Calendar className="h-3 w-3 text-blue-400" aria-hidden="true" />
-                      Fecha estimada de llegada (Agenda en Google Calendar)
-                    </label>
-                    <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
-                      <input
-                        id="batch-arrival-date"
-                        data-testid="batch-estimated-arrival-date"
-                        type="date"
-                        value={estimatedArrivalDate}
-                        onChange={(e) => {
-                          setEstimatedArrivalDate(e.target.value);
-                          setFeedback(null);
-                        }}
-                        className="font-mono-num w-full sm:w-44 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                      <span className="text-[11px] text-slate-400">
-                        {estimatedArrivalDate
-                          ? `Recordatorio automático el ${estimatedArrivalDate}.`
-                          : 'Opcional para agendar llegada.'}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="sm:col-span-2">
-                    <label
-                      htmlFor="batch-direct-received-date"
-                      className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-300"
-                    >
-                      <PackageCheck className="h-3 w-3" aria-hidden="true" />
-                      Fecha de ingreso directo a bodega (FIFO)
-                    </label>
-                    <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
-                      <input
-                        id="batch-direct-received-date"
-                        data-testid="batch-direct-received-date"
-                        type="date"
-                        value={directReceivedDate}
-                        onChange={(e) => {
-                          setDirectReceivedDate(e.target.value);
-                          setFeedback(null);
-                        }}
-                        className="font-mono-num w-full sm:w-44 min-h-[36px] rounded-lg border border-emerald-500/40 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      />
-                      <span className="text-[11px] text-emerald-300/90">
-                        Ingresa de inmediato a bodega como RECIBIDO (0 días en tránsito).
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Visor claro de saldos disponibles (Reposición + Reinversión + Respaldo Combinado) */}
-              <div
-                data-testid="purchase-funding-balances"
-                className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#080E1C] p-2.5 sm:grid-cols-3"
-              >
-                <div
-                  className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
-                    fundingSource === 'replacement'
-                      ? 'border-blue-500/50 bg-blue-500/10'
-                      : 'border-slate-800 bg-[#070D19]'
-                  }`}
-                >
-                  <p className="text-[10px] font-medium text-slate-400">
-                    Reposición (Costo)
-                  </p>
-                  <p className="font-mono-num mt-0.5 text-xs font-bold text-blue-300">
-                    {formatUSD(replacementFundBalance)}
-                  </p>
-                </div>
-
-                <div
-                  className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
-                    fundingSource === 'growthReinvestment'
-                      ? 'border-emerald-500/50 bg-emerald-500/10'
-                      : 'border-slate-800 bg-[#070D19]'
-                  }`}
-                >
-                  <p className="text-[10px] font-medium text-slate-400">
-                    Reinversión
-                  </p>
-                  <p className="font-mono-num mt-0.5 text-xs font-bold text-emerald-300">
-                    {formatUSD(reinvestmentFundBalance)}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-slate-700/80 bg-[#070D19] px-2.5 py-1.5">
-                  <p className="text-[10px] font-medium text-slate-400">
-                    Combinado
-                  </p>
-                  <p className="font-mono-num mt-0.5 text-xs font-bold text-white">
-                    {formatUSD(combinedRepoReinvestmentBalance)}
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            {/* BLOQUE 2: CONSTRUCTOR DE PRENDAS (SOLO FORMULARIO DE CARGA) */}
-            <section
-              aria-labelledby="batch-items-builder-heading"
-              className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4"
-            >
-              <div>
-                <h2
-                  id="batch-items-builder-heading"
-                  className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
-                >
-                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
-                    2
-                  </span>
-                  <span>Agregar Prendas · Modelo, Versión y Tallas</span>
-                </h2>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  La categoría o equipo se detecta automáticamente desde el nombre del modelo.
-                </p>
-              </div>
-
-              <form onSubmit={handleAddLine} className="mt-3 space-y-3">
-                {/* Selección de Modelo Existente o "+ Registrar Nuevo Modelo" + Versión + Costo */}
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="col-span-2 space-y-1">
+                <form onSubmit={handleAddLine} className="mt-3 space-y-3">
+                  {/* Selección de Modelo Existente o "+ Registrar Nuevo Modelo" */}
+                  <div className="space-y-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label
                         htmlFor={
@@ -1788,257 +1943,184 @@ export function PurchasesView({
                     </div>
                   </div>
 
-                  <div>
-                    <label
-                      htmlFor="purchase-version"
-                      className="block text-[11px] font-medium text-slate-300"
-                    >
-                      Versión <span className="text-red-400">*</span>
-                    </label>
-                    <select
-                      id="purchase-version"
-                      data-testid="purchase-version-select"
-                      required
-                      value={version}
-                      onChange={(e) =>
-                        handleVersionChange(
-                          e.target.value as 'Player' | 'Retro' | 'Fans',
-                        )
-                      }
-                      className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    >
-                      {VERSIONS.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="purchase-factory-cost"
-                      className="block text-[11px] font-medium text-slate-300"
-                    >
-                      Costo Fábrica ($)
-                    </label>
-                    <input
-                      id="purchase-factory-cost"
-                      data-testid="purchase-factory-cost-input"
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      required
-                      value={factoryUnitCost}
-                      onChange={(e) => {
-                        setFactoryUnitCost(e.target.value);
-                        setFeedback(null);
-                      }}
-                      className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Selector Modo A vs Modo B para Precio de Venta al Público (Etapa 1) */}
-                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3 space-y-2.5">
-                  <div className="flex flex-col gap-2">
+                  {/* Versión y Costo Fábrica en fila horizontal */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <div>
-                      <span className="block text-xs font-semibold text-slate-200">
-                        Precio de Venta al Público (PVP $)
-                      </span>
-                      <span className="text-[11px] text-slate-400">
-                        Elige un PVP uniforme para todo el lote o asigna precios distintos por ítem/talla.
-                      </span>
-                    </div>
-
-                    <div
-                      role="group"
-                      aria-label="Modo de precio de venta"
-                      className="inline-flex w-full rounded-lg border border-slate-700 bg-[#070D19] p-1"
-                    >
-                      <button
-                        type="button"
-                        data-testid="btn-stage1-pricing-uniform"
-                        aria-pressed={stage1PricingMode === 'uniform'}
-                        onClick={() => handleStage1PricingModeChange('uniform')}
-                        className={`flex-1 min-h-[30px] rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                          stage1PricingMode === 'uniform'
-                            ? 'bg-emerald-600/25 text-emerald-200 border border-emerald-500/40'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Modo A: Mismo precio lote
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="btn-stage1-pricing-per-item"
-                        aria-pressed={stage1PricingMode === 'per-item'}
-                        onClick={() => handleStage1PricingModeChange('per-item')}
-                        className={`flex-1 min-h-[30px] rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                          stage1PricingMode === 'per-item'
-                            ? 'bg-blue-600/25 text-blue-200 border border-blue-500/40'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Modo B: Precio por talla/ítem
-                      </button>
-                    </div>
-                  </div>
-
-                  {stage1PricingMode === 'uniform' ? (
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
                       <label
-                        htmlFor="purchase-sale-price"
-                        className="text-[11px] font-medium text-slate-300"
+                        htmlFor="purchase-version"
+                        className="block text-[11px] font-medium text-slate-300"
                       >
-                        PVP uniforme para todo el lote ($):
+                        Versión <span className="text-red-400">*</span>
+                      </label>
+                      <select
+                        id="purchase-version"
+                        data-testid="purchase-version-select"
+                        required
+                        value={version}
+                        onChange={(e) =>
+                          handleVersionChange(
+                            e.target.value as 'Player' | 'Retro' | 'Fans',
+                          )
+                        }
+                        className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        {VERSIONS.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="purchase-factory-cost"
+                        className="block text-[11px] font-medium text-slate-300"
+                      >
+                        Costo Fábrica ($)
                       </label>
                       <input
-                        id="purchase-sale-price"
-                        data-testid="purchase-sale-price-input"
+                        id="purchase-factory-cost"
+                        data-testid="purchase-factory-cost-input"
                         type="number"
                         min="0.01"
                         step="0.01"
                         required
-                        value={unitSalePrice}
-                        onChange={(e) => handleUniformPriceChange(e.target.value)}
-                        className="font-mono-num w-28 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        value={factoryUnitCost}
+                        onChange={(e) => {
+                          setFactoryUnitCost(e.target.value);
+                          setFeedback(null);
+                        }}
+                        className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
                     </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs text-blue-200">
-                      <label
-                        htmlFor="purchase-sale-price"
-                        className="text-[11px] font-medium text-slate-300"
-                      >
-                        PVP base sugerido ($):
-                      </label>
-                      <input
-                        id="purchase-sale-price"
-                        data-testid="purchase-sale-price-input"
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        value={unitSalePrice}
-                        onChange={(e) => handleUniformPriceChange(e.target.value)}
-                        className="font-mono-num w-28 min-h-[34px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs font-semibold text-emerald-300 focus:border-blue-500 focus:outline-none"
-                      />
-                      <span className="w-full text-[11px] text-slate-400">
-                        Ajusta el PVP individual de cada talla directamente abajo en la columna.
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Matriz Vertical de Tallas en Columna S, M, L, XL, XXL + otras tallas */}
-                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3 space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-slate-200">
-                      Matriz de Tallas en Columna (Cantidad por talla)
-                    </span>
-                    <span className="font-mono-num text-xs font-semibold text-blue-300">
-                      Total bloque: {matrixTotalUnits} uds
-                    </span>
                   </div>
 
-                  <div
-                    data-testid="vertical-size-matrix"
-                    className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-[#070D19]"
-                  >
-                    {activeSizes.map((sz) => {
-                      const isStandard = ALL_JERSEY_SIZES.includes(
-                        sz as (typeof ALL_JERSEY_SIZES)[number],
-                      );
-                      return (
-                        <div
-                          key={sz}
-                          data-testid={`vertical-size-row-${sz}`}
-                          className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5"
+                  {/* Selector Modo A vs Modo B para Precio de Venta al Público (Etapa 1) */}
+                  <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3 space-y-2.5">
+                    <div className="flex flex-col gap-2">
+                      <div>
+                        <span className="block text-xs font-semibold text-slate-200">
+                          Precio de Venta al Público (PVP $)
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          Elige un PVP uniforme para todo el lote o asigna precios distintos por ítem/talla.
+                        </span>
+                      </div>
+
+                      <div
+                        role="group"
+                        aria-label="Modo de precio de venta"
+                        className="inline-flex w-full rounded-lg border border-slate-700 bg-[#070D19] p-1"
+                      >
+                        <button
+                          type="button"
+                          data-testid="btn-stage1-pricing-uniform"
+                          aria-pressed={stage1PricingMode === 'uniform'}
+                          onClick={() => handleStage1PricingModeChange('uniform')}
+                          className={`flex-1 min-h-[30px] rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                            stage1PricingMode === 'uniform'
+                              ? 'bg-emerald-600/25 text-emerald-200 border border-emerald-500/40'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
                         >
-                          <div className="flex items-center gap-1.5 min-w-[64px]">
-                            <label
-                              htmlFor={`matrix-size-${sz}`}
-                              className="font-mono-num text-xs font-bold text-white"
-                            >
-                              {sz}
-                            </label>
-                            {!isStandard && (
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveExtraSize(sz)}
-                                aria-label={`Quitar talla ${sz}`}
-                                className="rounded p-0.5 text-slate-500 hover:bg-slate-800 hover:text-red-300"
-                              >
-                                <X className="h-3 w-3" aria-hidden="true" />
-                              </button>
-                            )}
-                          </div>
+                          Modo A: Mismo precio lote
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="btn-stage1-pricing-per-item"
+                          aria-pressed={stage1PricingMode === 'per-item'}
+                          onClick={() => handleStage1PricingModeChange('per-item')}
+                          className={`flex-1 min-h-[30px] rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                            stage1PricingMode === 'per-item'
+                              ? 'bg-blue-600/25 text-blue-200 border border-blue-500/40'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Modo B: Precio por talla/ítem
+                        </button>
+                      </div>
+                    </div>
 
-                          <div className="flex flex-1 items-center justify-end gap-2.5">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[11px] text-slate-400">
-                                Cant.
-                              </span>
-                              <input
-                                id={`matrix-size-${sz}`}
-                                data-testid={`purchase-size-${sz}`}
-                                type="number"
-                                min="0"
-                                step="1"
-                                value={sizeMatrix[sz] ?? '0'}
-                                onChange={(e) => {
-                                  setSizeMatrix((prev) => ({
-                                    ...prev,
-                                    [sz]: e.target.value,
-                                  }));
-                                  setFeedback(null);
-                                }}
-                                className="font-mono-num w-20 min-h-[34px] rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-right text-xs font-semibold text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            </div>
-
-                            {stage1PricingMode === 'per-item' && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[11px] text-slate-400">
-                                  PVP $
-                                </span>
-                                <input
-                                  id={`matrix-price-${sz}`}
-                                  data-testid={`purchase-size-price-${sz}`}
-                                  type="number"
-                                  min="0.01"
-                                  step="0.01"
-                                  value={sizeSalePrices[sz] ?? unitSalePrice}
-                                  onChange={(e) => {
-                                    setSizeSalePrices((prev) => ({
-                                      ...prev,
-                                      [sz]: e.target.value,
-                                    }));
-                                    setFeedback(null);
-                                  }}
-                                  className="font-mono-num w-20 min-h-[34px] rounded-lg border border-emerald-500/35 bg-[#0D1526] px-2 py-1 text-right text-xs font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {stage1PricingMode === 'uniform' ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                        <label
+                          htmlFor="purchase-sale-price"
+                          className="text-[11px] font-medium text-slate-300"
+                        >
+                          PVP uniforme para todo el lote ($):
+                        </label>
+                        <input
+                          id="purchase-sale-price"
+                          data-testid="purchase-sale-price-input"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          required
+                          value={unitSalePrice}
+                          onChange={(e) => handleUniformPriceChange(e.target.value)}
+                          className="font-mono-num w-28 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs text-blue-200">
+                        <label
+                          htmlFor="purchase-sale-price"
+                          className="text-[11px] font-medium text-slate-300"
+                        >
+                          PVP base sugerido ($):
+                        </label>
+                        <input
+                          id="purchase-sale-price"
+                          data-testid="purchase-sale-price-input"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={unitSalePrice}
+                          onChange={(e) => handleUniformPriceChange(e.target.value)}
+                          className="font-mono-num w-28 min-h-[34px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs font-semibold text-emerald-300 focus:border-blue-500 focus:outline-none"
+                        />
+                        <span className="w-full text-[11px] text-slate-400">
+                          Ajusta el PVP individual de cada talla directamente en su casilla de la matriz.
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  {/* "+ Agregar otra talla" con presets rápidos (XS, 3XL, Niño) + campo libre */}
-                  <div className="pt-0.5">
-                    {!showExtraSizePicker ? (
-                      <button
-                        type="button"
-                        data-testid="btn-add-extra-size"
-                        onClick={() => setShowExtraSizePicker(true)}
-                        className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs font-semibold text-slate-200 transition-colors hover:border-blue-500/40 hover:bg-slate-800 hover:text-white"
-                      >
-                        <Plus className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
-                        Agregar otra talla
-                      </button>
-                    ) : (
+                  {/* Matriz de Tallas en Cuadrícula Compacta */}
+                  <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-slate-200">
+                          Matriz de Tallas (Cantidad por talla)
+                        </span>
+                        <span className="font-mono-num text-xs font-semibold text-blue-300">
+                          ({matrixTotalUnits} uds)
+                        </span>
+                      </div>
+
+                      {!showExtraSizePicker ? (
+                        <button
+                          type="button"
+                          data-testid="btn-add-extra-size"
+                          onClick={() => setShowExtraSizePicker(true)}
+                          className="inline-flex min-h-[30px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs font-semibold text-slate-200 transition-colors hover:border-blue-500/40 hover:bg-slate-800 hover:text-white"
+                        >
+                          <Plus className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                          <span>+ Agregar otra talla</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setShowExtraSizePicker(false)}
+                          className="text-xs text-slate-400 hover:text-white"
+                        >
+                          Cerrar selector
+                        </button>
+                      )}
+                    </div>
+
+                    {showExtraSizePicker && (
                       <div
                         data-testid="extra-size-picker"
                         className="rounded-lg border border-slate-700 bg-[#070D19] p-2.5 space-y-2"
@@ -2068,7 +2150,7 @@ export function PurchasesView({
                                 data-testid={`preset-size-${preset}`}
                                 disabled={exists}
                                 onClick={() => handleAddExtraSize(preset)}
-                                className="min-h-[30px] rounded-md border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs font-semibold text-slate-200 hover:border-blue-500/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                className="min-h-[28px] rounded-md border border-slate-700 bg-[#0D1526] px-2.5 py-0.5 text-xs font-semibold text-slate-200 hover:border-blue-500/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                               >
                                 + {preset}
                               </button>
@@ -2089,356 +2171,293 @@ export function PurchasesView({
                               }
                             }}
                             placeholder="Ej. 4XL, 10-12 años, Juvenil"
-                            className="min-w-[140px] flex-1 min-h-[34px] rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                            className="min-w-[140px] flex-1 min-h-[32px] rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
                           />
                           <button
                             type="button"
                             data-testid="btn-confirm-custom-size"
                             onClick={() => handleAddExtraSize(customSizeInput)}
                             disabled={!customSizeInput.trim()}
-                            className="min-h-[34px] rounded-lg bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                            className="min-h-[32px] rounded-lg bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
                           >
                             Agregar talla
                           </button>
                         </div>
                       </div>
                     )}
-                  </div>
-                </div>
 
-                {/* Foto opcional para el catálogo público (URL / Drive / Móvil) */}
-                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
-                  <div className="flex flex-col gap-2">
-                    <div className="flex-1 min-w-0">
-                      <label
-                        htmlFor="purchase-catalog-photo"
-                        className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
-                      >
-                        <Camera className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
-                        Foto para Catálogo Público (opcional · URL, Google Drive o galería)
-                      </label>
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <input
-                          id="purchase-catalog-photo"
-                          data-testid="purchase-catalog-photo-input"
-                          type="url"
-                          value={itemPhotoInput}
-                          onChange={(e) => setItemPhotoInput(e.target.value)}
-                          placeholder={
-                            existingCatalogPhoto
-                              ? 'Ya tiene foto guardada (pega otro enlace para reemplazar)'
-                              : 'https://drive.google.com/file/d/... o sube desde tu móvil'
-                          }
-                          className="min-w-[160px] flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
-                        />
-                        <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white">
-                          <Upload className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
-                          {photoUploading ? 'Procesando...' : 'Subir Foto'}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => void handlePurchasePhotoUpload(e)}
-                            className="sr-only"
-                          />
-                        </label>
-                        {(itemPhotoInput.trim() || existingCatalogPhoto) && (
-                          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-[#070D19]">
-                            <img
-                              src={
-                                normalizeCatalogImageUrl(itemPhotoInput) ||
-                                existingCatalogPhoto
-                              }
-                              alt="Vista previa modelo"
-                              referrerPolicy="no-referrer"
-                              className="h-full w-full object-cover"
-                            />
+                    <div
+                      data-testid="vertical-size-matrix"
+                      className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2 p-2.5 rounded-lg border border-slate-800 bg-[#070D19]"
+                    >
+                      {activeSizes.map((sz) => {
+                        const isStandard = ALL_JERSEY_SIZES.includes(
+                          sz as (typeof ALL_JERSEY_SIZES)[number],
+                        );
+                        return (
+                          <div
+                            key={sz}
+                            data-testid={`vertical-size-row-${sz}`}
+                            className="flex flex-col rounded-lg border border-slate-800/80 bg-[#0D1526] p-2 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <label
+                                htmlFor={`matrix-size-${sz}`}
+                                className="font-mono-num text-xs font-bold text-white"
+                              >
+                                {sz}
+                              </label>
+                              {!isStandard && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveExtraSize(sz)}
+                                  aria-label={`Quitar talla ${sz}`}
+                                  className="rounded p-0.5 text-slate-500 hover:bg-slate-800 hover:text-red-300"
+                                >
+                                  <X className="h-3 w-3" aria-hidden="true" />
+                                </button>
+                              )}
+                            </div>
+
+                            <div>
+                              <span className="block text-[10px] text-slate-400">
+                                Cant.
+                              </span>
+                              <input
+                                id={`matrix-size-${sz}`}
+                                data-testid={`purchase-size-${sz}`}
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={sizeMatrix[sz] ?? '0'}
+                                onChange={(e) => {
+                                  setSizeMatrix((prev) => ({
+                                    ...prev,
+                                    [sz]: e.target.value,
+                                  }));
+                                  setFeedback(null);
+                                }}
+                                className="font-mono-num mt-0.5 w-full min-h-[32px] rounded border border-slate-700 bg-[#070D19] px-2 py-1 text-center text-xs font-semibold text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              />
+                            </div>
+
+                            {stage1PricingMode === 'per-item' && (
+                              <div>
+                                <span className="block text-[10px] text-slate-400">
+                                  PVP $
+                                </span>
+                                <input
+                                  id={`matrix-price-${sz}`}
+                                  data-testid={`purchase-size-price-${sz}`}
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  value={sizeSalePrices[sz] ?? unitSalePrice}
+                                  onChange={(e) => {
+                                    setSizeSalePrices((prev) => ({
+                                      ...prev,
+                                      [sz]: e.target.value,
+                                    }));
+                                    setFeedback(null);
+                                  }}
+                                  className="font-mono-num mt-0.5 w-full min-h-[30px] rounded border border-emerald-500/35 bg-[#070D19] px-1.5 py-0.5 text-center text-xs font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+                            )}
                           </div>
-                        )}
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Foto opcional para el catálogo público (URL / Drive / Móvil) */}
+                  <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex-1 min-w-0">
+                        <label
+                          htmlFor="purchase-catalog-photo"
+                          className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
+                        >
+                          <Camera className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                          Foto para Catálogo Público (opcional · URL, Google Drive o galería)
+                        </label>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <input
+                            id="purchase-catalog-photo"
+                            data-testid="purchase-catalog-photo-input"
+                            type="url"
+                            value={itemPhotoInput}
+                            onChange={(e) => setItemPhotoInput(e.target.value)}
+                            placeholder={
+                              existingCatalogPhoto
+                                ? 'Ya tiene foto guardada (pega otro enlace para reemplazar)'
+                                : 'https://drive.google.com/file/d/... o sube desde tu móvil'
+                            }
+                            className="min-w-[160px] flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                          />
+                          <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white">
+                            <Upload className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                            {photoUploading ? 'Procesando...' : 'Subir Foto'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => void handlePurchasePhotoUpload(e)}
+                              className="sr-only"
+                            />
+                          </label>
+                          {(itemPhotoInput.trim() || existingCatalogPhoto) && (
+                            <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-[#070D19]">
+                              <img
+                                src={
+                                  normalizeCatalogImageUrl(itemPhotoInput) ||
+                                  existingCatalogPhoto
+                                }
+                                alt="Vista previa modelo"
+                                referrerPolicy="no-referrer"
+                                className="h-full w-full object-cover"
+                              />
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex justify-end">
-                  <button
-                    type="submit"
-                    data-testid="btn-add-batch-items"
-                    className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs sm:text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-600/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-                  >
-                    <Plus className="h-4 w-4" aria-hidden="true" />
-                    Agregar Tallas al Lote
-                  </button>
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      data-testid="btn-add-batch-items"
+                      className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs sm:text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-600/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                      Agregar Tallas al Lote
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
+
+            {/* COLUMNA DERECHA: 3 · PRENDAS INCLUIDAS EN LA ORDEN */}
+            <section
+              aria-labelledby="order-draft-items-heading"
+              className="rounded-xl border border-slate-800 bg-[#0D1526] p-4 lg:col-span-5 min-w-0"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2
+                  id="order-draft-items-heading"
+                  className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
+                >
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                    3
+                  </span>
+                  <span>Prendas incluidas en la Orden</span>
+                </h2>
+                <span className="font-mono-num text-xs text-slate-400">
+                  {batchSummary.totalUnits} prendas · Flete prorrateado:{' '}
+                  {formatUSD(batchSummary.freightPerUnit)}/ud
+                </span>
+              </div>
+
+              {draftItems.length === 0 ? (
+                <div
+                  data-testid="draft-items-empty"
+                  className="mt-3 rounded-lg border border-dashed border-slate-700/80 bg-[#080E1C] p-6 text-center"
+                >
+                  <ShoppingCart
+                    className="mx-auto h-6 w-6 text-slate-500"
+                    aria-hidden="true"
+                  />
+                  <p className="mt-2 text-xs font-semibold text-slate-300">
+                    Aún no hay prendas en esta orden
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    Las prendas agregadas desde el bloque izquierdo aparecerán aquí en vivo para revisar cantidades, costo puesto y PVP.
+                  </p>
                 </div>
-              </form>
+              ) : (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-800 text-[11px] text-slate-400">
+                      <tr>
+                        <th className="pb-2">Modelo</th>
+                        <th className="pb-2 text-right">Cant.</th>
+                        <th className="pb-2 text-right">Fábrica</th>
+                        <th className="pb-2 text-right">Est. Puesto</th>
+                        <th className="pb-2 text-right">PVP ($)</th>
+                        <th className="pb-2 text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/70">
+                      {draftItems.map((line) => {
+                        const landed = round2(
+                          round4(
+                            line.factoryUnitCost +
+                              batchSummary.freightPerUnitExact,
+                          ),
+                        );
+                        return (
+                          <tr key={line.lineId}>
+                            <td className="py-2 pr-2">
+                              <span className="font-medium text-white">
+                                {line.model}
+                              </span>
+                              <span className="block text-[11px] text-slate-400">
+                                {line.team} · {line.version} · Talla {line.size}
+                              </span>
+                            </td>
+                            <td className="py-2 text-right font-mono-num font-semibold text-white">
+                              {line.quantity}
+                            </td>
+                            <td className="py-2 text-right font-mono-num text-slate-300">
+                              {formatUSD(line.factoryUnitCost)}
+                            </td>
+                            <td className="py-2 text-right font-mono-num font-semibold text-blue-300">
+                              {formatUSD(landed)}
+                            </td>
+                            <td className="py-2 text-right font-mono-num font-semibold text-emerald-300">
+                              {stage1PricingMode === 'per-item' ? (
+                                <input
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  aria-label={`PVP para ${line.model} talla ${line.size}`}
+                                  data-testid={`draft-line-price-${line.size}`}
+                                  value={line.salePrice || ''}
+                                  onChange={(e) =>
+                                    handleUpdateDraftLinePrice(
+                                      line.lineId,
+                                      e.target.value,
+                                    )
+                                  }
+                                  className="font-mono-num w-20 rounded border border-emerald-500/40 bg-[#070D19] px-2 py-1 text-right text-xs font-semibold text-emerald-300 focus:border-emerald-400 focus:outline-none"
+                                />
+                              ) : (
+                                formatUSD(line.salePrice)
+                              )}
+                            </td>
+                            <td className="py-2 pl-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLine(line.lineId)}
+                                aria-label={`Eliminar ${line.model} del lote`}
+                                className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
+                              >
+                                <Trash2
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
+                                Eliminar
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
           </div>
-
-          {/* COLUMNA 2: LISTA DE LA ORDEN EN VIVO */}
-          <section
-            aria-labelledby="order-draft-items-heading"
-            className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4 lg:col-span-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2
-                id="order-draft-items-heading"
-                className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
-              >
-                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
-                  3
-                </span>
-                <span>Prendas incluidas en la Orden</span>
-              </h2>
-              <span className="font-mono-num text-xs text-slate-400">
-                {batchSummary.totalUnits} prendas · Flete prorrateado:{' '}
-                {formatUSD(batchSummary.freightPerUnit)}/ud
-              </span>
-            </div>
-
-            {draftItems.length === 0 ? (
-              <div
-                data-testid="draft-items-empty"
-                className="mt-3 rounded-lg border border-dashed border-slate-700/80 bg-[#080E1C] p-6 text-center"
-              >
-                <ShoppingCart
-                  className="mx-auto h-6 w-6 text-slate-500"
-                  aria-hidden="true"
-                />
-                <p className="mt-2 text-xs font-semibold text-slate-300">
-                  Aún no hay prendas en esta orden
-                </p>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Las prendas agregadas desde el bloque izquierdo aparecerán aquí en vivo para revisar cantidades, costo puesto y PVP.
-                </p>
-              </div>
-            ) : (
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-slate-800 text-[11px] text-slate-400">
-                    <tr>
-                      <th className="pb-2">Modelo</th>
-                      <th className="pb-2 text-right">Cant.</th>
-                      <th className="pb-2 text-right">Fábrica</th>
-                      <th className="pb-2 text-right">Est. Puesto</th>
-                      <th className="pb-2 text-right">PVP ($)</th>
-                      <th className="pb-2 text-right">Acción</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/70">
-                    {draftItems.map((line) => {
-                      const landed = round2(
-                        round4(
-                          line.factoryUnitCost +
-                            batchSummary.freightPerUnitExact,
-                        ),
-                      );
-                      return (
-                        <tr key={line.lineId}>
-                          <td className="py-2 pr-2">
-                            <span className="font-medium text-white">
-                              {line.model}
-                            </span>
-                            <span className="block text-[11px] text-slate-400">
-                              {line.team} · {line.version} · Talla {line.size}
-                            </span>
-                          </td>
-                          <td className="py-2 text-right font-mono-num font-semibold text-white">
-                            {line.quantity}
-                          </td>
-                          <td className="py-2 text-right font-mono-num text-slate-300">
-                            {formatUSD(line.factoryUnitCost)}
-                          </td>
-                          <td className="py-2 text-right font-mono-num font-semibold text-blue-300">
-                            {formatUSD(landed)}
-                          </td>
-                          <td className="py-2 text-right font-mono-num font-semibold text-emerald-300">
-                            {stage1PricingMode === 'per-item' ? (
-                              <input
-                                type="number"
-                                min="0.01"
-                                step="0.01"
-                                aria-label={`PVP para ${line.model} talla ${line.size}`}
-                                data-testid={`draft-line-price-${line.size}`}
-                                value={line.salePrice || ''}
-                                onChange={(e) =>
-                                  handleUpdateDraftLinePrice(
-                                    line.lineId,
-                                    e.target.value,
-                                  )
-                                }
-                                className="font-mono-num w-20 rounded border border-emerald-500/40 bg-[#070D19] px-2 py-1 text-right text-xs font-semibold text-emerald-300 focus:border-emerald-400 focus:outline-none"
-                              />
-                            ) : (
-                              formatUSD(line.salePrice)
-                            )}
-                          </td>
-                          <td className="py-2 pl-2 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveLine(line.lineId)}
-                              aria-label={`Eliminar ${line.model} del lote`}
-                              className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
-                            >
-                              <Trash2
-                                className="h-3.5 w-3.5"
-                                aria-hidden="true"
-                              />
-                              Eliminar
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          {/* COLUMNA 3: RESUMEN Y CIERRE */}
-          <section
-            aria-labelledby="batch-impact-heading"
-            className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4 lg:col-span-3"
-          >
-            <h2
-              id="batch-impact-heading"
-              className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
-            >
-              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
-                4
-              </span>
-              <span>Resumen y Confirmación</span>
-            </h2>
-            <p className="mt-0.5 text-[11px] text-slate-400">
-              Se descontará de{' '}
-              <span className="font-semibold text-slate-200">
-                {getFundingSourceLabel(fundingSource)}
-              </span>{' '}
-              {flowType === 'direct'
-                ? 'y las unidades ingresarán inmediatamente al inventario FIFO.'
-                : 'y la orden quedará EN TRÁNSITO hasta confirmar recepción.'}
-            </p>
-
-            <div className="mt-3.5 space-y-2.5 text-xs">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-300">Modalidad</span>
-                <span
-                  className={`text-xs font-semibold ${
-                    flowType === 'direct' ? 'text-emerald-300' : 'text-amber-300'
-                  }`}
-                >
-                  {flowType === 'direct'
-                    ? 'Recepción Directa (Bodega)'
-                    : 'En Tránsito (Seguimiento SLA)'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-300">Total prendas</span>
-                <span className="font-mono-num font-semibold text-white">
-                  {batchSummary.totalUnits} uds
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-300">Costo fábrica total</span>
-                <span className="font-mono-num font-semibold text-white">
-                  {formatUSD(batchSummary.totalFactory)}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-300">
-                  Flete ({shippingType})
-                </span>
-                <span className="font-mono-num font-semibold text-white">
-                  {formatUSD(parsedFreight)}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-300">
-                  Flete prorrateado / ud
-                </span>
-                <span className="font-mono-num font-semibold text-blue-300">
-                  {batchSummary.totalUnits > 0
-                    ? `${formatUSD(batchSummary.freightPerUnit)}/ud`
-                    : '—'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-300">Desembolso inmediato</span>
-                <span
-                  data-testid="batch-total-landed"
-                  className={`font-mono-num text-sm font-bold ${
-                    batchSummary.totalLanded > availableFundingBalance
-                      ? 'text-red-400'
-                      : 'text-white'
-                  }`}
-                >
-                  {formatUSD(batchSummary.totalLanded)}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between pb-1">
-                <span className="text-slate-300">Saldo proyectado</span>
-                <span
-                  className={`font-mono-num font-semibold ${
-                    availableFundingBalance - batchSummary.totalLanded < 0
-                      ? 'text-red-400'
-                      : 'text-emerald-400'
-                  }`}
-                >
-                  {formatUSD(availableFundingBalance - batchSummary.totalLanded)}
-                </span>
-              </div>
-
-              {batchSummary.totalLanded > availableFundingBalance &&
-                draftItems.length > 0 && (
-                  <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-                    El total supera el efectivo físico en caja ({formatUSD(availableFundingBalance)}). Cobra cuentas por cobrar o ajusta las cantidades.
-                  </p>
-                )}
-
-              {batchSummary.totalLanded <= availableFundingBalance &&
-                (fundingSource === 'replacement' ||
-                  fundingSource === 'growthReinvestment') &&
-                batchSummary.totalLanded > primaryFundingBalance &&
-                draftItems.length > 0 && (
-                  <p
-                    data-testid="purchase-bridge-notice"
-                    className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-200"
-                  >
-                    {batchSummary.totalLanded <= combinedRepoReinvestmentBalance
-                      ? `Respaldo mutuo activo: el saldo en ${getFundingSourceLabel(fundingSource)} (${formatUSD(primaryFundingBalance)}) se complementará con ${formatUSD(round2(batchSummary.totalLanded - primaryFundingBalance))} del fondo hermano.`
-                      : `Respaldo combinado + prorrata: se usarán Reposición y Reinversión (${formatUSD(combinedRepoReinvestmentBalance)}) y el excedente de ${formatUSD(round2(batchSummary.totalLanded - combinedRepoReinvestmentBalance))} se prorrateará en los demás fondos de caja.`}
-                  </p>
-                )}
-
-              <button
-                type="button"
-                data-testid="btn-submit-batch"
-                onClick={() => void handleSaveBatch()}
-                disabled={draftItems.length === 0 || isSubmittingCreate}
-                className={`mt-2 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold text-white transition-colors active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500 focus-visible:outline-none focus-visible:ring-2 ${
-                  flowType === 'direct'
-                    ? 'bg-emerald-600 hover:bg-emerald-500 focus-visible:ring-emerald-400'
-                    : 'bg-blue-600 hover:bg-blue-500 focus-visible:ring-blue-400'
-                }`}
-              >
-                {flowType === 'direct' ? (
-                  <PackageCheck className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <ShoppingCart className="h-4 w-4" aria-hidden="true" />
-                )}
-                {isSubmittingCreate
-                  ? 'Procesando registro...'
-                  : flowType === 'direct'
-                    ? 'Confirmar Recepción Directa en Bodega'
-                    : 'Registrar Orden en Tránsito'}
-              </button>
-            </div>
-          </section>
         </div>
       )}
 
