@@ -196,6 +196,13 @@ export default function App() {
     useThemePreference({ forceSystemTheme: isPublicCatalogRoute });
 
   useEffect(() => {
+    document.title =
+      isPublicCatalogRoute || isCatalogPreview
+        ? 'X4SPORT · Catálogo Oficial'
+        : 'X4SPORT · Gestión Operativa y Financiera';
+  }, [isPublicCatalogRoute, isCatalogPreview]);
+
+  useEffect(() => {
     if (!loginToast) return;
     const timer = setTimeout(() => {
       setLoginToast(null);
