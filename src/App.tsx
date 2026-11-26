@@ -193,7 +193,7 @@ export default function App() {
   const [restrictedToast, setRestrictedToast] = useState<string | null>(null);
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
   const { themePreference, resolvedTheme, setThemePreference } =
-    useThemePreference();
+    useThemePreference({ forceSystemTheme: isPublicCatalogRoute });
 
   useEffect(() => {
     if (!loginToast) return;
@@ -1391,7 +1391,7 @@ export default function App() {
   if (isPublicCatalogRoute || isCatalogPreview) {
     if (isPublicCatalogRoute && isHydratingDb) {
       return (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-[#060B16] p-6 text-center text-slate-100">
+        <div className="erp-catalog-shell flex min-h-screen flex-col items-center justify-center gap-3 bg-[#060B16] p-6 text-center text-slate-100">
           <Loader2
             className="h-8 w-8 animate-spin text-blue-400"
             aria-hidden="true"

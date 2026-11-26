@@ -18,14 +18,38 @@
     <script>
       (function () {
         try {
-          var key = 'x4sport_theme_preference';
-          var raw = window.localStorage.getItem(key);
-          var pref = raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'dark';
-          var isDark =
-            pref === 'dark' ||
-            (pref === 'system' &&
-              typeof window.matchMedia === 'function' &&
-              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var search = window.location.search || '';
+          var hash = (window.location.hash || '').toLowerCase();
+          var path = (window.location.pathname || '').toLowerCase();
+          var params = new URLSearchParams(search);
+          var catParam = params.get('catalogo') || params.get('catalog');
+          var viewParam = params.get('view');
+          var isCatalog =
+            catParam === '1' ||
+            catParam === 'true' ||
+            viewParam === 'catalog' ||
+            hash === '#catalogo' ||
+            hash === '#/catalogo' ||
+            path === '/catalogo' ||
+            path.endsWith('/catalogo');
+
+          var isDark;
+          if (isCatalog) {
+            isDark =
+              typeof window.matchMedia === 'function'
+                ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                : true;
+          } else {
+            var key = 'x4sport_theme_preference';
+            var raw = window.localStorage.getItem(key);
+            var pref = raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'dark';
+            isDark =
+              pref === 'dark' ||
+              (pref === 'system' &&
+                typeof window.matchMedia === 'function' &&
+                window.matchMedia('(prefers-color-scheme: dark)').matches);
+          }
+
           var root = document.documentElement;
           if (isDark) {
             root.classList.add('dark');

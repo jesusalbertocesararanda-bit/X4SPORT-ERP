@@ -10,11 +10,18 @@ import {
   type ThemePreference,
 } from '../utils/theme';
 
-export function useThemePreference(): {
+export interface UseThemePreferenceOptions {
+  forceSystemTheme?: boolean;
+}
+
+export function useThemePreference(
+  options: UseThemePreferenceOptions = {},
+): {
   themePreference: ThemePreference;
   resolvedTheme: ResolvedTheme;
   setThemePreference: (next: ThemePreference) => void;
 } {
+  const forceSystemTheme = Boolean(options.forceSystemTheme);
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(
     () => getStoredThemePreference(),
   );
@@ -46,19 +53,28 @@ export function useThemePreference(): {
     return () => mediaQuery.removeListener(handleChange);
   }, []);
 
-  const resolvedTheme = resolveTheme(themePreference, systemPrefersDark);
+  const resolvedTheme = resolveTheme(
+    forceSystemTheme ? 'system' : themePreference,
+    systemPrefersDark,
+  );
 
   useEffect(() => {
     applyResolvedThemeToDocument(resolvedTheme);
   }, [resolvedTheme]);
 
-  const setThemePreference = useCallback((next: ThemePreference) => {
-    const normalized = normalizeThemePreference(next);
-    saveThemePreference(normalized);
-    setThemePreferenceState(normalized);
-    const immediateResolved = resolveTheme(normalized, getSystemPrefersDark());
-    applyResolvedThemeToDocument(immediateResolved);
-  }, []);
+  const setThemePreference = useCallback(
+    (next: ThemePreference) => {
+      const normalized = normalizeThemePreference(next);
+      saveThemePreference(normalized);
+      setThemePreferenceState(normalized);
+      const immediateResolved = resolveTheme(
+        forceSystemTheme ? 'system' : normalized,
+        getSystemPrefersDark(),
+      );
+      applyResolvedThemeToDocument(immediateResolved);
+    },
+    [forceSystemTheme],
+  );
 
   return {
     themePreference,

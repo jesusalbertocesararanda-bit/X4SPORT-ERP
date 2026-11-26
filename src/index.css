@@ -51,31 +51,34 @@
 }
 
 /* ============================================================================
- * Modo Claro / Normal para vistas internas del panel administrativo ERP
- * (Aislado a .erp-admin-shell y .erp-auth-shell; mantiene intacto el
- * Catálogo Público y respeta colores sólidos de botones CTA y badges activos)
+ * Modo Claro / Normal para vistas internas del panel administrativo ERP y
+ * Catálogo Público (.erp-catalog-shell sigue prefers-color-scheme del visitante)
  * ============================================================================ */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) {
   color: #0f172a;
 }
 
+html:not(.dark) .erp-catalog-shell {
+  background-color: #f8fafc;
+}
+
 /* Lienzos oscuros -> Slate 50 */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#060B16\], .bg-\[\#040812\]) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.bg-\[\#060B16\], .bg-\[\#040812\]) {
   background-color: #f8fafc;
 }
 
 /* Overlays / backdrops de modales en Modo Claro */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#040812\]\/85, .bg-\[\#040812\]\/80, .bg-black\/75, .bg-black\/70, .bg-black\/80) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.bg-\[\#040812\]\/85, .bg-\[\#040812\]\/80, .bg-black\/75, .bg-black\/80) {
   background-color: rgba(15, 23, 42, 0.45);
 }
 
 /* Superficies secundarias / inputs / sub-paneles -> Slate 50 / 100 */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#080E1C\], .bg-\[\#080E1C\]\/70, .bg-\[\#080E1C\]\/80, .bg-\[\#080F1E\], .bg-\[\#080F1E\]\/95, .bg-\[\#070D19\], .bg-\[\#070C17\], .bg-\[\#070C17\]\/80, .bg-slate-900) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.bg-\[\#080E1C\], .bg-\[\#080E1C\]\/70, .bg-\[\#080E1C\]\/80, .bg-\[\#080F1E\], .bg-\[\#080F1E\]\/95, .bg-\[\#070D19\], .bg-\[\#070C17\], .bg-\[\#070C17\]\/80, .bg-slate-900) {
   background-color: #f8fafc;
 }
 
 /* Tarjetas, modales y tablas -> Blanco puro con elevación sutil */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-\[\#0D1526\], .bg-\[\#0B1222\], .bg-\[\#0D1526\]\/95) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.bg-\[\#0D1526\], .bg-\[\#0B1222\], .bg-\[\#0D1526\]\/95) {
   background-color: #ffffff;
   box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.04);
 }
@@ -85,95 +88,152 @@ html:not(.dark) .erp-admin-shell [class*="from-[#0D1A2D]"] {
   background-image: linear-gradient(135deg, #ecfdf5 0%, #ffffff 58%, #f8fafc 100%);
 }
 
+/* Reglas específicas del Catálogo Público (.erp-catalog-shell) en Modo Claro */
+html:not(.dark) .erp-catalog-shell .bg-\[\#060B16\]\/95 {
+  background-color: rgba(255, 255, 255, 0.95);
+}
+
+html:not(.dark) .erp-catalog-shell [class*="from-[#0D172B]"] {
+  background-image: linear-gradient(135deg, #eff6ff 0%, #ffffff 60%, #f8fafc 100%);
+}
+
+html:not(.dark) .erp-catalog-shell .bg-\[\#0D1526\]\/60 {
+  background-color: #f8fafc;
+}
+
+html:not(.dark) .erp-catalog-shell [class*="from-[#0E182D]"] {
+  background-image: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+html:not(.dark) .erp-catalog-shell [class*="from-[#0D1526]/70"] {
+  background-image: linear-gradient(to top, rgba(255, 255, 255, 0.72), transparent);
+}
+
+html:not(.dark) .erp-catalog-shell :is(.bg-amber-500\/10, .bg-amber-500\/15) {
+  background-color: #fef3c7;
+}
+
+html:not(.dark) .erp-catalog-shell .hover\:bg-amber-500\/25:hover {
+  background-color: #fde68a;
+}
+
+html:not(.dark) .erp-catalog-shell .bg-blue-500\/15 {
+  background-color: #dbeafe;
+}
+
 /* Chips, hover y barras de tabla neutras */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-slate-800, .bg-slate-700) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.bg-slate-800, .bg-slate-700) {
   background-color: #f1f5f9;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.bg-slate-800\/30, .bg-slate-800\/35, .bg-slate-800\/40, .bg-slate-800\/50, .bg-slate-800\/60, .bg-slate-800\/70) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.bg-slate-800\/30, .bg-slate-800\/35, .bg-slate-800\/40, .bg-slate-800\/50, .bg-slate-800\/60, .bg-slate-800\/70) {
   background-color: #f1f5f9;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.hover\:bg-slate-800:hover, .hover\:bg-slate-800\/40:hover, .hover\:bg-slate-800\/50:hover, .hover\:bg-slate-800\/60:hover, .hover\:bg-slate-700:hover) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.hover\:bg-slate-800:hover, .hover\:bg-slate-800\/40:hover, .hover\:bg-slate-800\/50:hover, .hover\:bg-slate-800\/60:hover, .hover\:bg-slate-700:hover) {
   background-color: #e2e8f0;
 }
 
 /* Fondos de banners de alerta especiales */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .bg-\[\#071913\]\/95 {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .bg-\[\#071913\]\/95 {
   background-color: #ecfdf5;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .bg-\[\#1f1504\]\/95 {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .bg-\[\#1f1504\]\/95 {
   background-color: #fffbeb;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .bg-red-950\/60 {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .bg-red-950\/60 {
   background-color: #fef2f2;
 }
 
 /* Bordes y divisores claros */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.border-slate-800, .border-slate-800\/60, .border-slate-800\/70, .border-slate-800\/80, .border-slate-800\/90) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.border-slate-800, .border-slate-800\/60, .border-slate-800\/70, .border-slate-800\/80, .border-slate-800\/90) {
   border-color: #e2e8f0;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.border-slate-700, .border-slate-700\/80, .border-slate-600) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.border-slate-700, .border-slate-700\/80, .border-slate-600) {
   border-color: #cbd5e1;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.divide-slate-800, .divide-slate-800\/80) > :not(:first-child) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.divide-slate-800, .divide-slate-800\/80) > :not(:first-child) {
   border-color: #e2e8f0;
 }
 
-/* Textos neutros: legibilidad AA sobre blanco/claro SIN alterar botones de color sólido */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-white:not(:is(
+/* Textos neutros: legibilidad AA sobre blanco/claro SIN alterar botones sólidos ni overlays de foto */
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .text-white:not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
+  .bg-blue-600\/90,
   [class*="bg-blue-500"]:not([class*="bg-blue-500/"]),
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
+  .bg-emerald-600\/90,
   [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"]),
   [class*="bg-red-6"]:not([class*="bg-red-600/"]),
   [class*="bg-red-500"]:not([class*="bg-red-500/"]),
   [class*="bg-amber-6"]:not([class*="bg-amber-600/"]),
   [class*="bg-cyan-6"]:not([class*="bg-cyan-600/"]),
-  [class*="bg-purple-6"]:not([class*="bg-purple-600/"])
+  [class*="bg-purple-6"]:not([class*="bg-purple-600/"]),
+  .bg-black\/60,
+  .bg-black\/70,
+  .bg-black\/85,
+  .bg-slate-950\/75
 )):not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
+  .bg-blue-600\/90,
   [class*="bg-blue-500"]:not([class*="bg-blue-500/"]),
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
+  .bg-emerald-600\/90,
   [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"]),
   [class*="bg-red-6"]:not([class*="bg-red-600/"]),
   [class*="bg-red-500"]:not([class*="bg-red-500/"]),
   [class*="bg-amber-6"]:not([class*="bg-amber-600/"]),
   [class*="bg-cyan-6"]:not([class*="bg-cyan-600/"]),
-  [class*="bg-purple-6"]:not([class*="bg-purple-600/"])
+  [class*="bg-purple-6"]:not([class*="bg-purple-600/"]),
+  .bg-black\/60,
+  .bg-black\/70,
+  .bg-black\/85,
+  .bg-slate-950\/75
 ) *) {
   color: #0f172a;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-slate-100, .text-slate-200):not(:is(
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-slate-100, .text-slate-200):not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
+  .bg-blue-600\/90,
   [class*="bg-blue-500"]:not([class*="bg-blue-500/"]),
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
+  .bg-emerald-600\/90,
   [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"]),
   [class*="bg-red-6"]:not([class*="bg-red-600/"]),
   [class*="bg-red-500"]:not([class*="bg-red-500/"]),
   [class*="bg-amber-6"]:not([class*="bg-amber-600/"]),
   [class*="bg-cyan-6"]:not([class*="bg-cyan-600/"]),
-  [class*="bg-purple-6"]:not([class*="bg-purple-600/"])
+  [class*="bg-purple-6"]:not([class*="bg-purple-600/"]),
+  .bg-black\/60,
+  .bg-black\/70,
+  .bg-black\/85,
+  .bg-slate-950\/75
 )):not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
+  .bg-blue-600\/90,
   [class*="bg-blue-500"]:not([class*="bg-blue-500/"]),
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
+  .bg-emerald-600\/90,
   [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"]),
   [class*="bg-red-6"]:not([class*="bg-red-600/"]),
   [class*="bg-red-500"]:not([class*="bg-red-500/"]),
   [class*="bg-amber-6"]:not([class*="bg-amber-600/"]),
   [class*="bg-cyan-6"]:not([class*="bg-cyan-600/"]),
-  [class*="bg-purple-6"]:not([class*="bg-purple-600/"])
+  [class*="bg-purple-6"]:not([class*="bg-purple-600/"]),
+  .bg-black\/60,
+  .bg-black\/70,
+  .bg-black\/85,
+  .bg-slate-950\/75
 ) *) {
   color: #0f172a;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-300:not(:is(
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .text-slate-300:not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
   [class*="bg-blue-500"]:not([class*="bg-blue-500/"]),
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
@@ -197,7 +257,7 @@ html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-300:not(:is(
   color: #1e293b;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-400:not(:is(
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .text-slate-400:not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
   [class*="bg-blue-500"]:not([class*="bg-blue-500/"]),
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
@@ -221,39 +281,41 @@ html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-slate-400:not(:is(
   color: #334155;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-slate-500, .text-slate-600) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-slate-500, .text-slate-600) {
   color: #475569;
 }
 
 /* Semántica de estados / insignias con alto contraste sobre fondos claros */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-blue-200, .text-blue-300, .text-blue-300\/85, .text-blue-400, .text-blue-500):not(:is([class*="bg-blue-600"]:not([class*="bg-blue-600/"]), [class*="bg-blue-500"]:not([class*="bg-blue-500/"]))):not(:is([class*="bg-blue-600"]:not([class*="bg-blue-600/"]), [class*="bg-blue-500"]:not([class*="bg-blue-500/"])) *) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-blue-200, .text-blue-300, .text-blue-300\/85, .text-blue-400, .text-blue-500):not(:is([class*="bg-blue-600"]:not([class*="bg-blue-600/"]), [class*="bg-blue-500"]:not([class*="bg-blue-500/"]))):not(:is([class*="bg-blue-600"]:not([class*="bg-blue-600/"]), [class*="bg-blue-500"]:not([class*="bg-blue-500/"])) *) {
   color: #1d4ed8;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-emerald-100, .text-emerald-200, .text-emerald-300, .text-emerald-300\/85, .text-emerald-300\/90, .text-emerald-400, .text-emerald-400\/70):not(:is([class*="bg-emerald-600"]:not([class*="bg-emerald-600/"]), [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"]))):not(:is([class*="bg-emerald-600"]:not([class*="bg-emerald-600/"]), [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"])) *) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-emerald-100, .text-emerald-200, .text-emerald-300, .text-emerald-300\/85, .text-emerald-300\/90, .text-emerald-400, .text-emerald-400\/70):not(:is([class*="bg-emerald-600"]:not([class*="bg-emerald-600/"]), [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"]))):not(:is([class*="bg-emerald-600"]:not([class*="bg-emerald-600/"]), [class*="bg-emerald-500"]:not([class*="bg-emerald-500/"])) *) {
   color: #047857;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-amber-100, .text-amber-200, .text-amber-200\/85, .text-amber-200\/90, .text-amber-300, .text-amber-400, .text-amber-400\/70, .text-amber-500):not(:is([class*="bg-amber-600"]:not([class*="bg-amber-600/"]))):not(:is([class*="bg-amber-600"]:not([class*="bg-amber-600/"])) *) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-amber-100, .text-amber-200, .text-amber-200\/85, .text-amber-200\/90, .text-amber-300, .text-amber-400, .text-amber-400\/70, .text-amber-500):not(:is([class*="bg-amber-600"]:not([class*="bg-amber-600/"]))):not(:is([class*="bg-amber-600"]:not([class*="bg-amber-600/"])) *) {
   color: #b45309;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-red-200, .text-red-300, .text-red-400, .text-rose-300, .text-rose-400):not(:is([class*="bg-red-600"]:not([class*="bg-red-600/"]))):not(:is([class*="bg-red-600"]:not([class*="bg-red-600/"])) *) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-red-200, .text-red-300, .text-red-400, .text-rose-300, .text-rose-400):not(:is([class*="bg-red-600"]:not([class*="bg-red-600/"]))):not(:is([class*="bg-red-600"]:not([class*="bg-red-600/"])) *) {
   color: #b91c1c;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(.text-cyan-300, .text-cyan-400):not(:is([class*="bg-cyan-600"]:not([class*="bg-cyan-600/"]))):not(:is([class*="bg-cyan-600"]:not([class*="bg-cyan-600/"])) *) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(.text-cyan-300, .text-cyan-400):not(:is([class*="bg-cyan-600"]:not([class*="bg-cyan-600/"]))):not(:is([class*="bg-cyan-600"]:not([class*="bg-cyan-600/"])) *) {
   color: #0e7490;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .text-purple-400:not(:is([class*="bg-purple-600"]:not([class*="bg-purple-600/"]))):not(:is([class*="bg-purple-600"]:not([class*="bg-purple-600/"])) *) {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .text-purple-400:not(:is([class*="bg-purple-600"]:not([class*="bg-purple-600/"]))):not(:is([class*="bg-purple-600"]:not([class*="bg-purple-600/"])) *) {
   color: #6d28d9;
 }
 
 /* Hover text on neutral buttons in Light mode */
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .hover\:text-white:not(:is(
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) .hover\:text-white:not(:is(
   [class*="bg-blue-6"]:not([class*="bg-blue-600/"]),
+  .bg-blue-600\/90,
   [class*="bg-emerald-6"]:not([class*="bg-emerald-600/"]),
+  .bg-emerald-600\/90,
   [class*="bg-red-6"]:not([class*="bg-red-600/"]),
   [class*="bg-amber-6"]:not([class*="bg-amber-600/"]),
   [class*="bg-cyan-6"]:not([class*="bg-cyan-600/"]),
@@ -261,12 +323,16 @@ html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) .hover\:text-white:not(:i
   [class*="hover:bg-blue-6"]:not([class*="hover:bg-blue-600/"]),
   [class*="hover:bg-blue-5"]:not([class*="hover:bg-blue-500/"]),
   [class*="hover:bg-emerald-6"]:not([class*="hover:bg-emerald-600/"]),
-  [class*="hover:bg-red-6"]:not([class*="hover:bg-red-600/"])
+  [class*="hover:bg-red-6"]:not([class*="hover:bg-red-600/"]),
+  .bg-black\/60,
+  .bg-black\/70,
+  .bg-black\/85,
+  .bg-slate-950\/75
 )):hover {
   color: #0f172a;
 }
 
-html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell) :is(input, select, textarea)::placeholder {
+html:not(.dark) :is(.erp-admin-shell, .erp-auth-shell, .erp-catalog-shell) :is(input, select, textarea)::placeholder {
   color: #64748b;
 }
 

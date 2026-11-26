@@ -1026,7 +1026,7 @@ export function PublicCatalogView({
   return (
     <div
       data-testid="public-catalog-storefront"
-      className="min-h-screen w-full max-w-full min-w-0 overflow-x-clip bg-[#060B16] text-slate-100"
+      className="erp-catalog-shell min-h-screen w-full max-w-full min-w-0 overflow-x-clip bg-[#060B16] text-slate-100"
     >
       {/* Barra superior fija con Logo X4SPORT y Tasa vigente (compacta <15% móvil) */}
       <header className="sticky top-0 z-40 w-full max-w-full min-w-0 overflow-x-clip border-b border-slate-800/90 bg-[#060B16]/95 backdrop-blur-md">
