@@ -358,10 +358,12 @@ export function SalesView({
     (s) => s.id === selectedSkuId,
   )
     ? selectedSkuId
-    : (filteredSelectorSkus[0]?.id ?? '');
+    : '';
 
   const activeSku =
-    filteredSelectorSkus.find((s) => s.id === effectiveSkuId) ?? null;
+    effectiveSkuId
+      ? (filteredSelectorSkus.find((s) => s.id === effectiveSkuId) ?? null)
+      : null;
   const remainingForActiveSku = activeSku
     ? activeSku.stock - (qtyInCartBySku.get(activeSku.id) ?? 0)
     : 0;
@@ -654,6 +656,7 @@ export function SalesView({
 
     setDraftOpId(createDraftOpId());
     setQuantity('1');
+    setSelectedSkuId('');
   };
 
   const handleRemoveCartLine = (lineId: string) => {
@@ -1160,12 +1163,14 @@ export function SalesView({
                         className="grid max-h-[360px] grid-cols-1 gap-3 overflow-y-auto pr-1 sm:grid-cols-2"
                       >
                         {groupedModelCards.map((group) => {
+                          const matchedInGroup = effectiveSkuId
+                            ? group.sizeItems.find(
+                                (si) => si.item.id === effectiveSkuId,
+                              )
+                            : undefined;
                           const selectedInGroup =
-                            group.sizeItems.find(
-                              (si) => si.item.id === effectiveSkuId,
-                            ) ?? group.sizeItems[0];
-                          const isGroupActive =
-                            selectedInGroup.item.id === effectiveSkuId;
+                            matchedInGroup ?? group.sizeItems[0];
+                          const isGroupActive = Boolean(matchedInGroup);
 
                           return (
                             <article
@@ -1195,6 +1200,7 @@ export function SalesView({
                                 >
                                   {group.sizeItems.map(({ item }) => {
                                     const isSizeSelected =
+                                      Boolean(effectiveSkuId) &&
                                       item.id === effectiveSkuId;
                                     return (
                                       <button

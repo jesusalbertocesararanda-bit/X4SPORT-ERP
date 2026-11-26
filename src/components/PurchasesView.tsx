@@ -10,6 +10,7 @@ import {
   ExternalLink,
   PackageCheck,
   Plus,
+  Search,
   ShoppingCart,
   Trash2,
   Truck,
@@ -116,10 +117,19 @@ function generateOperationId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getFundingSourceLabel(source?: PurchaseFundingSource): string {
+function getFundingSourceLabel(source?: PurchaseFundingSource | ''): string {
+  if (source === '') return 'origen de fondos por seleccionar';
   if (source === 'replacement') return 'Fondo de Reposición (Costo Base)';
   if (source === 'growthReinvestment') return 'Fondo de Reinversión';
   return 'Caja General';
+}
+
+function normalizeModelSearchText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 }
 
 export function PurchasesView({
@@ -169,8 +179,9 @@ export function PurchasesView({
   const [batchUsdtRate, setBatchUsdtRate] = useState(
     state.exchangeRates.usdt.toFixed(2),
   );
-  const [fundingSource, setFundingSource] =
-    useState<PurchaseFundingSource>('cashOnHand');
+  const [fundingSource, setFundingSource] = useState<PurchaseFundingSource | ''>(
+    '',
+  );
 
   useEffect(() => {
     setBatchUsdtRate(state.exchangeRates.usdt.toFixed(2));
@@ -206,7 +217,78 @@ export function PurchasesView({
   const [itemPhotoInput, setItemPhotoInput] = useState('');
   const [photoUploading, setPhotoUploading] = useState(false);
 
+  const [modelSearchQuery, setModelSearchQuery] = useState('');
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+  const modelComboboxRef = useRef<HTMLDivElement | null>(null);
+  const existingModelSearchRef = useRef<HTMLInputElement | null>(null);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
+
+  const existingModelOptions = useMemo(() => {
+    const versionsByModel = new Map<string, Set<JerseyVersion>>();
+    for (const item of state.inventory ?? []) {
+      const cleanName = item.model.trim();
+      if (!cleanName) continue;
+      const key = cleanName.toLowerCase();
+      let set = versionsByModel.get(key);
+      if (!set) {
+        set = new Set<JerseyVersion>();
+        versionsByModel.set(key, set);
+      }
+      set.add(item.version);
+    }
+
+    return uniqueModelNames.map((name) => {
+      const detectedTeam = extractTeamFromModel(name);
+      const versions = Array.from(
+        versionsByModel.get(name.toLowerCase()) ?? [],
+      );
+      let rawPhoto: string | undefined;
+      for (const ver of [...versions, ...VERSIONS]) {
+        const candidate = resolveCatalogPhoto(name, ver, state.catalogPhotos);
+        if (candidate) {
+          rawPhoto = candidate;
+          break;
+        }
+      }
+      const thumbnailUrl = rawPhoto ? normalizeCatalogImageUrl(rawPhoto) : '';
+      const searchableText = normalizeModelSearchText(
+        [name, detectedTeam, ...versions].join(' '),
+      );
+      return {
+        name,
+        detectedTeam,
+        versions,
+        thumbnailUrl,
+        searchableText,
+      };
+    });
+  }, [state.catalogPhotos, state.inventory, uniqueModelNames]);
+
+  const filteredExistingModelOptions = useMemo(() => {
+    const normalizedQuery = normalizeModelSearchText(modelSearchQuery);
+    const normalizedSelected = normalizeModelSearchText(model);
+    if (!normalizedQuery || (normalizedSelected && normalizedQuery === normalizedSelected)) {
+      return existingModelOptions;
+    }
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    return existingModelOptions.filter((option) =>
+      tokens.every((token) => option.searchableText.includes(token)),
+    );
+  }, [existingModelOptions, model, modelSearchQuery]);
+
+  useEffect(() => {
+    if (!isModelDropdownOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        modelComboboxRef.current &&
+        !modelComboboxRef.current.contains(e.target as Node)
+      ) {
+        setIsModelDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isModelDropdownOpen]);
 
   const autoDetectedTeam = useMemo(() => extractTeamFromModel(model), [model]);
   const effectiveTeam = useMemo(() => {
@@ -306,7 +388,9 @@ export function PurchasesView({
       ? replacementFundBalance
       : fundingSource === 'growthReinvestment'
         ? reinvestmentFundBalance
-        : state.cashOnHand;
+        : fundingSource === 'cashOnHand'
+          ? state.cashOnHand
+          : 0;
   const availableFundingBalance = state.cashOnHand;
 
   const matrixTotalUnits = useMemo(
@@ -341,6 +425,8 @@ export function PurchasesView({
   const handleSwitchToNewModel = () => {
     setModelEntryMode('new');
     setModel('');
+    setModelSearchQuery('');
+    setIsModelDropdownOpen(false);
     setManualTeamOverride(null);
     setIsEditingTeam(false);
     setFeedback(null);
@@ -643,6 +729,14 @@ export function PurchasesView({
       return;
     }
 
+    if (!fundingSource) {
+      setFeedback({
+        type: 'error',
+        text: 'Selecciona un origen de fondos antes de guardar el lote.',
+      });
+      return;
+    }
+
     const invalidPriceLine = draftItems.find(
       (l) => !Number.isFinite(l.salePrice) || l.salePrice <= 0,
     );
@@ -719,6 +813,7 @@ export function PurchasesView({
       });
       setDraftItems([]);
       setEstimatedArrivalDate('');
+      setFundingSource('');
 
       if (
         !isDirect &&
@@ -929,59 +1024,59 @@ export function PurchasesView({
   };
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="w-full max-w-[1680px] mx-auto space-y-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl text-balance">
+          <h1 className="font-display text-xl font-bold tracking-tight text-white sm:text-2xl text-balance">
             Compras, Importaciones y Recepción en Bodega
           </h1>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-0.5 text-xs text-slate-400">
             Registra órdenes en tránsito o recepción directa con detección automática de equipo, matriz vertical de tallas y auditoría FIFO.
           </p>
         </div>
       </div>
 
       {/* KPI Strip: Capital en Tránsito y Estado de Importaciones */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <article className="rounded-xl border border-slate-800 bg-[#0D1526] p-5">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <article className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4">
           <p className="text-xs font-medium text-slate-400">
             Capital invertido en tránsito
           </p>
           <p
             data-testid="transit-capital"
-            className="font-mono-num mt-2 text-2xl font-bold text-amber-300"
+            className="font-mono-num mt-1 text-xl font-bold text-amber-300"
           >
             {formatUSD(transitCapital)}
           </p>
-          <p className="mt-1.5 text-xs text-slate-400">
+          <p className="mt-1 text-[11px] text-slate-400">
             {transitCount}{' '}
             {transitCount === 1 ? 'orden en camino' : 'órdenes en camino'}
           </p>
         </article>
 
-        <article className="rounded-xl border border-slate-800 bg-[#0D1526] p-5">
+        <article className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4">
           <p className="text-xs font-medium text-slate-400">
             Unidades en camino (pendientes FIFO)
           </p>
           <p
             data-testid="transit-units"
-            className="font-mono-num mt-2 text-2xl font-bold text-white"
+            className="font-mono-num mt-1 text-xl font-bold text-white"
           >
             {transitUnits} uds
           </p>
-          <p className="mt-1.5 text-xs text-slate-400">
+          <p className="mt-1 text-[11px] text-slate-400">
             No disponibles para venta hasta su recepción
           </p>
         </article>
 
-        <article className="rounded-xl border border-slate-800 bg-[#0D1526] p-5">
+        <article className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4">
           <p className="text-xs font-medium text-slate-400">
             Disponibilidad para compras
           </p>
-          <p className="font-mono-num mt-2 text-2xl font-bold text-emerald-400">
+          <p className="font-mono-num mt-1 text-xl font-bold text-emerald-400">
             {formatUSD(state.cashOnHand)}
           </p>
-          <p className="mt-1.5 text-xs text-slate-400">
+          <p className="mt-1 text-[11px] text-slate-400">
             Reposición:{' '}
             <span className="font-mono-num text-blue-300">
               {formatUSD(replacementFundBalance)}
@@ -1099,24 +1194,28 @@ export function PurchasesView({
         </div>
       )}
 
-      {/* ETAPA 1: REGISTRAR COMPRA / RECEPCIÓN */}
+      {/* ETAPA 1: REGISTRAR COMPRA / RECEPCIÓN (FLUJO EN 3 COLUMNAS EN ESCRITORIO) */}
       {(subView === 'all' || subView === 'create') && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <div className="space-y-6 lg:col-span-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
+          {/* COLUMNA 1: ENTRADA DE DATOS */}
+          <div className="lg:col-span-4 space-y-3.5">
             <section
               aria-labelledby="batch-header-heading"
-              className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6"
+              className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4"
             >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+              <div className="flex flex-col gap-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2
                     id="batch-header-heading"
-                    className="font-display text-lg font-semibold text-white"
+                    className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
                   >
-                    1. Datos del Lote y Modalidad de Ingreso
+                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                      1
+                    </span>
+                    <span>Datos del Lote y Modalidad de Ingreso</span>
                   </h2>
-                  <p className="mt-0.5 text-xs text-slate-400">
-                    Caja disponible:{' '}
+                  <p className="text-[11px] text-slate-400">
+                    Caja:{' '}
                     <strong className="font-mono-num text-emerald-400">
                       {formatUSD(state.cashOnHand)}
                     </strong>
@@ -1127,14 +1226,14 @@ export function PurchasesView({
                 <div
                   role="group"
                   aria-label="Modalidad de ingreso"
-                  className="inline-flex rounded-lg border border-slate-700 bg-[#070D19] p-1 self-start"
+                  className="inline-flex w-full rounded-lg border border-slate-700 bg-[#070D19] p-1"
                 >
                   <button
                     type="button"
                     data-testid="btn-flow-transit"
                     aria-pressed={flowType === 'transit'}
                     onClick={() => handleFlowTypeChange('transit')}
-                    className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    className={`inline-flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
                       flowType === 'transit'
                         ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
                         : 'text-slate-400 hover:text-white'
@@ -1148,7 +1247,7 @@ export function PurchasesView({
                     data-testid="btn-flow-direct"
                     aria-pressed={flowType === 'direct'}
                     onClick={() => handleFlowTypeChange('direct')}
-                    className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    className={`inline-flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
                       flowType === 'direct'
                         ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
                         : 'text-slate-400 hover:text-white'
@@ -1160,11 +1259,11 @@ export function PurchasesView({
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <div>
                   <label
                     htmlFor="batch-date"
-                    className="block text-xs font-medium text-slate-300"
+                    className="block text-[11px] font-medium text-slate-300"
                   >
                     Fecha de registro
                   </label>
@@ -1178,16 +1277,16 @@ export function PurchasesView({
                         setDirectReceivedDate(e.target.value);
                       }
                     }}
-                    className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="batch-supplier"
-                    className="flex items-center gap-1 text-xs font-medium text-slate-300"
+                    className="flex items-center gap-1 text-[11px] font-medium text-slate-300"
                   >
-                    <Building2 className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+                    <Building2 className="h-3 w-3 text-slate-400" aria-hidden="true" />
                     Proveedor / Origen
                   </label>
                   <input
@@ -1200,14 +1299,14 @@ export function PurchasesView({
                       setSupplier(e.target.value);
                       setFeedback(null);
                     }}
-                    className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="batch-ref"
-                    className="block text-xs font-medium text-slate-300"
+                    className="block text-[11px] font-medium text-slate-300"
                   >
                     Referencia del lote
                   </label>
@@ -1221,14 +1320,14 @@ export function PurchasesView({
                       setReferenceName(e.target.value);
                       setFeedback(null);
                     }}
-                    className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="batch-shipping"
-                    className="block text-xs font-medium text-slate-300"
+                    className="block text-[11px] font-medium text-slate-300"
                   >
                     Tipo de envío (SLA)
                   </label>
@@ -1238,7 +1337,7 @@ export function PurchasesView({
                     onChange={(e) =>
                       setShippingType(e.target.value as ShippingType)
                     }
-                    className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
                     {SHIPPING_TYPES.map((st) => (
                       <option key={st} value={st}>
@@ -1253,7 +1352,7 @@ export function PurchasesView({
                 <div>
                   <label
                     htmlFor="batch-freight"
-                    className="block text-xs font-medium text-slate-300"
+                    className="block text-[11px] font-medium text-slate-300"
                   >
                     {flowType === 'direct'
                       ? 'Flete / Traslado (USDT)'
@@ -1269,14 +1368,14 @@ export function PurchasesView({
                       setTotalFreightCost(e.target.value);
                       setFeedback(null);
                     }}
-                    className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="batch-usdt-rate"
-                    className="block text-xs font-medium text-slate-300"
+                    className="block text-[11px] font-medium text-slate-300"
                   >
                     Tasa USDT del Lote (Bs/USDT)
                   </label>
@@ -1291,14 +1390,14 @@ export function PurchasesView({
                       setBatchUsdtRate(e.target.value);
                       setFeedback(null);
                     }}
-                    className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
-                <div>
+                <div className="sm:col-span-2">
                   <label
                     htmlFor="batch-funding-source"
-                    className="block text-xs font-medium text-slate-300"
+                    className="block text-[11px] font-medium text-slate-300"
                   >
                     Descontar de
                   </label>
@@ -1307,12 +1406,13 @@ export function PurchasesView({
                     value={fundingSource}
                     onChange={(e) => {
                       setFundingSource(
-                        e.target.value as PurchaseFundingSource,
+                        e.target.value as PurchaseFundingSource | '',
                       );
                       setFeedback(null);
                     }}
-                    className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
+                    <option value="">Selecciona origen de fondos...</option>
                     <option value="replacement">
                       Fondo de Reposición (Costo Base) ({formatUSD(replacementFundBalance)})
                     </option>
@@ -1329,12 +1429,12 @@ export function PurchasesView({
                   <div className="sm:col-span-2">
                     <label
                       htmlFor="batch-arrival-date"
-                      className="flex items-center gap-1.5 text-xs font-medium text-slate-300"
+                      className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
                     >
-                      <Calendar className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                      <Calendar className="h-3 w-3 text-blue-400" aria-hidden="true" />
                       Fecha estimada de llegada (Agenda en Google Calendar)
                     </label>
-                    <div className="mt-1.5 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
                       <input
                         id="batch-arrival-date"
                         data-testid="batch-estimated-arrival-date"
@@ -1344,7 +1444,7 @@ export function PurchasesView({
                           setEstimatedArrivalDate(e.target.value);
                           setFeedback(null);
                         }}
-                        className="font-mono-num w-full sm:w-52 min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="font-mono-num w-full sm:w-44 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
                       <span className="text-[11px] text-slate-400">
                         {estimatedArrivalDate
@@ -1357,12 +1457,12 @@ export function PurchasesView({
                   <div className="sm:col-span-2">
                     <label
                       htmlFor="batch-direct-received-date"
-                      className="flex items-center gap-1.5 text-xs font-medium text-emerald-300"
+                      className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-300"
                     >
-                      <PackageCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      <PackageCheck className="h-3 w-3" aria-hidden="true" />
                       Fecha de ingreso directo a bodega (FIFO)
                     </label>
-                    <div className="mt-1.5 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
                       <input
                         id="batch-direct-received-date"
                         data-testid="batch-direct-received-date"
@@ -1372,7 +1472,7 @@ export function PurchasesView({
                           setDirectReceivedDate(e.target.value);
                           setFeedback(null);
                         }}
-                        className="font-mono-num w-full sm:w-52 min-h-[44px] rounded-lg border border-emerald-500/40 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="font-mono-num w-full sm:w-44 min-h-[36px] rounded-lg border border-emerald-500/40 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                       />
                       <span className="text-[11px] text-emerald-300/90">
                         Ingresa de inmediato a bodega como RECIBIDO (0 días en tránsito).
@@ -1385,72 +1485,73 @@ export function PurchasesView({
               {/* Visor claro de saldos disponibles (Reposición + Reinversión + Respaldo Combinado) */}
               <div
                 data-testid="purchase-funding-balances"
-                className="mt-4 grid grid-cols-1 gap-2.5 rounded-xl border border-slate-800 bg-[#080E1C] p-3.5 sm:grid-cols-3"
+                className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#080E1C] p-2.5 sm:grid-cols-3"
               >
                 <div
-                  className={`rounded-lg border px-3 py-2 transition-colors ${
+                  className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
                     fundingSource === 'replacement'
                       ? 'border-blue-500/50 bg-blue-500/10'
                       : 'border-slate-800 bg-[#070D19]'
                   }`}
                 >
-                  <p className="text-[11px] font-medium text-slate-400">
-                    Fondo de Reposición (Costo Base)
+                  <p className="text-[10px] font-medium text-slate-400">
+                    Reposición (Costo)
                   </p>
-                  <p className="font-mono-num mt-0.5 text-sm font-bold text-blue-300">
+                  <p className="font-mono-num mt-0.5 text-xs font-bold text-blue-300">
                     {formatUSD(replacementFundBalance)}
                   </p>
                 </div>
 
                 <div
-                  className={`rounded-lg border px-3 py-2 transition-colors ${
+                  className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
                     fundingSource === 'growthReinvestment'
                       ? 'border-emerald-500/50 bg-emerald-500/10'
                       : 'border-slate-800 bg-[#070D19]'
                   }`}
                 >
-                  <p className="text-[11px] font-medium text-slate-400">
-                    Fondo de Reinversión
+                  <p className="text-[10px] font-medium text-slate-400">
+                    Reinversión
                   </p>
-                  <p className="font-mono-num mt-0.5 text-sm font-bold text-emerald-300">
+                  <p className="font-mono-num mt-0.5 text-xs font-bold text-emerald-300">
                     {formatUSD(reinvestmentFundBalance)}
                   </p>
                 </div>
 
-                <div className="rounded-lg border border-slate-700/80 bg-[#070D19] px-3 py-2">
-                  <p className="text-[11px] font-medium text-slate-400">
-                    Respaldo Combinado (Repo + Reinv)
+                <div className="rounded-lg border border-slate-700/80 bg-[#070D19] px-2.5 py-1.5">
+                  <p className="text-[10px] font-medium text-slate-400">
+                    Combinado
                   </p>
-                  <p className="font-mono-num mt-0.5 text-sm font-bold text-white">
+                  <p className="font-mono-num mt-0.5 text-xs font-bold text-white">
                     {formatUSD(combinedRepoReinvestmentBalance)}
                   </p>
                 </div>
               </div>
             </section>
 
-            {/* SECCIÓN 2: CONSTRUCTOR DE ÍTEMS Y MATRIZ VERTICAL */}
+            {/* BLOQUE 2: CONSTRUCTOR DE PRENDAS (SOLO FORMULARIO DE CARGA) */}
             <section
               aria-labelledby="batch-items-builder-heading"
-              className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6"
+              className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4"
             >
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2
-                    id="batch-items-builder-heading"
-                    className="font-display text-lg font-semibold text-white"
-                  >
-                    2. Modelo, Versión y Matriz Vertical de Tallas
-                  </h2>
-                  <p className="mt-0.5 text-xs text-slate-400">
-                    La categoría o equipo se detecta automáticamente desde el nombre del modelo.
-                  </p>
-                </div>
+              <div>
+                <h2
+                  id="batch-items-builder-heading"
+                  className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
+                >
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                    2
+                  </span>
+                  <span>Agregar Prendas · Modelo, Versión y Tallas</span>
+                </h2>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  La categoría o equipo se detecta automáticamente desde el nombre del modelo.
+                </p>
               </div>
 
-              <form onSubmit={handleAddLine} className="mt-4 space-y-5">
+              <form onSubmit={handleAddLine} className="mt-3 space-y-3">
                 {/* Selección de Modelo Existente o "+ Registrar Nuevo Modelo" + Versión + Costo */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-12">
-                  <div className="sm:col-span-6 space-y-1.5">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="col-span-2 space-y-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label
                         htmlFor={
@@ -1458,7 +1559,7 @@ export function PurchasesView({
                             ? 'purchase-existing-model'
                             : 'purchase-model'
                         }
-                        className="block text-xs font-medium text-slate-300"
+                        className="block text-[11px] font-medium text-slate-300"
                       >
                         Modelo / Franela
                       </label>
@@ -1471,6 +1572,8 @@ export function PurchasesView({
                             onClick={() => {
                               setModelEntryMode('existing');
                               setModel('');
+                              setModelSearchQuery('');
+                              setIsModelDropdownOpen(false);
                               setManualTeamOverride(null);
                               setIsEditingTeam(false);
                             }}
@@ -1483,7 +1586,7 @@ export function PurchasesView({
                           type="button"
                           data-testid="btn-register-new-model"
                           onClick={handleSwitchToNewModel}
-                          className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-600/15 px-2.5 py-1 text-[11px] font-semibold text-blue-200 transition-colors hover:bg-blue-600/25 hover:text-white whitespace-nowrap shrink-0"
+                          className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-600/15 px-2 py-0.5 text-[11px] font-semibold text-blue-200 transition-colors hover:bg-blue-600/25 hover:text-white whitespace-nowrap shrink-0"
                         >
                           <Plus className="h-3 w-3" aria-hidden="true" />
                           Registrar Nuevo Modelo
@@ -1492,20 +1595,125 @@ export function PurchasesView({
                     </div>
 
                     {modelEntryMode === 'existing' && uniqueModelNames.length > 0 ? (
-                      <select
-                        id="purchase-existing-model"
-                        data-testid="purchase-existing-model-select"
-                        value={model}
-                        onChange={(e) => handleSelectExistingModel(e.target.value)}
-                        className="w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      >
-                        <option value="">Selecciona un modelo del catálogo...</option>
-                        {uniqueModelNames.map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
+                      <div ref={modelComboboxRef} className="relative">
+                        <div className="relative">
+                          <Search
+                            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                            aria-hidden="true"
+                          />
+                          <input
+                            ref={existingModelSearchRef}
+                            id="purchase-existing-model"
+                            data-testid="purchase-existing-model-input"
+                            type="text"
+                            role="combobox"
+                            aria-expanded={isModelDropdownOpen}
+                            aria-controls="purchase-existing-model-listbox"
+                            aria-autocomplete="list"
+                            autoComplete="off"
+                            value={modelSearchQuery}
+                            onFocus={() => setIsModelDropdownOpen(true)}
+                            onChange={(e) => {
+                              const nextQuery = e.target.value;
+                              setModelSearchQuery(nextQuery);
+                              setIsModelDropdownOpen(true);
+                              if (model && nextQuery !== model) {
+                                setModel('');
+                                setManualTeamOverride(null);
+                                setIsEditingTeam(false);
+                              }
+                              setFeedback(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                setIsModelDropdownOpen(false);
+                              }
+                            }}
+                            placeholder="Escribe para buscar modelo, equipo o versión..."
+                            className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] pl-8 pr-8 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                          {(modelSearchQuery || model) && (
+                            <button
+                              type="button"
+                              data-testid="btn-clear-existing-model"
+                              aria-label="Limpiar búsqueda de modelo"
+                              onClick={() => {
+                                setModelSearchQuery('');
+                                handleSelectExistingModel('');
+                                setIsModelDropdownOpen(true);
+                                existingModelSearchRef.current?.focus();
+                              }}
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+
+                        {isModelDropdownOpen && (
+                          <div
+                            id="purchase-existing-model-listbox"
+                            role="listbox"
+                            data-testid="purchase-existing-model-listbox"
+                            className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-slate-700 bg-[#080E1C] p-1.5 shadow-2xl"
+                          >
+                            {filteredExistingModelOptions.length === 0 ? (
+                              <div className="px-3 py-4 text-center text-xs text-slate-400">
+                                No se encontraron modelos coincidentes en el catálogo.
+                              </div>
+                            ) : (
+                              filteredExistingModelOptions.map((option) => {
+                                const isSelected = option.name === model;
+                                return (
+                                  <button
+                                    key={option.name}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={isSelected}
+                                    data-testid={`purchase-existing-model-option-${option.name}`}
+                                    onClick={() => {
+                                      handleSelectExistingModel(option.name);
+                                      setModelSearchQuery(option.name);
+                                      setIsModelDropdownOpen(false);
+                                    }}
+                                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                                      isSelected
+                                        ? 'bg-blue-600/15 border border-blue-500/40'
+                                        : 'hover:bg-slate-800 border border-transparent'
+                                    }`}
+                                  >
+                                    {option.thumbnailUrl ? (
+                                      <img
+                                        src={option.thumbnailUrl}
+                                        alt=""
+                                        referrerPolicy="no-referrer"
+                                        className="h-9 w-9 shrink-0 rounded-md border border-slate-700 object-cover bg-[#070D19]"
+                                      />
+                                    ) : null}
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-xs font-medium text-white">
+                                        {option.name}
+                                      </p>
+                                      <p className="truncate text-[11px] text-blue-300">
+                                        {option.detectedTeam}
+                                        {option.versions.length > 0
+                                          ? ` · ${option.versions.join(', ')}`
+                                          : ''}
+                                      </p>
+                                    </div>
+                                    {isSelected && (
+                                      <CheckCircle2
+                                        className="h-4 w-4 shrink-0 text-blue-400"
+                                        aria-hidden="true"
+                                      />
+                                    )}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <input
                         ref={modelInputRef}
@@ -1519,7 +1727,7 @@ export function PurchasesView({
                           setFeedback(null);
                         }}
                         placeholder="Ej. Real Madrid Local 26/27, PSG Retro 2002, Japón Edición Especial"
-                        className="w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
                     )}
 
@@ -1556,7 +1764,7 @@ export function PurchasesView({
                             onChange={(e) => setManualTeamOverride(e.target.value)}
                             placeholder="Categoría"
                             aria-label="Editar categoría detectada"
-                            className="w-32 rounded border border-slate-600 bg-[#070D19] px-2 py-0.5 text-[11px] text-white focus:border-blue-500 focus:outline-none"
+                            className="w-28 rounded border border-slate-600 bg-[#070D19] px-2 py-0.5 text-[11px] text-white focus:border-blue-500 focus:outline-none"
                           />
                           <button
                             type="button"
@@ -1580,10 +1788,10 @@ export function PurchasesView({
                     </div>
                   </div>
 
-                  <div className="sm:col-span-3">
+                  <div>
                     <label
                       htmlFor="purchase-version"
-                      className="block text-xs font-medium text-slate-300"
+                      className="block text-[11px] font-medium text-slate-300"
                     >
                       Versión <span className="text-red-400">*</span>
                     </label>
@@ -1597,7 +1805,7 @@ export function PurchasesView({
                           e.target.value as 'Player' | 'Retro' | 'Fans',
                         )
                       }
-                      className="mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
                       {VERSIONS.map((v) => (
                         <option key={v} value={v}>
@@ -1607,10 +1815,10 @@ export function PurchasesView({
                     </select>
                   </div>
 
-                  <div className="sm:col-span-3">
+                  <div>
                     <label
                       htmlFor="purchase-factory-cost"
-                      className="block text-xs font-medium text-slate-300"
+                      className="block text-[11px] font-medium text-slate-300"
                     >
                       Costo Fábrica ($)
                     </label>
@@ -1626,14 +1834,14 @@ export function PurchasesView({
                         setFactoryUnitCost(e.target.value);
                         setFeedback(null);
                       }}
-                      className="font-mono-num mt-1.5 w-full min-h-[44px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="font-mono-num mt-1 w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                   </div>
                 </div>
 
                 {/* Selector Modo A vs Modo B para Precio de Venta al Público (Etapa 1) */}
-                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-4 space-y-3">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3 space-y-2.5">
+                  <div className="flex flex-col gap-2">
                     <div>
                       <span className="block text-xs font-semibold text-slate-200">
                         Precio de Venta al Público (PVP $)
@@ -1646,14 +1854,14 @@ export function PurchasesView({
                     <div
                       role="group"
                       aria-label="Modo de precio de venta"
-                      className="inline-flex rounded-lg border border-slate-700 bg-[#070D19] p-1 self-start"
+                      className="inline-flex w-full rounded-lg border border-slate-700 bg-[#070D19] p-1"
                     >
                       <button
                         type="button"
                         data-testid="btn-stage1-pricing-uniform"
                         aria-pressed={stage1PricingMode === 'uniform'}
                         onClick={() => handleStage1PricingModeChange('uniform')}
-                        className={`min-h-[34px] rounded-md px-3 py-1 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        className={`flex-1 min-h-[30px] rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
                           stage1PricingMode === 'uniform'
                             ? 'bg-emerald-600/25 text-emerald-200 border border-emerald-500/40'
                             : 'text-slate-400 hover:text-white'
@@ -1666,7 +1874,7 @@ export function PurchasesView({
                         data-testid="btn-stage1-pricing-per-item"
                         aria-pressed={stage1PricingMode === 'per-item'}
                         onClick={() => handleStage1PricingModeChange('per-item')}
-                        className={`min-h-[34px] rounded-md px-3 py-1 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        className={`flex-1 min-h-[30px] rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap ${
                           stage1PricingMode === 'per-item'
                             ? 'bg-blue-600/25 text-blue-200 border border-blue-500/40'
                             : 'text-slate-400 hover:text-white'
@@ -1678,10 +1886,10 @@ export function PurchasesView({
                   </div>
 
                   {stage1PricingMode === 'uniform' ? (
-                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
                       <label
                         htmlFor="purchase-sale-price"
-                        className="text-xs font-medium text-slate-300"
+                        className="text-[11px] font-medium text-slate-300"
                       >
                         PVP uniforme para todo el lote ($):
                       </label>
@@ -1694,14 +1902,14 @@ export function PurchasesView({
                         required
                         value={unitSalePrice}
                         onChange={(e) => handleUniformPriceChange(e.target.value)}
-                        className="font-mono-num w-36 min-h-[42px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-sm font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="font-mono-num w-28 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                       />
                     </div>
                   ) : (
-                    <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-blue-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs text-blue-200">
                       <label
                         htmlFor="purchase-sale-price"
-                        className="text-xs font-medium text-slate-300"
+                        className="text-[11px] font-medium text-slate-300"
                       >
                         PVP base sugerido ($):
                       </label>
@@ -1713,9 +1921,9 @@ export function PurchasesView({
                         step="0.01"
                         value={unitSalePrice}
                         onChange={(e) => handleUniformPriceChange(e.target.value)}
-                        className="font-mono-num w-32 min-h-[38px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1 text-xs font-semibold text-emerald-300 focus:border-blue-500 focus:outline-none"
+                        className="font-mono-num w-28 min-h-[34px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs font-semibold text-emerald-300 focus:border-blue-500 focus:outline-none"
                       />
-                      <span className="text-[11px] text-slate-400">
+                      <span className="w-full text-[11px] text-slate-400">
                         Ajusta el PVP individual de cada talla directamente abajo en la columna.
                       </span>
                     </div>
@@ -1723,7 +1931,7 @@ export function PurchasesView({
                 </div>
 
                 {/* Matriz Vertical de Tallas en Columna S, M, L, XL, XXL + otras tallas */}
-                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-4 space-y-3">
+                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-slate-200">
                       Matriz de Tallas en Columna (Cantidad por talla)
@@ -1745,12 +1953,12 @@ export function PurchasesView({
                         <div
                           key={sz}
                           data-testid={`vertical-size-row-${sz}`}
-                          className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5"
+                          className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5"
                         >
-                          <div className="flex items-center gap-2 min-w-[96px]">
+                          <div className="flex items-center gap-1.5 min-w-[64px]">
                             <label
                               htmlFor={`matrix-size-${sz}`}
-                              className="font-mono-num text-sm font-bold text-white"
+                              className="font-mono-num text-xs font-bold text-white"
                             >
                               {sz}
                             </label>
@@ -1761,13 +1969,13 @@ export function PurchasesView({
                                 aria-label={`Quitar talla ${sz}`}
                                 className="rounded p-0.5 text-slate-500 hover:bg-slate-800 hover:text-red-300"
                               >
-                                <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                <X className="h-3 w-3" aria-hidden="true" />
                               </button>
                             )}
                           </div>
 
-                          <div className="flex flex-1 items-center justify-end gap-3">
-                            <div className="flex items-center gap-2">
+                          <div className="flex flex-1 items-center justify-end gap-2.5">
+                            <div className="flex items-center gap-1.5">
                               <span className="text-[11px] text-slate-400">
                                 Cant.
                               </span>
@@ -1785,7 +1993,7 @@ export function PurchasesView({
                                   }));
                                   setFeedback(null);
                                 }}
-                                className="font-mono-num w-24 min-h-[40px] rounded-lg border border-slate-700 bg-[#0D1526] px-3 py-1.5 text-right text-sm font-semibold text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                className="font-mono-num w-20 min-h-[34px] rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-right text-xs font-semibold text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                               />
                             </div>
 
@@ -1808,7 +2016,7 @@ export function PurchasesView({
                                     }));
                                     setFeedback(null);
                                   }}
-                                  className="font-mono-num w-24 min-h-[40px] rounded-lg border border-emerald-500/35 bg-[#0D1526] px-2.5 py-1.5 text-right text-sm font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                  className="font-mono-num w-20 min-h-[34px] rounded-lg border border-emerald-500/35 bg-[#0D1526] px-2 py-1 text-right text-xs font-semibold text-emerald-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                 />
                               </div>
                             )}
@@ -1819,13 +2027,13 @@ export function PurchasesView({
                   </div>
 
                   {/* "+ Agregar otra talla" con presets rápidos (XS, 3XL, Niño) + campo libre */}
-                  <div className="pt-1">
+                  <div className="pt-0.5">
                     {!showExtraSizePicker ? (
                       <button
                         type="button"
                         data-testid="btn-add-extra-size"
                         onClick={() => setShowExtraSizePicker(true)}
-                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-blue-500/40 hover:bg-slate-800 hover:text-white"
+                        className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs font-semibold text-slate-200 transition-colors hover:border-blue-500/40 hover:bg-slate-800 hover:text-white"
                       >
                         <Plus className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
                         Agregar otra talla
@@ -1833,7 +2041,7 @@ export function PurchasesView({
                     ) : (
                       <div
                         data-testid="extra-size-picker"
-                        className="rounded-lg border border-slate-700 bg-[#070D19] p-3 space-y-2.5"
+                        className="rounded-lg border border-slate-700 bg-[#070D19] p-2.5 space-y-2"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[11px] font-semibold text-slate-300">
@@ -1848,7 +2056,7 @@ export function PurchasesView({
                           </button>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           {EXTRA_JERSEY_SIZE_PRESETS.map((preset) => {
                             const exists = activeSizes.some(
                               (s) => s.toLowerCase() === preset.toLowerCase(),
@@ -1860,7 +2068,7 @@ export function PurchasesView({
                                 data-testid={`preset-size-${preset}`}
                                 disabled={exists}
                                 onClick={() => handleAddExtraSize(preset)}
-                                className="min-h-[34px] rounded-md border border-slate-700 bg-[#0D1526] px-3 py-1 text-xs font-semibold text-slate-200 hover:border-blue-500/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                className="min-h-[30px] rounded-md border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs font-semibold text-slate-200 hover:border-blue-500/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                               >
                                 + {preset}
                               </button>
@@ -1881,14 +2089,14 @@ export function PurchasesView({
                               }
                             }}
                             placeholder="Ej. 4XL, 10-12 años, Juvenil"
-                            className="min-w-[180px] flex-1 min-h-[38px] rounded-lg border border-slate-700 bg-[#0D1526] px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                            className="min-w-[140px] flex-1 min-h-[34px] rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
                           />
                           <button
                             type="button"
                             data-testid="btn-confirm-custom-size"
                             onClick={() => handleAddExtraSize(customSizeInput)}
                             disabled={!customSizeInput.trim()}
-                            className="min-h-[38px] rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                            className="min-h-[34px] rounded-lg bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
                           >
                             Agregar talla
                           </button>
@@ -1899,17 +2107,17 @@ export function PurchasesView({
                 </div>
 
                 {/* Foto opcional para el catálogo público (URL / Drive / Móvil) */}
-                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3.5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
+                  <div className="flex flex-col gap-2">
                     <div className="flex-1 min-w-0">
                       <label
                         htmlFor="purchase-catalog-photo"
-                        className="flex items-center gap-1.5 text-xs font-medium text-slate-300"
+                        className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
                       >
                         <Camera className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
                         Foto para Catálogo Público (opcional · URL, Google Drive o galería)
                       </label>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
                         <input
                           id="purchase-catalog-photo"
                           data-testid="purchase-catalog-photo-input"
@@ -1921,9 +2129,9 @@ export function PurchasesView({
                               ? 'Ya tiene foto guardada (pega otro enlace para reemplazar)'
                               : 'https://drive.google.com/file/d/... o sube desde tu móvil'
                           }
-                          className="min-w-[220px] flex-1 min-h-[40px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                          className="min-w-[160px] flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
                         />
-                        <label className="inline-flex min-h-[40px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white">
+                        <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white">
                           <Upload className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
                           {photoUploading ? 'Procesando...' : 'Subir Foto'}
                           <input
@@ -1933,22 +2141,21 @@ export function PurchasesView({
                             className="sr-only"
                           />
                         </label>
+                        {(itemPhotoInput.trim() || existingCatalogPhoto) && (
+                          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-[#070D19]">
+                            <img
+                              src={
+                                normalizeCatalogImageUrl(itemPhotoInput) ||
+                                existingCatalogPhoto
+                              }
+                              alt="Vista previa modelo"
+                              referrerPolicy="no-referrer"
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
-
-                    {(itemPhotoInput.trim() || existingCatalogPhoto) && (
-                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-[#070D19]">
-                        <img
-                          src={
-                            normalizeCatalogImageUrl(itemPhotoInput) ||
-                            existingCatalogPhoto
-                          }
-                          alt="Vista previa modelo"
-                          referrerPolicy="no-referrer"
-                          className="h-full w-full object-cover"
-                        />
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -1956,123 +2163,152 @@ export function PurchasesView({
                   <button
                     type="submit"
                     data-testid="btn-add-batch-items"
-                    className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-600/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                    className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs sm:text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-600/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                   >
                     <Plus className="h-4 w-4" aria-hidden="true" />
                     Agregar Tallas al Lote
                   </button>
                 </div>
               </form>
-
-              {draftItems.length > 0 && (
-                <div className="mt-6 border-t border-slate-800 pt-5">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-white">
-                      Prendas incluidas en la Orden
-                    </h3>
-                    <span className="font-mono-num text-xs text-slate-400">
-                      {batchSummary.totalUnits} prendas · Flete prorrateado:{' '}
-                      {formatUSD(batchSummary.freightPerUnit)}/ud
-                    </span>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs sm:text-sm">
-                      <thead className="border-b border-slate-800 text-xs text-slate-400">
-                        <tr>
-                          <th className="pb-2">Modelo</th>
-                          <th className="pb-2 text-right">Cant.</th>
-                          <th className="pb-2 text-right">Fábrica</th>
-                          <th className="pb-2 text-right">Est. Puesto</th>
-                          <th className="pb-2 text-right">PVP ($)</th>
-                          <th className="pb-2 text-right">Acción</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/70">
-                        {draftItems.map((line) => {
-                          const landed = round2(
-                            round4(
-                              line.factoryUnitCost +
-                                batchSummary.freightPerUnitExact,
-                            ),
-                          );
-                          return (
-                            <tr key={line.lineId}>
-                              <td className="py-2.5 pr-2">
-                                <span className="font-medium text-white">
-                                  {line.model}
-                                </span>
-                                <span className="block text-xs text-slate-400">
-                                  {line.team} · {line.version} · Talla {line.size}
-                                </span>
-                              </td>
-                              <td className="py-2.5 text-right font-mono-num font-semibold text-white">
-                                {line.quantity}
-                              </td>
-                              <td className="py-2.5 text-right font-mono-num text-slate-300">
-                                {formatUSD(line.factoryUnitCost)}
-                              </td>
-                              <td className="py-2.5 text-right font-mono-num font-semibold text-blue-300">
-                                {formatUSD(landed)}
-                              </td>
-                              <td className="py-2.5 text-right font-mono-num font-semibold text-emerald-300">
-                                {stage1PricingMode === 'per-item' ? (
-                                  <input
-                                    type="number"
-                                    min="0.01"
-                                    step="0.01"
-                                    aria-label={`PVP para ${line.model} talla ${line.size}`}
-                                    data-testid={`draft-line-price-${line.size}`}
-                                    value={line.salePrice || ''}
-                                    onChange={(e) =>
-                                      handleUpdateDraftLinePrice(
-                                        line.lineId,
-                                        e.target.value,
-                                      )
-                                    }
-                                    className="font-mono-num w-20 rounded border border-emerald-500/40 bg-[#070D19] px-2 py-1 text-right text-xs font-semibold text-emerald-300 focus:border-emerald-400 focus:outline-none"
-                                  />
-                                ) : (
-                                  formatUSD(line.salePrice)
-                                )}
-                              </td>
-                              <td className="py-2.5 pl-2 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveLine(line.lineId)}
-                                  aria-label={`Eliminar ${line.model} del lote`}
-                                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20"
-                                >
-                                  <Trash2
-                                    className="h-3.5 w-3.5"
-                                    aria-hidden="true"
-                                  />
-                                  Eliminar
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
             </section>
           </div>
 
-          {/* SECCIÓN 3: RESUMEN Y DESEMBOLSO */}
+          {/* COLUMNA 2: LISTA DE LA ORDEN EN VIVO */}
+          <section
+            aria-labelledby="order-draft-items-heading"
+            className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4 lg:col-span-5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2
+                id="order-draft-items-heading"
+                className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
+              >
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                  3
+                </span>
+                <span>Prendas incluidas en la Orden</span>
+              </h2>
+              <span className="font-mono-num text-xs text-slate-400">
+                {batchSummary.totalUnits} prendas · Flete prorrateado:{' '}
+                {formatUSD(batchSummary.freightPerUnit)}/ud
+              </span>
+            </div>
+
+            {draftItems.length === 0 ? (
+              <div
+                data-testid="draft-items-empty"
+                className="mt-3 rounded-lg border border-dashed border-slate-700/80 bg-[#080E1C] p-6 text-center"
+              >
+                <ShoppingCart
+                  className="mx-auto h-6 w-6 text-slate-500"
+                  aria-hidden="true"
+                />
+                <p className="mt-2 text-xs font-semibold text-slate-300">
+                  Aún no hay prendas en esta orden
+                </p>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Las prendas agregadas desde el bloque izquierdo aparecerán aquí en vivo para revisar cantidades, costo puesto y PVP.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-800 text-[11px] text-slate-400">
+                    <tr>
+                      <th className="pb-2">Modelo</th>
+                      <th className="pb-2 text-right">Cant.</th>
+                      <th className="pb-2 text-right">Fábrica</th>
+                      <th className="pb-2 text-right">Est. Puesto</th>
+                      <th className="pb-2 text-right">PVP ($)</th>
+                      <th className="pb-2 text-right">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70">
+                    {draftItems.map((line) => {
+                      const landed = round2(
+                        round4(
+                          line.factoryUnitCost +
+                            batchSummary.freightPerUnitExact,
+                        ),
+                      );
+                      return (
+                        <tr key={line.lineId}>
+                          <td className="py-2 pr-2">
+                            <span className="font-medium text-white">
+                              {line.model}
+                            </span>
+                            <span className="block text-[11px] text-slate-400">
+                              {line.team} · {line.version} · Talla {line.size}
+                            </span>
+                          </td>
+                          <td className="py-2 text-right font-mono-num font-semibold text-white">
+                            {line.quantity}
+                          </td>
+                          <td className="py-2 text-right font-mono-num text-slate-300">
+                            {formatUSD(line.factoryUnitCost)}
+                          </td>
+                          <td className="py-2 text-right font-mono-num font-semibold text-blue-300">
+                            {formatUSD(landed)}
+                          </td>
+                          <td className="py-2 text-right font-mono-num font-semibold text-emerald-300">
+                            {stage1PricingMode === 'per-item' ? (
+                              <input
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                aria-label={`PVP para ${line.model} talla ${line.size}`}
+                                data-testid={`draft-line-price-${line.size}`}
+                                value={line.salePrice || ''}
+                                onChange={(e) =>
+                                  handleUpdateDraftLinePrice(
+                                    line.lineId,
+                                    e.target.value,
+                                  )
+                                }
+                                className="font-mono-num w-20 rounded border border-emerald-500/40 bg-[#070D19] px-2 py-1 text-right text-xs font-semibold text-emerald-300 focus:border-emerald-400 focus:outline-none"
+                              />
+                            ) : (
+                              formatUSD(line.salePrice)
+                            )}
+                          </td>
+                          <td className="py-2 pl-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveLine(line.lineId)}
+                              aria-label={`Eliminar ${line.model} del lote`}
+                              className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
+                            >
+                              <Trash2
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
+                              Eliminar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* COLUMNA 3: RESUMEN Y CIERRE */}
           <section
             aria-labelledby="batch-impact-heading"
-            className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 lg:col-span-4 h-fit"
+            className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4 lg:col-span-3"
           >
             <h2
               id="batch-impact-heading"
-              className="font-display text-lg font-semibold text-white"
+              className="flex items-center gap-2 font-display text-sm sm:text-base font-semibold text-white"
             >
-              3. Resumen y Confirmación
+              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-500/40 bg-blue-600/20 font-mono-num text-[11px] font-bold text-blue-300">
+                4
+              </span>
+              <span>Resumen y Confirmación</span>
             </h2>
-            <p className="mt-0.5 text-xs text-slate-400">
+            <p className="mt-0.5 text-[11px] text-slate-400">
               Se descontará de{' '}
               <span className="font-semibold text-slate-200">
                 {getFundingSourceLabel(fundingSource)}
@@ -2082,8 +2318,8 @@ export function PurchasesView({
                 : 'y la orden quedará EN TRÁNSITO hasta confirmar recepción.'}
             </p>
 
-            <div className="mt-5 space-y-3 text-sm">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+            <div className="mt-3.5 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-300">Modalidad</span>
                 <span
                   className={`text-xs font-semibold ${
@@ -2096,21 +2332,21 @@ export function PurchasesView({
                 </span>
               </div>
 
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-300">Total prendas</span>
                 <span className="font-mono-num font-semibold text-white">
                   {batchSummary.totalUnits} uds
                 </span>
               </div>
 
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-300">Costo fábrica total</span>
                 <span className="font-mono-num font-semibold text-white">
                   {formatUSD(batchSummary.totalFactory)}
                 </span>
               </div>
 
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-300">
                   Flete ({shippingType})
                 </span>
@@ -2119,7 +2355,7 @@ export function PurchasesView({
                 </span>
               </div>
 
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-300">
                   Flete prorrateado / ud
                 </span>
@@ -2130,11 +2366,11 @@ export function PurchasesView({
                 </span>
               </div>
 
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-300">Desembolso inmediato</span>
                 <span
                   data-testid="batch-total-landed"
-                  className={`font-mono-num text-base font-bold ${
+                  className={`font-mono-num text-sm font-bold ${
                     batchSummary.totalLanded > availableFundingBalance
                       ? 'text-red-400'
                       : 'text-white'
@@ -2165,7 +2401,8 @@ export function PurchasesView({
                 )}
 
               {batchSummary.totalLanded <= availableFundingBalance &&
-                fundingSource !== 'cashOnHand' &&
+                (fundingSource === 'replacement' ||
+                  fundingSource === 'growthReinvestment') &&
                 batchSummary.totalLanded > primaryFundingBalance &&
                 draftItems.length > 0 && (
                   <p
@@ -2183,7 +2420,7 @@ export function PurchasesView({
                 data-testid="btn-submit-batch"
                 onClick={() => void handleSaveBatch()}
                 disabled={draftItems.length === 0 || isSubmittingCreate}
-                className={`mt-2 inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-colors active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500 focus-visible:outline-none focus-visible:ring-2 ${
+                className={`mt-2 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold text-white transition-colors active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500 focus-visible:outline-none focus-visible:ring-2 ${
                   flowType === 'direct'
                     ? 'bg-emerald-600 hover:bg-emerald-500 focus-visible:ring-emerald-400'
                     : 'bg-blue-600 hover:bg-blue-500 focus-visible:ring-blue-400'
@@ -2205,12 +2442,21 @@ export function PurchasesView({
         </div>
       )}
 
-      {/* SECCIÓN: PEDIDOS EN TRÁNSITO (EN CAMINO) */}
-      {(subView === 'all' || subView === 'transit') && (
-        <section
-          aria-labelledby="transit-orders-heading"
-          className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6"
+      {/* SECCIONES: PEDIDOS EN TRÁNSITO E HISTORIAL (LADO A LADO EN VISTA COMPLETA) */}
+      {(subView === 'all' || subView === 'transit' || subView === 'history') && (
+        <div
+          className={
+            subView === 'all'
+              ? 'grid grid-cols-1 xl:grid-cols-2 gap-3.5 items-start'
+              : 'space-y-3.5'
+          }
         >
+          {/* SECCIÓN: PEDIDOS EN TRÁNSITO (EN CAMINO) */}
+          {(subView === 'all' || subView === 'transit') && (
+            <section
+              aria-labelledby="transit-orders-heading"
+              className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4"
+            >
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2
@@ -2402,12 +2648,12 @@ export function PurchasesView({
         </section>
       )}
 
-      {/* HISTORIAL DE COMPRAS Y LOTES RECIBIDOS EN BODEGA */}
-      {(subView === 'all' || subView === 'transit' || subView === 'history') && (
-        <section
-          aria-labelledby="purchase-history-heading"
-          className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 overflow-hidden"
-        >
+          {/* HISTORIAL DE COMPRAS Y LOTES RECIBIDOS EN BODEGA */}
+          {(subView === 'all' || subView === 'transit' || subView === 'history') && (
+            <section
+              aria-labelledby="purchase-history-heading"
+              className="rounded-xl border border-slate-800 bg-[#0D1526] p-3.5 xl:p-4 overflow-hidden"
+            >
           <div className="flex items-center justify-between gap-4">
             <h2
               id="purchase-history-heading"
@@ -2648,7 +2894,9 @@ export function PurchasesView({
               </div>
             </>
           )}
-        </section>
+            </section>
+          )}
+        </div>
       )}
 
       {/* ETAPA 2: MODAL DE RECEPCIÓN Y AUDITORÍA DE INGRESO A BODEGA */}
