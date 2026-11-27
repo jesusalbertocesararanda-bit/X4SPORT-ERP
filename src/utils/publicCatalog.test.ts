@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDemoSeedState, createEmptyCleanState } from '../data/initialState';
-import { normalizeAppState, registerMultiItemSale, sanitizeForFirebase } from './finance';
+import {
+  getInventorySizeMatrix,
+  normalizeAppState,
+  receiveImportBatch,
+  registerImportBatch,
+  registerMultiItemSale,
+  sanitizeForFirebase,
+} from './finance';
 import {
   advanceWhatsAppTurnIndex,
+  applyCatalogPhotoMutation,
   buildCatalogWhatsAppHref,
   buildPublicCatalogGroups,
   buildShareableCatalogUrl,
@@ -13,11 +21,13 @@ import {
   clampCatalogCarouselIndex,
   computeClampedSwipeOffset,
   computeTransitDaysRemaining,
+  consolidateMatrixRowsByModelIdentity,
   convertGoogleDriveUrlToDirect,
   extractGoogleDriveFileId,
   filterPublicCatalogGroups,
   filterUpcomingTransitCards,
   getCurrentWhatsAppTurnIndex,
+  getModelIdentityKey,
   isPublicCatalogModeFromLocation,
   isRateValid,
   normalizarUrlImagen,
@@ -25,8 +35,10 @@ import {
   normalizeCatalogModelKey,
   obtenerFallbackUrlImagen,
   parseCatalogImageList,
+  propagateModelPhotosAfterBatchMutation,
   resolveCatalogKeywords,
   resolveCatalogPhoto,
+  resolveModelPhotoAnywhere,
   sanitizeFirebaseCatalogKey,
 } from './publicCatalog';
 
@@ -493,4 +505,259 @@ test('Firebase RTDB catalog key sanitization preserves compatibility across lega
     'Mbappe Bellingham',
   );
 });
+
+test('getModelIdentityKey unifies accent/case/whitespace and player variants with zero duplicates', () => {
+  const k1 = getModelIdentityKey({
+    model: 'BAYERN DE MÚNICH LOCAL 2026/2027',
+    version: 'Player',
+  });
+  const k2 = getModelIdentityKey({
+    model: '  bayern   de munich local 2026/2027 ',
+    version: 'Player',
+  });
+  assert.equal(k1, k2);
+
+  const p1 = getModelIdentityKey({
+    model: 'Real Madrid Local 25/26 · Bellingham #5',
+    version: 'Fans',
+  });
+  const p2 = getModelIdentityKey({
+    model: 'Real Madrid Local 25/26',
+    version: 'Fans',
+    player: 'bellingham #5',
+  });
+  assert.equal(p1, p2);
+
+  const emptyState = createEmptyCleanState();
+  emptyState.inventory = [
+    {
+      id: 'inv-1',
+      team: 'Bayern',
+      model: 'BAYERN DE MÚNICH LOCAL 26/27',
+      version: 'Fans',
+      size: 'M',
+      stock: 0,
+      cogs: 8,
+      salePrice: 25,
+      fifoBatches: [],
+      imageUrl: 'https://cdn.example.com/bayern-old.jpg',
+    },
+    {
+      id: 'inv-2',
+      team: 'Bayern',
+      model: 'Bayern de Munich Local 26/27',
+      version: 'Fans',
+      size: 'L',
+      stock: 4,
+      cogs: 9,
+      salePrice: 25,
+      fifoBatches: [
+        {
+          batchId: 'b-1',
+          batchName: 'Lote Bayern',
+          entryDate: '2026-11-01',
+          initialQuantity: 4,
+          remainingQuantity: 4,
+          unitCost: 9,
+        },
+      ],
+    },
+  ];
+
+  // Matrix rows consolidate accent/case duplicates into 1 unified row
+  const rawMatrix = getInventorySizeMatrix(emptyState.inventory, 5);
+  const consolidated = consolidateMatrixRowsByModelIdentity(rawMatrix, 5);
+  assert.equal(consolidated.length, 1);
+  assert.equal(consolidated[0].totalStock, 4);
+  assert.equal(consolidated[0].sizes.L, 4);
+  assert.equal(consolidated[0].sizes.M, 0);
+
+  // Public catalog groups resolve inherited photo even though stock=0 record held it
+  const groups = buildPublicCatalogGroups(emptyState);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].products.length, 1);
+  assert.equal(
+    groups[0].products[0].photoUrl,
+    'https://cdn.example.com/bayern-old.jpg',
+  );
+});
+
+test('resolveModelPhotoAnywhere finds photo across draft map, catalogPhotos, 0-stock inventory, purchaseBatches, and purchases', () => {
+  const state = createEmptyCleanState();
+  state.inventory = [
+    {
+      id: 'sku-zero',
+      team: 'Barcelona',
+      model: 'BARCELONA LOCAL 26/27',
+      version: 'Player',
+      size: 'S',
+      stock: 0,
+      cogs: 10,
+      salePrice: 30,
+      fifoBatches: [],
+      imageUrl: 'https://cdn.example.com/barca-zero.jpg',
+    },
+  ];
+
+  assert.equal(
+    resolveModelPhotoAnywhere(state, {
+      model: 'barcelona local 26/27',
+      version: 'Player',
+    }),
+    'https://cdn.example.com/barca-zero.jpg',
+  );
+
+  // Draft map takes precedence before saving
+  const idKey = getModelIdentityKey({
+    model: 'PSG Visitante 26/27',
+    version: 'Fans',
+  });
+  assert.equal(
+    resolveModelPhotoAnywhere(
+      state,
+      { model: 'PSG Visitante 26/27', version: 'Fans' },
+      { [idKey]: 'https://cdn.example.com/psg-draft.jpg' },
+    ),
+    'https://cdn.example.com/psg-draft.jpg',
+  );
+});
+
+test('propagateModelPhotosAfterBatchMutation propagates new photos to 0-stock prior lots and inherits existing photos automatically', () => {
+  const base = createEmptyCleanState();
+  base.cashOnHand = 500;
+  base.funds.replacement = 500;
+  base.inventory = [
+    {
+      id: 'inv-zero-1',
+      team: 'Manchester City',
+      model: 'MANCHESTER CITY LOCAL 26/27',
+      version: 'Fans',
+      size: 'M',
+      stock: 0,
+      cogs: 8,
+      salePrice: 25,
+      fifoBatches: [],
+    },
+  ];
+
+  // Scenario A: 0-stock model without photo gets new photo on direct purchase
+  const newKey = getModelIdentityKey({
+    model: 'Manchester City Local 26/27',
+    version: 'Fans',
+  });
+  const regNewRes = registerImportBatch(base, {
+    entryDate: '2026-11-20',
+    receivedDate: '2026-11-20',
+    referenceName: 'Directo City',
+    shippingType: 'Aéreo',
+    totalFreightCost: 0,
+    fundingSource: 'replacement',
+    isDirectReception: true,
+    items: [
+      {
+        team: 'Manchester City',
+        model: 'Manchester City Local 26/27',
+        version: 'Fans',
+        size: 'L',
+        quantity: 3,
+        factoryUnitCost: 6,
+        salePrice: 25,
+      },
+    ],
+  });
+  assert.equal(regNewRes.ok, true);
+
+  const syncedNew = propagateModelPhotosAfterBatchMutation(regNewRes.state, {
+    targetBatch: regNewRes.createdBatch,
+    priorState: base,
+    modelPhotos: {
+      [newKey]: {
+        model: 'Manchester City Local 26/27',
+        version: 'Fans',
+        photoUrl: 'https://cdn.example.com/city-new.jpg',
+      },
+    },
+  });
+
+  // Propagated to catalogPhotos, prior 0-stock item, and newly created SKU
+  assert.equal(
+    syncedNew.catalogPhotos?.[newKey],
+    'https://cdn.example.com/city-new.jpg',
+  );
+  assert.equal(syncedNew.inventory.length, 2);
+  for (const inv of syncedNew.inventory) {
+    assert.equal(inv.imageUrl, 'https://cdn.example.com/city-new.jpg');
+  }
+
+  // Scenario B: Model ALREADY has a photo; new transit batch without photo inherits it automatically on creation & reception
+  const transitRes = registerImportBatch(syncedNew, {
+    entryDate: '2026-11-22',
+    referenceName: 'Aereo City Reposicion',
+    shippingType: 'Aéreo',
+    totalFreightCost: 5,
+    fundingSource: 'replacement',
+    isDirectReception: false,
+    items: [
+      {
+        team: 'Manchester City',
+        model: 'MANCHESTER CITY LOCAL 26/27',
+        version: 'Fans',
+        size: 'XL',
+        quantity: 2,
+        factoryUnitCost: 6,
+        salePrice: 25,
+      },
+    ],
+  });
+  assert.equal(transitRes.ok, true);
+
+  const transitSynced = propagateModelPhotosAfterBatchMutation(
+    transitRes.state,
+    {
+      targetBatch: transitRes.createdBatch,
+      priorState: syncedNew,
+    },
+  );
+  const createdTransitBatch = transitSynced.purchaseBatches.find(
+    (b) => b.id === transitRes.createdBatch?.id,
+  );
+  assert.equal(
+    createdTransitBatch?.items[0].imageUrl,
+    'https://cdn.example.com/city-new.jpg',
+  );
+
+  // Receive transit batch -> new XL SKU also inherits the imageUrl
+  const recvRes = receiveImportBatch(transitSynced, {
+    batchId: transitRes.createdBatch!.id,
+    receivedDate: '2026-11-27',
+    actualFreightCost: 5,
+    receivedItems: [{ itemIndex: 0, receivedQuantity: 2, salePrice: 25 }],
+  });
+  assert.equal(recvRes.ok, true);
+  const recvSynced = propagateModelPhotosAfterBatchMutation(recvRes.state, {
+    targetBatch: recvRes.createdBatch,
+    priorState: transitSynced,
+  });
+  const xlSku = recvSynced.inventory.find((i) => i.size === 'XL');
+  assert.equal(xlSku?.imageUrl, 'https://cdn.example.com/city-new.jpg');
+
+  // Centralized photo removal clears catalogPhotos, inventory (even stock 0), batches, and purchases
+  const cleared = applyCatalogPhotoMutation(recvSynced, {
+    modelKey: newKey,
+    photoUrl: '',
+  });
+  assert.equal(cleared.catalogPhotos?.[newKey], undefined);
+  assert.equal(
+    resolveModelPhotoAnywhere(cleared, {
+      model: 'Manchester City Local 26/27',
+      version: 'Fans',
+    }),
+    undefined,
+  );
+  assert.equal(
+    cleared.inventory.some((i) => Boolean(i.imageUrl)),
+    false,
+  );
+});
+
 

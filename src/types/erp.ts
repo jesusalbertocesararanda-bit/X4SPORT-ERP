@@ -134,6 +134,7 @@ export interface InventoryItem {
   stock: number;
   cogs: number; // Next active FIFO unit cost (or weighted avg display)
   salePrice: number; // Retail unit price in USD / USDT
+  imageUrl?: string;
   fifoBatches: FifoBatch[];
 }
 
@@ -289,6 +290,7 @@ export interface PurchaseBatchItemRecord {
   landedUnitCost: number;
   lineFactoryTotal: number;
   lineLandedTotal: number;
+  imageUrl?: string;
 }
 
 export interface PurchaseBatchRecord {
@@ -334,6 +336,7 @@ export interface PurchaseRecord {
   totalCost: number;
   previousCogs: number | null;
   resultingCogs: number;
+  imageUrl?: string;
   createdAt: string;
 }
 

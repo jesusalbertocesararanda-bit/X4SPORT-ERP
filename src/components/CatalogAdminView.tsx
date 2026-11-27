@@ -19,12 +19,12 @@ import {
   CATALOG_WHATSAPP_ADVISORS,
   compressCatalogImageFile,
   extractGoogleDriveFileId,
+  getModelIdentityKey,
   normalizarUrlImagen,
-  normalizeCatalogModelKey,
   obtenerFallbackUrlImagen,
   parseCatalogImageList,
   resolveCatalogKeywords,
-  resolveCatalogPhoto,
+  resolveModelPhotoAnywhere,
 } from '../utils/publicCatalog';
 import { JerseyShowcaseFallback, TeamCrest } from './TeamCrest';
 
@@ -77,23 +77,30 @@ export function CatalogAdminView({
 
     for (const item of state.inventory ?? []) {
       const version = normalizeVersionDisplay(item.version);
-      const key = normalizeCatalogModelKey(item.model, version);
+      const key = getModelIdentityKey({ model: item.model, version });
+      const itemStock = Math.max(0, item.stock);
       const existing = map.get(key);
       if (existing) {
-        existing.stockAvailable += Math.max(0, item.stock);
+        if (existing.stockAvailable === 0 && itemStock > 0) {
+          existing.model = item.model.trim();
+          existing.team = item.team || existing.team;
+        }
+        existing.stockAvailable += itemStock;
+        if (!existing.photoUrl && item.imageUrl?.trim()) {
+          existing.photoUrl = item.imageUrl.trim();
+        }
       } else {
         map.set(key, {
           key,
           team: item.team || 'Otro',
           model: item.model.trim(),
           version,
-          stockAvailable: Math.max(0, item.stock),
+          stockAvailable: itemStock,
           inTransitUnits: 0,
-          photoUrl: resolveCatalogPhoto(
-            item.model,
+          photoUrl: resolveModelPhotoAnywhere(state, {
+            model: item.model,
             version,
-            state.catalogPhotos,
-          ),
+          }),
           keywords: resolveCatalogKeywords(
             item.model,
             version,
@@ -109,10 +116,13 @@ export function CatalogAdminView({
         const qty = item.orderedQuantity ?? item.quantity ?? 0;
         if (qty <= 0) continue;
         const version = normalizeVersionDisplay(item.version);
-        const key = normalizeCatalogModelKey(item.model, version);
+        const key = getModelIdentityKey({ model: item.model, version });
         const existing = map.get(key);
         if (existing) {
           existing.inTransitUnits += qty;
+          if (!existing.photoUrl && item.imageUrl?.trim()) {
+            existing.photoUrl = item.imageUrl.trim();
+          }
         } else {
           map.set(key, {
             key,
@@ -121,11 +131,10 @@ export function CatalogAdminView({
             version,
             stockAvailable: 0,
             inTransitUnits: qty,
-            photoUrl: resolveCatalogPhoto(
-              item.model,
+            photoUrl: resolveModelPhotoAnywhere(state, {
+              model: item.model,
               version,
-              state.catalogPhotos,
-            ),
+            }),
             keywords: resolveCatalogKeywords(
               item.model,
               version,
@@ -142,12 +151,7 @@ export function CatalogAdminView({
         a.team.localeCompare(b.team) ||
         a.model.localeCompare(b.model),
     );
-  }, [
-    state.catalogKeywords,
-    state.catalogPhotos,
-    state.inventory,
-    state.purchaseBatches,
-  ]);
+  }, [state]);
 
   const filteredModels = useMemo(() => {
     const q = adminSearch.trim().toLowerCase();
@@ -577,7 +581,19 @@ export function CatalogAdminView({
                       {entry.photoUrl && (
                         <button
                           type="button"
-                          onClick={() => onRemoveCatalogPhoto(entry.key)}
+                          onClick={() => {
+                            onRemoveCatalogPhoto(entry.key);
+                            setUrlDrafts((prev) => ({ ...prev, [entry.key]: '' }));
+                            setThumbFallbackState((prev) => {
+                              const copy = { ...prev };
+                              delete copy[entry.key];
+                              return copy;
+                            });
+                            setStatusFeedback({
+                              type: 'success',
+                              text: `Foto eliminada para "${entry.model} (${entry.version})" en catálogo, inventario y pedidos en tránsito.`,
+                            });
+                          }}
                           title="Quitar foto"
                           aria-label={`Quitar foto de ${entry.model}`}
                           className="rounded-lg border border-red-500/30 bg-red-500/10 p-1.5 text-red-300 hover:bg-red-500/20 shrink-0"

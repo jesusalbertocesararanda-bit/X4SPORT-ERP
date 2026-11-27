@@ -14,10 +14,17 @@ import {
 } from './components/ExcelImportModal';
 import { FinanceView } from './components/FinanceView';
 import { InventoryMovementsView } from './components/InventoryMovementsView';
-import { InventoryView } from './components/InventoryView';
+import {
+  InventoryView,
+  type BulkUpdateInventoryModelInput,
+  type BulkUpdateInventoryModelResult,
+} from './components/InventoryView';
 import { LoginModal } from './components/LoginModal';
 import { PublicCatalogView } from './components/PublicCatalogView';
-import { PurchasesView } from './components/PurchasesView';
+import {
+  PurchasesView,
+  type RegisterImportBatchWithPhotosInput,
+} from './components/PurchasesView';
 import { ReceivablesView } from './components/ReceivablesView';
 import { ReportsView } from './components/ReportsView';
 import { RestockAdvisorView } from './components/RestockAdvisorView';
@@ -65,6 +72,7 @@ import {
   DEFAULT_GENERAL_CONFIG,
   getActiveOperationalAlerts,
   normalizeGeneralConfig,
+  normalizeVersionDisplay,
   performInventoryUncross,
   processReturnOrExchange,
   receiveImportBatch,
@@ -140,7 +148,13 @@ import {
   tabToDefaultSubModule,
 } from './utils/navigation';
 import {
+  applyCatalogPhotoMutation,
+  canonicalizeCatalogKey,
+  getModelIdentityKey,
   isPublicCatalogModeFromLocation,
+  normalizarUrlImagen,
+  parseCatalogImageList,
+  propagateModelPhotosAfterBatchMutation,
   sanitizeFirebaseCatalogKey,
 } from './utils/publicCatalog';
 
@@ -871,23 +885,45 @@ export default function App() {
     );
   };
 
-  const handleRegisterImportBatch = (input: RegisterImportBatchInput) => {
+  const handleRegisterImportBatch = (
+    input: RegisterImportBatchWithPhotosInput,
+  ) => {
+    const { modelPhotos, ...cleanBatchInput } = input;
     const opKey =
-      input.clientOperationId?.trim() ||
-      `reg-${input.referenceName.trim()}-${input.entryDate}`;
-    return runAtomicErpOperation(opKey, (current) =>
-      registerImportBatch(current, {
-        ...input,
-        actorName: input.actorName ?? currentUser?.name,
-      }),
-    );
+      cleanBatchInput.clientOperationId?.trim() ||
+      `reg-${cleanBatchInput.referenceName.trim()}-${cleanBatchInput.entryDate}`;
+    return runAtomicErpOperation(opKey, (current) => {
+      const res = registerImportBatch(current, {
+        ...cleanBatchInput,
+        actorName: cleanBatchInput.actorName ?? currentUser?.name,
+      });
+      if (!res.ok) return res;
+      const syncedState = propagateModelPhotosAfterBatchMutation(res.state, {
+        targetBatch: res.createdBatch,
+        priorState: current,
+        modelPhotos,
+      });
+      return {
+        ...res,
+        state: syncedState,
+      };
+    });
   };
 
   const handleReceiveImportBatch = (input: ReceiveImportBatchInput) => {
     const opKey = `recv-${input.batchId}`;
-    return runAtomicErpOperation(opKey, (current) =>
-      receiveImportBatch(current, input),
-    );
+    return runAtomicErpOperation(opKey, (current) => {
+      const res = receiveImportBatch(current, input);
+      if (!res.ok) return res;
+      const syncedState = propagateModelPhotosAfterBatchMutation(res.state, {
+        targetBatch: res.createdBatch,
+        priorState: current,
+      });
+      return {
+        ...res,
+        state: syncedState,
+      };
+    });
   };
 
   const handleCollectReceivable = (
@@ -1196,6 +1232,171 @@ export default function App() {
     [],
   );
 
+  const handleBulkUpdateInventoryModel = async (
+    input: BulkUpdateInventoryModelInput,
+  ): Promise<BulkUpdateInventoryModelResult> => {
+    const normSp = (v: string) => (v || '').replace(/\s+/g, ' ').trim();
+    const cleanNewName = normSp(input.newModelName);
+    if (!cleanNewName) {
+      return { ok: false, error: 'Ingresa el nombre o descripción del modelo.' };
+    }
+
+    const cleanPlayer = normSp(input.newPlayer);
+    const composedModel = cleanPlayer
+      ? cleanNewName.toLowerCase().endsWith(cleanPlayer.toLowerCase())
+        ? cleanNewName
+        : `${cleanNewName} · ${cleanPlayer}`
+      : cleanNewName;
+    const cleanTeam = normSp(input.newTeam);
+    const cleanVersion = normalizeVersionDisplay(input.newVersion);
+    const cleanSalePrice =
+      typeof input.newSalePrice === 'number' &&
+      Number.isFinite(input.newSalePrice) &&
+      input.newSalePrice > 0
+        ? round2(input.newSalePrice)
+        : undefined;
+
+    const origVerNorm = normalizeVersionDisplay(input.originalVersion);
+    const origIdentityKey = getModelIdentityKey({
+      model: input.originalModel,
+      version: origVerNorm,
+      player: input.originalPlayer,
+    });
+    const newIdentityKey = getModelIdentityKey({
+      model: composedModel,
+      version: cleanVersion,
+    });
+
+    const rawPhoto = input.newPhotoUrl.trim();
+    let normalizedPhoto = '';
+    if (rawPhoto) {
+      const parsedImages = parseCatalogImageList(rawPhoto);
+      normalizedPhoto =
+        parsedImages.length > 1
+          ? parsedImages.join('\n')
+          : parsedImages[0] ?? normalizarUrlImagen(rawPhoto);
+    }
+
+    let updatedCount = 0;
+    let updatedTransitCount = 0;
+    const opKey = `bulk-model-edit-${Date.now()}`;
+
+    const res = await runAtomicErpOperation(opKey, (current) => {
+      updatedCount = 0;
+      updatedTransitCount = 0;
+
+      const nextInventory = (current.inventory ?? []).map((item) => {
+        const itemIdentityKey = getModelIdentityKey({
+          model: item.model,
+          version: item.version,
+        });
+        if (itemIdentityKey !== origIdentityKey) return item;
+        updatedCount += 1;
+        const { imageUrl: _prevImg, ...baseItem } = item;
+        return {
+          ...baseItem,
+          team: cleanTeam || item.team,
+          model: composedModel,
+          version: cleanVersion,
+          ...(cleanSalePrice !== undefined ? { salePrice: cleanSalePrice } : {}),
+          ...(normalizedPhoto ? { imageUrl: normalizedPhoto } : {}),
+        };
+      });
+
+      if (updatedCount === 0) {
+        return {
+          ok: false,
+          error:
+            'No se encontraron registros activos para este modelo en el inventario.',
+          state: current,
+        };
+      }
+
+      const remainingUseOldKey = nextInventory.some(
+        (it) =>
+          getModelIdentityKey({ model: it.model, version: it.version }) ===
+          origIdentityKey,
+      );
+
+      const nextCatalogPhotos = { ...(current.catalogPhotos ?? {}) };
+      if (origIdentityKey !== newIdentityKey && !remainingUseOldKey) {
+        for (const existingKey of Object.keys(nextCatalogPhotos)) {
+          if (canonicalizeCatalogKey(existingKey) === origIdentityKey) {
+            delete nextCatalogPhotos[existingKey];
+          }
+        }
+      }
+
+      for (const existingKey of Object.keys(nextCatalogPhotos)) {
+        if (canonicalizeCatalogKey(existingKey) === newIdentityKey) {
+          delete nextCatalogPhotos[existingKey];
+        }
+      }
+      if (normalizedPhoto) {
+        nextCatalogPhotos[newIdentityKey] = normalizedPhoto;
+      }
+
+      const nextCatalogKeywords = { ...(current.catalogKeywords ?? {}) };
+      if (origIdentityKey !== newIdentityKey && !remainingUseOldKey) {
+        for (const existingKey of Object.keys(nextCatalogKeywords)) {
+          if (canonicalizeCatalogKey(existingKey) === origIdentityKey) {
+            const kw = nextCatalogKeywords[existingKey];
+            delete nextCatalogKeywords[existingKey];
+            if (kw && !nextCatalogKeywords[newIdentityKey]) {
+              nextCatalogKeywords[newIdentityKey] = kw;
+            }
+          }
+        }
+      }
+
+      let nextPurchaseBatches = current.purchaseBatches ?? [];
+      if (input.updateTransitBatches) {
+        nextPurchaseBatches = nextPurchaseBatches.map((batch) => {
+          if (batch.status !== 'EN TRÁNSITO') return batch;
+          let batchChanged = false;
+          const nextItems = (batch.items ?? []).map((bi) => {
+            const biIdentityKey = getModelIdentityKey({
+              model: bi.model,
+              version: bi.version,
+            });
+            if (biIdentityKey !== origIdentityKey) return bi;
+            batchChanged = true;
+            updatedTransitCount += 1;
+            const { imageUrl: _prevBiImg, ...baseBi } = bi;
+            return {
+              ...baseBi,
+              team: cleanTeam || bi.team,
+              model: composedModel,
+              version: cleanVersion,
+              ...(normalizedPhoto ? { imageUrl: normalizedPhoto } : {}),
+            };
+          });
+          return batchChanged ? { ...batch, items: nextItems } : batch;
+        });
+      }
+
+      return {
+        ok: true,
+        state: {
+          ...current,
+          inventory: nextInventory,
+          catalogPhotos: nextCatalogPhotos,
+          catalogKeywords: nextCatalogKeywords,
+          ...(input.updateTransitBatches
+            ? { purchaseBatches: nextPurchaseBatches }
+            : {}),
+        },
+      };
+    });
+
+    return {
+      ok: res.ok,
+      updatedCount,
+      updatedTransitCount,
+      error: res.error,
+    };
+  };
+
   const handleResetBaselineData = () => {
     if (!checkAdminPermission('Restablecimiento de Fábrica')) return;
     void resetBaselineStateInFirebase()
@@ -1298,6 +1499,7 @@ export default function App() {
     return runAtomicErpOperation(opKey, (current) => {
       let working = current;
       for (const batchInput of payload.batches) {
+        const beforeBatch = working;
         const res = registerImportBatch(working, {
           ...batchInput,
           totalFreightCost: 0,
@@ -1311,7 +1513,10 @@ export default function App() {
             state: current,
           };
         }
-        working = res.state;
+        working = propagateModelPhotosAfterBatchMutation(res.state, {
+          targetBatch: res.createdBatch,
+          priorState: beforeBatch,
+        });
       }
       return {
         ok: true,
@@ -1355,22 +1560,19 @@ export default function App() {
   const handleSaveCatalogPhoto = useCallback(
     (modelKey: string, photoUrl: string) => {
       if (!modelKey || !photoUrl) return;
-      const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
-      const updated = { ...(latestStateRef.current.catalogPhotos ?? {}) };
-      for (const existingKey of Object.keys(updated)) {
-        if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
-          delete updated[existingKey];
-        }
-      }
-      updated[safeModelKey] = photoUrl;
-      const next: AppState = {
-        ...latestStateRef.current,
-        catalogPhotos: updated,
-      };
+      const next = applyCatalogPhotoMutation(latestStateRef.current, {
+        modelKey,
+        photoUrl,
+      });
       latestStateRef.current = next;
       setState(next);
       saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void updateErpState({ catalogPhotos: updated })
+      void updateErpState({
+        catalogPhotos: next.catalogPhotos,
+        inventory: next.inventory,
+        purchaseBatches: next.purchaseBatches,
+        purchases: next.purchases,
+      })
         .then(() => setDbError(null))
         .catch((err: unknown) => {
           setDbError(formatFirebaseError(err));
@@ -1381,23 +1583,19 @@ export default function App() {
 
   const handleRemoveCatalogPhoto = useCallback((modelKey: string) => {
     if (!modelKey) return;
-    const safeModelKey = sanitizeFirebaseCatalogKey(modelKey);
-    const updated = { ...(latestStateRef.current.catalogPhotos ?? {}) };
-    delete updated[modelKey];
-    delete updated[safeModelKey];
-    for (const existingKey of Object.keys(updated)) {
-      if (sanitizeFirebaseCatalogKey(existingKey) === safeModelKey) {
-        delete updated[existingKey];
-      }
-    }
-    const next: AppState = {
-      ...latestStateRef.current,
-      catalogPhotos: updated,
-    };
+    const next = applyCatalogPhotoMutation(latestStateRef.current, {
+      modelKey,
+      photoUrl: '',
+    });
     latestStateRef.current = next;
     setState(next);
     saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-    void updateErpState({ catalogPhotos: updated })
+    void updateErpState({
+      catalogPhotos: next.catalogPhotos,
+      inventory: next.inventory,
+      purchaseBatches: next.purchaseBatches,
+      purchases: next.purchases,
+    })
       .then(() => setDbError(null))
       .catch((err: unknown) => {
         setDbError(formatFirebaseError(err));
@@ -1717,6 +1915,7 @@ export default function App() {
                 <InventoryView
                   state={state}
                   lowStockThreshold={generalConfig.alertThresholds.lowStockThreshold}
+                  onBulkUpdateModel={handleBulkUpdateInventoryModel}
                 />
               )}
 
@@ -1756,7 +1955,6 @@ export default function App() {
                   onAttachPurchaseCalendarMetadata={
                     handleAttachPurchaseCalendarMetadata
                   }
-                  onSaveCatalogPhoto={handleSaveCatalogPhoto}
                   onRegisterImportBatch={handleRegisterImportBatch}
                   onReceiveImportBatch={handleReceiveImportBatch}
                 />

@@ -8,6 +8,7 @@ import {
   Clock,
   Edit3,
   ExternalLink,
+  Lock,
   PackageCheck,
   Plus,
   Search,
@@ -54,10 +55,19 @@ import {
 import { GoogleCalendarBanner } from './GoogleCalendarBanner';
 import {
   compressCatalogImageFile,
-  normalizeCatalogImageUrl,
-  normalizeCatalogModelKey,
-  resolveCatalogPhoto,
+  getModelIdentityKey,
+  normalizarUrlImagen,
+  obtenerFallbackUrlImagen,
+  parseCatalogImageList,
+  resolveModelPhotoAnywhere,
 } from '../utils/publicCatalog';
+
+export interface RegisterImportBatchWithPhotosInput extends RegisterImportBatchInput {
+  modelPhotos?: Record<
+    string,
+    { model: string; version: JerseyVersion; photoUrl: string }
+  >;
+}
 
 export interface PurchaseOperationOutcome {
   ok: boolean;
@@ -80,7 +90,7 @@ interface PurchasesViewProps {
   ) => void;
   onSaveCatalogPhoto?: (modelKey: string, photoUrl: string) => void;
   onRegisterImportBatch: (
-    input: RegisterImportBatchInput,
+    input: RegisterImportBatchWithPhotosInput,
   ) => Promise<PurchaseOperationOutcome> | PurchaseOperationOutcome;
   onReceiveImportBatch: (
     input: ReceiveImportBatchInput,
@@ -96,6 +106,7 @@ interface DraftBatchLine {
   quantity: number;
   factoryUnitCost: number;
   salePrice: number;
+  photoUrl?: string;
 }
 
 type PurchasesSubView = 'all' | 'create' | 'transit' | 'history';
@@ -141,7 +152,6 @@ export function PurchasesView({
   onDisconnectGoogleCalendar,
   onCalendarAuthExpired,
   onAttachPurchaseCalendarMetadata,
-  onSaveCatalogPhoto,
   onRegisterImportBatch,
   onReceiveImportBatch,
 }: PurchasesViewProps) {
@@ -155,17 +165,22 @@ export function PurchasesView({
     }
   }, [activeSection]);
 
-  const uniqueModelNames = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (state.inventory ?? [])
-            .map((i) => i.model.trim())
-            .filter(Boolean),
-        ),
-      ).sort((a, b) => a.localeCompare(b)),
-    [state.inventory],
-  );
+  const uniqueModelNames = useMemo(() => {
+    const byIdentity = new Map<string, { name: string; hasStock: boolean }>();
+    for (const item of state.inventory ?? []) {
+      const cleanName = item.model.trim();
+      if (!cleanName) continue;
+      const idKey = getModelIdentityKey({ model: cleanName });
+      const existing = byIdentity.get(idKey);
+      const hasStock = item.stock > 0;
+      if (!existing || (!existing.hasStock && hasStock)) {
+        byIdentity.set(idKey, { name: cleanName, hasStock });
+      }
+    }
+    return Array.from(byIdentity.values())
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  }, [state.inventory]);
 
   // Etapa 1: Batch header fields
   const [flowType, setFlowType] = useState<PurchaseFlowType>('transit');
@@ -228,7 +243,7 @@ export function PurchasesView({
     for (const item of state.inventory ?? []) {
       const cleanName = item.model.trim();
       if (!cleanName) continue;
-      const key = cleanName.toLowerCase();
+      const key = getModelIdentityKey({ model: cleanName });
       let set = versionsByModel.get(key);
       if (!set) {
         set = new Set<JerseyVersion>();
@@ -240,17 +255,22 @@ export function PurchasesView({
     return uniqueModelNames.map((name) => {
       const detectedTeam = extractTeamFromModel(name);
       const versions = Array.from(
-        versionsByModel.get(name.toLowerCase()) ?? [],
+        versionsByModel.get(getModelIdentityKey({ model: name })) ?? [],
       );
       let rawPhoto: string | undefined;
       for (const ver of [...versions, ...VERSIONS]) {
-        const candidate = resolveCatalogPhoto(name, ver, state.catalogPhotos);
+        const candidate = resolveModelPhotoAnywhere(state, {
+          model: name,
+          version: ver,
+        });
         if (candidate) {
           rawPhoto = candidate;
           break;
         }
       }
-      const thumbnailUrl = rawPhoto ? normalizeCatalogImageUrl(rawPhoto) : '';
+      const parsedThumbs = rawPhoto ? parseCatalogImageList(rawPhoto) : [];
+      const thumbnailUrl =
+        parsedThumbs[0] ?? (rawPhoto ? normalizarUrlImagen(rawPhoto) : '');
       const searchableText = normalizeModelSearchText(
         [name, detectedTeam, ...versions].join(' '),
       );
@@ -262,7 +282,7 @@ export function PurchasesView({
         searchableText,
       };
     });
-  }, [state.catalogPhotos, state.inventory, uniqueModelNames]);
+  }, [state, uniqueModelNames]);
 
   const filteredExistingModelOptions = useMemo(() => {
     const normalizedQuery = normalizeModelSearchText(modelSearchQuery);
@@ -298,15 +318,47 @@ export function PurchasesView({
     return autoDetectedTeam;
   }, [autoDetectedTeam, manualTeamOverride]);
 
-  const existingCatalogPhoto = useMemo(
+  const [draftItems, setDraftItems] = useState<DraftBatchLine[]>([]);
+
+  const draftPhotosByModelKey = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const line of draftItems) {
+      if (!line.photoUrl?.trim()) continue;
+      const k = getModelIdentityKey({ model: line.model, version: line.version });
+      if (!map[k]) {
+        map[k] = line.photoUrl.trim();
+      }
+    }
+    return map;
+  }, [draftItems]);
+
+  const assignedModelPhoto = useMemo(
     () =>
       model.trim()
-        ? resolveCatalogPhoto(model, version, state.catalogPhotos)
+        ? resolveModelPhotoAnywhere(
+            state,
+            { model, version },
+            draftPhotosByModelKey,
+          )
         : undefined,
-    [state.catalogPhotos, model, version],
+    [state, model, version, draftPhotosByModelKey],
   );
 
-  const [draftItems, setDraftItems] = useState<DraftBatchLine[]>([]);
+  const assignedPhotoPreviewUrl = useMemo(() => {
+    if (!assignedModelPhoto) return '';
+    return (
+      parseCatalogImageList(assignedModelPhoto)[0] ??
+      normalizarUrlImagen(assignedModelPhoto)
+    );
+  }, [assignedModelPhoto]);
+
+  const draftPhotoPreviewUrl = useMemo(() => {
+    if (!itemPhotoInput.trim()) return '';
+    return (
+      parseCatalogImageList(itemPhotoInput)[0] ??
+      normalizarUrlImagen(itemPhotoInput)
+    );
+  }, [itemPhotoInput]);
   const [pendingCalendarBatch, setPendingCalendarBatch] =
     useState<PurchaseBatchRecord | null>(null);
   const [feedback, setFeedback] = useState<{
@@ -429,6 +481,7 @@ export function PurchasesView({
     setIsModelDropdownOpen(false);
     setManualTeamOverride(null);
     setIsEditingTeam(false);
+    setItemPhotoInput('');
     setFeedback(null);
     setTimeout(() => {
       modelInputRef.current?.focus();
@@ -439,13 +492,26 @@ export function PurchasesView({
     setModel(selectedModelName);
     setManualTeamOverride(null);
     setIsEditingTeam(false);
+    setItemPhotoInput('');
     setFeedback(null);
 
     if (selectedModelName.trim()) {
-      const existingMatch = state.inventory.find(
-        (i) =>
-          i.model.trim().toLowerCase() === selectedModelName.trim().toLowerCase(),
-      );
+      const targetVerKey = getModelIdentityKey({
+        model: selectedModelName,
+        version,
+      });
+      const targetModelKey = getModelIdentityKey({
+        model: selectedModelName,
+      });
+      const existingMatch =
+        state.inventory.find(
+          (i) =>
+            getModelIdentityKey({ model: i.model, version: i.version }) ===
+            targetVerKey,
+        ) ??
+        state.inventory.find(
+          (i) => getModelIdentityKey({ model: i.model }) === targetModelKey,
+        );
       if (existingMatch && !salePriceTouched && existingMatch.salePrice > 0) {
         setUnitSalePrice(existingMatch.salePrice.toFixed(2));
       }
@@ -593,6 +659,15 @@ export function PurchasesView({
       }
     }
 
+    let resolvedLinePhoto = assignedModelPhoto?.trim() ?? '';
+    if (!resolvedLinePhoto && itemPhotoInput.trim()) {
+      const parsed = parseCatalogImageList(itemPhotoInput);
+      resolvedLinePhoto =
+        parsed.length > 1
+          ? parsed.join('\n')
+          : parsed[0] ?? normalizarUrlImagen(itemPhotoInput);
+    }
+
     const resolvedTeam = effectiveTeam || 'Otro';
     const stamp = Date.now();
     const newLines: DraftBatchLine[] = sizesToAdd.map((entry, idx) => ({
@@ -604,17 +679,8 @@ export function PurchasesView({
       quantity: entry.qty,
       factoryUnitCost: fCost,
       salePrice: entry.rowPrice,
+      ...(resolvedLinePhoto ? { photoUrl: resolvedLinePhoto } : {}),
     }));
-
-    if (itemPhotoInput.trim() && onSaveCatalogPhoto) {
-      const normalizedPhoto = normalizeCatalogImageUrl(itemPhotoInput);
-      if (normalizedPhoto) {
-        onSaveCatalogPhoto(
-          normalizeCatalogModelKey(cleanModel, version),
-          normalizedPhoto,
-        );
-      }
-    }
 
     setDraftItems((prev) => [...prev, ...newLines]);
     setSizeMatrix(buildInitialSizeQuantities(activeSizes));
@@ -757,6 +823,26 @@ export function PurchasesView({
       const parsedBatchUsdt = round2(Number(batchUsdtRate) || 0);
       const clientOperationId = generateOperationId('op-purchase');
 
+      const modelPhotos: Record<
+        string,
+        { model: string; version: JerseyVersion; photoUrl: string }
+      > = {};
+      for (const line of draftItems) {
+        const linePhoto = line.photoUrl?.trim();
+        if (!linePhoto) continue;
+        const identityKey = getModelIdentityKey({
+          model: line.model,
+          version: line.version,
+        });
+        if (!modelPhotos[identityKey]) {
+          modelPhotos[identityKey] = {
+            model: line.model,
+            version: line.version,
+            photoUrl: linePhoto,
+          };
+        }
+      }
+
       const res = await Promise.resolve(
         onRegisterImportBatch({
           entryDate,
@@ -783,6 +869,7 @@ export function PurchasesView({
             factoryUnitCost: l.factoryUnitCost,
             salePrice: l.salePrice,
           })),
+          ...(Object.keys(modelPhotos).length > 0 ? { modelPhotos } : {}),
         }),
       );
 
@@ -812,6 +899,7 @@ export function PurchasesView({
           : {}),
       });
       setDraftItems([]);
+      setItemPhotoInput('');
       setEstimatedArrivalDate('');
       setFundingSource('');
 
@@ -843,10 +931,14 @@ export function PurchasesView({
 
     batch.items.forEach((item, idx) => {
       qtyMap[idx] = String(item.orderedQuantity ?? item.quantity);
+      const itemIdentity = getModelIdentityKey({
+        model: item.model,
+        version: item.version,
+      });
       const existingInv = state.inventory.find(
         (inv) =>
-          inv.model.trim().toLowerCase() === item.model.trim().toLowerCase() &&
-          inv.size === item.size,
+          getModelIdentityKey({ model: inv.model, version: inv.version }) ===
+            itemIdentity && inv.size === item.size,
       );
       const basePrice =
         item.salePrice && item.salePrice > 0
@@ -2270,57 +2362,102 @@ export function PurchasesView({
                     </div>
                   </div>
 
-                  {/* Foto opcional para el catálogo público (URL / Drive / Móvil) */}
+                  {/* Gestión condicional de foto para el catálogo público */}
                   <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
-                    <div className="flex flex-col gap-2">
-                      <div className="flex-1 min-w-0">
-                        <label
-                          htmlFor="purchase-catalog-photo"
-                          className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
-                        >
-                          <Camera className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
-                          Foto para Catálogo Público (opcional · URL, Google Drive o galería)
-                        </label>
-                        <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <input
-                            id="purchase-catalog-photo"
-                            data-testid="purchase-catalog-photo-input"
-                            type="url"
-                            value={itemPhotoInput}
-                            onChange={(e) => setItemPhotoInput(e.target.value)}
-                            placeholder={
-                              existingCatalogPhoto
-                                ? 'Ya tiene foto guardada (pega otro enlace para reemplazar)'
-                                : 'https://drive.google.com/file/d/... o sube desde tu móvil'
-                            }
-                            className="min-w-[160px] flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                    {assignedModelPhoto ? (
+                      <div
+                        data-testid="purchase-photo-already-assigned"
+                        className="flex items-center gap-3"
+                      >
+                        <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-emerald-500/35 bg-[#070D19]">
+                          <img
+                            src={assignedPhotoPreviewUrl}
+                            alt={`Foto asignada de ${model}`}
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              const imgEl = e.currentTarget;
+                              const fallback = obtenerFallbackUrlImagen(imgEl.src);
+                              if (fallback && imgEl.dataset.fallbackApplied !== '1') {
+                                imgEl.dataset.fallbackApplied = '1';
+                                imgEl.src = fallback;
+                              }
+                            }}
+                            className="h-full w-full object-cover"
                           />
-                          <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white">
-                            <Upload className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
-                            {photoUploading ? 'Procesando...' : 'Subir Foto'}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => void handlePurchasePhotoUpload(e)}
-                              className="sr-only"
-                            />
-                          </label>
-                          {(itemPhotoInput.trim() || existingCatalogPhoto) && (
-                            <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-[#070D19]">
-                              <img
-                                src={
-                                  normalizeCatalogImageUrl(itemPhotoInput) ||
-                                  existingCatalogPhoto
-                                }
-                                alt="Vista previa modelo"
-                                referrerPolicy="no-referrer"
-                                className="h-full w-full object-cover"
-                              />
-                            </div>
-                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-300">
+                            <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            <span>
+                              Foto ya asignada en Catálogo (para cambiarla, edítala en Catálogo Público)
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[10px] text-slate-400">
+                            Se vinculará automáticamente a este lote y sus tallas al confirmar.
+                          </p>
                         </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <div className="flex-1 min-w-0">
+                          <label
+                            htmlFor="purchase-catalog-photo"
+                            className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300"
+                          >
+                            <Camera className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                            Foto para Catálogo Público (opcional · URL, Google Drive o galería)
+                          </label>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <input
+                              id="purchase-catalog-photo"
+                              data-testid="purchase-catalog-photo-input"
+                              type="url"
+                              value={itemPhotoInput}
+                              onChange={(e) => setItemPhotoInput(e.target.value)}
+                              placeholder="https://drive.google.com/file/d/... o sube desde tu móvil"
+                              className="min-w-[160px] flex-1 min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                            />
+                            <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0D1526] px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white">
+                              <Upload className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                              {photoUploading ? 'Procesando...' : 'Subir Foto'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => void handlePurchasePhotoUpload(e)}
+                                className="sr-only"
+                              />
+                            </label>
+                            {draftPhotoPreviewUrl && (
+                              <>
+                                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-[#070D19]">
+                                  <img
+                                    src={draftPhotoPreviewUrl}
+                                    alt="Vista previa modelo"
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => {
+                                      const imgEl = e.currentTarget;
+                                      const fallback = obtenerFallbackUrlImagen(imgEl.src);
+                                      if (fallback && imgEl.dataset.fallbackApplied !== '1') {
+                                        imgEl.dataset.fallbackApplied = '1';
+                                        imgEl.src = fallback;
+                                      }
+                                    }}
+                                    className="h-full w-full object-cover"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setItemPhotoInput('')}
+                                  className="rounded-md border border-slate-700 bg-[#0D1526] px-2 py-1 text-[10px] font-medium text-slate-300 hover:text-white"
+                                >
+                                  Quitar
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex justify-end">
@@ -2398,12 +2535,27 @@ export function PurchasesView({
                         return (
                           <tr key={line.lineId}>
                             <td className="py-2 pr-2">
-                              <span className="font-medium text-white">
-                                {line.model}
-                              </span>
-                              <span className="block text-[11px] text-slate-400">
-                                {line.team} · {line.version} · Talla {line.size}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                {line.photoUrl && (
+                                  <img
+                                    src={
+                                      parseCatalogImageList(line.photoUrl)[0] ??
+                                      normalizarUrlImagen(line.photoUrl)
+                                    }
+                                    alt=""
+                                    referrerPolicy="no-referrer"
+                                    className="h-7 w-7 shrink-0 rounded border border-slate-700 object-cover bg-[#070D19]"
+                                  />
+                                )}
+                                <div className="min-w-0">
+                                  <span className="font-medium text-white">
+                                    {line.model}
+                                  </span>
+                                  <span className="block text-[11px] text-slate-400">
+                                    {line.team} · {line.version} · Talla {line.size}
+                                  </span>
+                                </div>
+                              </div>
                             </td>
                             <td className="py-2 text-right font-mono-num font-semibold text-white">
                               {line.quantity}

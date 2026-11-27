@@ -1,12 +1,15 @@
 import type {
   AppState,
+  InventoryItem,
   JerseySize,
   JerseyVersion,
   PurchaseBatchRecord,
   TeamCategory,
 } from '../types/erp';
 import {
+  ALL_JERSEY_SIZES,
   compareJerseySizes,
+  type InventorySizeMatrixRow,
   normalizeVersionDisplay,
   round2,
 } from './finance';
@@ -224,6 +227,148 @@ export function sanitizeFirebaseCatalogKey(rawKey: string): string {
   return rawKey.replace(/[.#$/[\]]/g, '_');
 }
 
+export function normalizePlayerToken(player?: string): string {
+  const clean = normalizeSearchText(player ?? '');
+  if (
+    !clean ||
+    clean === '-' ||
+    clean === '—' ||
+    clean === 'sin nombre' ||
+    clean === 'n/a' ||
+    clean === 'ninguno'
+  ) {
+    return '';
+  }
+  return clean;
+}
+
+export function splitModelAndPlayerParts(rawModel: string): {
+  baseModel: string;
+  player: string;
+} {
+  let cleanModel = (rawModel || '').replace(/\s+/g, ' ').trim();
+  let playerCandidate = '';
+
+  const sepParts = cleanModel
+    .split(/\s*[·|]\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (sepParts.length > 1) {
+    cleanModel = sepParts[0];
+    playerCandidate = sepParts.slice(1).join(' ');
+  }
+
+  const parenMatch = cleanModel.match(/\(([^)]*#\d+[^)]*)\)/);
+  if (parenMatch?.[1]) {
+    if (!playerCandidate) {
+      playerCandidate = parenMatch[1].trim();
+    }
+    cleanModel = cleanModel.replace(parenMatch[0], '').replace(/\s+/g, ' ').trim();
+  }
+
+  const trailingHashMatch = cleanModel.match(
+    /\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+)?\s*#\d+)\s*$/,
+  );
+  if (trailingHashMatch?.[1]) {
+    if (!playerCandidate) {
+      playerCandidate = trailingHashMatch[1].trim();
+    }
+    cleanModel = cleanModel
+      .slice(0, cleanModel.length - trailingHashMatch[0].length)
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  return {
+    baseModel: cleanModel || (rawModel || '').replace(/\s+/g, ' ').trim(),
+    player: playerCandidate.replace(/\s+/g, ' ').trim(),
+  };
+}
+
+export interface ModelIdentityInput {
+  model: string;
+  version?: JerseyVersion | string;
+  player?: string;
+}
+
+/**
+ * Clave de identidad única e invariable de modelo:
+ * normaliza exclusivamente (nombreModeloNormalizado + versionNormalizada + jugadorNormalizado),
+ * ignorando tildes, mayúsculas, espacios múltiples, URL de foto o ID de lote.
+ */
+export function getModelIdentityKey(input: ModelIdentityInput): string {
+  const parsed = splitModelAndPlayerParts(input.model ?? '');
+  const baseNorm = normalizeSearchText(parsed.baseModel);
+  const effectivePlayer =
+    normalizePlayerToken(input.player) || normalizePlayerToken(parsed.player);
+  if (!input.version) {
+    const modelOnly = effectivePlayer ? `${baseNorm}::${effectivePlayer}` : baseNorm;
+    return sanitizeFirebaseCatalogKey(modelOnly);
+  }
+  const ver = normalizeVersionDisplay(input.version as JerseyVersion);
+  return sanitizeFirebaseCatalogKey(`${baseNorm}::${ver}::${effectivePlayer}`);
+}
+
+export function canonicalizeCatalogKey(rawKey: string): string {
+  const parts = rawKey.split('::');
+  if (parts.length === 1) {
+    return getModelIdentityKey({ model: parts[0] });
+  }
+  if (parts.length === 2) {
+    const verCandidate = parts[1].trim().toLowerCase();
+    const looksLikeVersion = ['fans', 'fan', 'player', 'retro'].includes(verCandidate);
+    if (looksLikeVersion) {
+      return getModelIdentityKey({ model: parts[0], version: parts[1] });
+    }
+    return getModelIdentityKey({ model: parts[0], player: parts[1] });
+  }
+  return getModelIdentityKey({
+    model: parts[0],
+    version: parts[1],
+    player: parts.slice(2).join('::'),
+  });
+}
+
+function buildCombinedModelIdentityFallback(
+  model: string,
+  version?: JerseyVersion | string,
+  player?: string,
+): string {
+  const parsed = splitModelAndPlayerParts(model ?? '');
+  const effectivePlayer =
+    normalizePlayerToken(player) || normalizePlayerToken(parsed.player);
+  const combined = effectivePlayer
+    ? `${normalizeSearchText(parsed.baseModel)} ${effectivePlayer}`
+    : normalizeSearchText(parsed.baseModel);
+  if (!version) return sanitizeFirebaseCatalogKey(combined);
+  const ver = normalizeVersionDisplay(version as JerseyVersion);
+  return sanitizeFirebaseCatalogKey(`${combined}::${ver}`);
+}
+
+export function doesCatalogEntryKeyMatchModel(
+  rawKey: string,
+  model: string,
+  version: JerseyVersion | string,
+  player?: string,
+): boolean {
+  const targetIdentity = getModelIdentityKey({ model, version, player });
+  if (canonicalizeCatalogKey(rawKey) === targetIdentity) return true;
+
+  // Compatibilidad con claves heredadas de 2 segmentos donde '#' se sanitizó a '_'
+  const parts = rawKey.split('::');
+  if (parts.length >= 2) {
+    const keyModelNorm = sanitizeFirebaseCatalogKey(normalizeSearchText(parts[0]));
+    const keyVerNorm = normalizeVersionDisplay(parts[1] as JerseyVersion);
+    const keyPlayerNorm = parts.length >= 3 ? normalizePlayerToken(parts.slice(2).join('::')) : '';
+    const legacyCombinedKey = sanitizeFirebaseCatalogKey(
+      keyPlayerNorm ? `${keyModelNorm} ${keyPlayerNorm}::${keyVerNorm}` : `${keyModelNorm}::${keyVerNorm}`,
+    );
+    const targetCombined = buildCombinedModelIdentityFallback(model, version, player);
+    if (legacyCombinedKey === targetCombined) return true;
+  }
+  return false;
+}
+
 export function normalizeCatalogModelKey(
   model: string,
   version?: JerseyVersion | string,
@@ -238,31 +383,35 @@ export function resolveCatalogPhoto(
   model: string,
   version: JerseyVersion | string,
   photosMap?: Record<string, string>,
+  player?: string,
 ): string | undefined {
   if (!photosMap) return undefined;
+  const identityKey = getModelIdentityKey({ model, version, player });
+  const byIdentity = photosMap[identityKey];
+  if (typeof byIdentity === 'string' && byIdentity.trim()) return byIdentity.trim();
+
   const exactKey = normalizeCatalogModelKey(model, version);
   const exact = photosMap[exactKey];
   if (typeof exact === 'string' && exact.trim()) return exact.trim();
+
+  const entries = Object.entries(photosMap);
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    if (doesCatalogEntryKeyMatchModel(k, model, version, player)) {
+      return v.trim();
+    }
+  }
 
   const modelOnlyKey = normalizeCatalogModelKey(model);
   const byModel = photosMap[modelOnlyKey];
   if (typeof byModel === 'string' && byModel.trim()) return byModel.trim();
 
-  // Case-insensitive and legacy unsanitized key fallback
-  const targetExactLower = exactKey.toLowerCase();
+  const modelOnlyIdentity = getModelIdentityKey({ model, player });
   const targetModelLower = modelOnlyKey.toLowerCase();
-  const entries = Object.entries(photosMap);
   for (const [k, v] of entries) {
     if (typeof v !== 'string' || !v.trim()) continue;
     const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
-    if (kl === targetExactLower) {
-      return v.trim();
-    }
-  }
-  for (const [k, v] of entries) {
-    if (typeof v !== 'string' || !v.trim()) continue;
-    const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
-    if (kl === targetModelLower) {
+    if (kl === targetModelLower || canonicalizeCatalogKey(k) === modelOnlyIdentity) {
       return v.trim();
     }
   }
@@ -273,34 +422,115 @@ export function resolveCatalogKeywords(
   model: string,
   version: JerseyVersion | string,
   keywordsMap?: Record<string, string>,
+  player?: string,
 ): string | undefined {
   if (!keywordsMap) return undefined;
+  const identityKey = getModelIdentityKey({ model, version, player });
+  const byIdentity = keywordsMap[identityKey];
+  if (typeof byIdentity === 'string' && byIdentity.trim()) return byIdentity.trim();
+
   const exactKey = normalizeCatalogModelKey(model, version);
   const exact = keywordsMap[exactKey];
   if (typeof exact === 'string' && exact.trim()) return exact.trim();
+
+  const entries = Object.entries(keywordsMap);
+  for (const [k, v] of entries) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    if (doesCatalogEntryKeyMatchModel(k, model, version, player)) {
+      return v.trim();
+    }
+  }
 
   const modelOnlyKey = normalizeCatalogModelKey(model);
   const byModel = keywordsMap[modelOnlyKey];
   if (typeof byModel === 'string' && byModel.trim()) return byModel.trim();
 
-  // Case-insensitive and legacy unsanitized key fallback
-  const targetExactLower = exactKey.toLowerCase();
+  const modelOnlyIdentity = getModelIdentityKey({ model, player });
   const targetModelLower = modelOnlyKey.toLowerCase();
-  const entries = Object.entries(keywordsMap);
   for (const [k, v] of entries) {
     if (typeof v !== 'string' || !v.trim()) continue;
     const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
-    if (kl === targetExactLower) {
+    if (kl === targetModelLower || canonicalizeCatalogKey(k) === modelOnlyIdentity) {
       return v.trim();
     }
   }
-  for (const [k, v] of entries) {
-    if (typeof v !== 'string' || !v.trim()) continue;
-    const kl = sanitizeFirebaseCatalogKey(k).trim().toLowerCase();
-    if (kl === targetModelLower) {
-      return v.trim();
+  return undefined;
+}
+
+function resolvePhotoInCatalogOrInventory(
+  state: AppState | undefined,
+  target: ModelIdentityInput,
+): string | undefined {
+  if (!state || !target.model?.trim()) return undefined;
+  const version = normalizeVersionDisplay((target.version ?? 'Fans') as JerseyVersion);
+  const fromCatalog = resolveCatalogPhoto(
+    target.model,
+    version,
+    state.catalogPhotos,
+    target.player,
+  );
+  if (fromCatalog) return fromCatalog;
+
+  const targetIdentity = getModelIdentityKey({
+    model: target.model,
+    version,
+    player: target.player,
+  });
+
+  for (const item of state.inventory ?? []) {
+    if (!item?.imageUrl?.trim()) continue;
+    if (getModelIdentityKey({ model: item.model, version: item.version }) === targetIdentity) {
+      return item.imageUrl.trim();
     }
   }
+  return undefined;
+}
+
+/**
+ * Busca la imagen asignada de un modelo en todas las fuentes del sistema
+ * (borrador actual, catálogo público, inventario incluso con stock 0, lotes en tránsito y compras),
+ * comparando por clave única normalizada del modelo.
+ */
+export function resolveModelPhotoAnywhere(
+  state: AppState | undefined,
+  target: ModelIdentityInput,
+  extraPhotosByIdentityKey?: Record<string, string>,
+): string | undefined {
+  if (!target.model?.trim()) return undefined;
+  const version = normalizeVersionDisplay((target.version ?? 'Fans') as JerseyVersion);
+  const targetIdentity = getModelIdentityKey({
+    model: target.model,
+    version,
+    player: target.player,
+  });
+
+  const fromExtra = extraPhotosByIdentityKey?.[targetIdentity];
+  if (typeof fromExtra === 'string' && fromExtra.trim()) {
+    return fromExtra.trim();
+  }
+
+  const fromCatalogOrInventory = resolvePhotoInCatalogOrInventory(state, {
+    ...target,
+    version,
+  });
+  if (fromCatalogOrInventory) return fromCatalogOrInventory;
+
+  for (const batch of state?.purchaseBatches ?? []) {
+    for (const bi of batch.items ?? []) {
+      if (!bi?.imageUrl?.trim()) continue;
+      if (getModelIdentityKey({ model: bi.model, version: bi.version }) === targetIdentity) {
+        return bi.imageUrl.trim();
+      }
+    }
+  }
+
+  for (const pur of state?.purchases ?? []) {
+    if (!pur?.imageUrl?.trim()) continue;
+    if (getModelIdentityKey({ model: pur.model, version: pur.version }) === targetIdentity) {
+      return pur.imageUrl.trim();
+    }
+  }
+
   return undefined;
 }
 
@@ -491,13 +721,14 @@ export function buildPublicCatalogGroups(
       model: string;
       version: 'Fans' | 'Player' | 'Retro';
       sizeMap: Map<JerseySize, { stock: number; salePrice: number }>;
+      directPhotoUrl?: string;
     }
   >();
 
   for (const item of state.inventory ?? []) {
     if (!item || item.stock <= 0) continue;
     const version = normalizeVersionDisplay(item.version);
-    const key = normalizeCatalogModelKey(item.model, version);
+    const key = getModelIdentityKey({ model: item.model, version });
 
     let entry = grouped.get(key);
     if (!entry) {
@@ -506,8 +737,11 @@ export function buildPublicCatalogGroups(
         model: item.model.trim(),
         version,
         sizeMap: new Map(),
+        directPhotoUrl: item.imageUrl?.trim() || undefined,
       };
       grouped.set(key, entry);
+    } else if (!entry.directPhotoUrl && item.imageUrl?.trim()) {
+      entry.directPhotoUrl = item.imageUrl.trim();
     }
 
     const existingSize = entry.sizeMap.get(item.size);
@@ -543,11 +777,11 @@ export function buildPublicCatalogGroups(
     const prices = sizes.map((s) => s.salePrice);
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
-    const rawPhotoUrl = resolveCatalogPhoto(
-      entry.model,
-      entry.version,
-      state.catalogPhotos,
-    );
+    const rawPhotoUrl =
+      resolveModelPhotoAnywhere(state, {
+        model: entry.model,
+        version: entry.version,
+      }) ?? entry.directPhotoUrl;
     const images = parseCatalogImageList(rawPhotoUrl);
     const photoUrl = images[0];
     const keywords = resolveCatalogKeywords(
@@ -627,16 +861,16 @@ export function buildUpcomingTransitCards(
       const qty = item.orderedQuantity ?? item.quantity ?? 0;
       if (qty <= 0) continue;
       const version = normalizeVersionDisplay(item.version);
-      const modelKey = normalizeCatalogModelKey(item.model, version);
+      const modelKey = getModelIdentityKey({ model: item.model, version });
       const groupKey = `${batch.id}::${modelKey}`;
 
       let card = map.get(groupKey);
       if (!card) {
-        const rawPhotoUrl = resolveCatalogPhoto(
-          item.model,
-          version,
-          state.catalogPhotos,
-        );
+        const rawPhotoUrl =
+          resolveModelPhotoAnywhere(state, {
+            model: item.model,
+            version,
+          }) ?? item.imageUrl?.trim();
         const images = parseCatalogImageList(rawPhotoUrl);
         const photoUrl = images[0];
         const keywords = resolveCatalogKeywords(
@@ -973,3 +1207,309 @@ export async function compressCatalogImageFile(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Consolida filas de matriz de inventario por getModelIdentityKey()
+ * para eliminar cualquier duplicado visual por diferencias de tildes, mayúsculas o espacios.
+ */
+export function consolidateMatrixRowsByModelIdentity(
+  rows: InventorySizeMatrixRow[],
+  lowStockThreshold = 5,
+): InventorySizeMatrixRow[] {
+  const merged = new Map<
+    string,
+    InventorySizeMatrixRow & { extraMap: Map<string, number> }
+  >();
+
+  for (const row of rows) {
+    const identityKey = getModelIdentityKey({
+      model: row.model,
+      version: row.version,
+    });
+    const existing = merged.get(identityKey);
+    if (!existing) {
+      const extraMap = new Map<string, number>();
+      for (const ex of row.extraSizes) {
+        extraMap.set(ex.size, (extraMap.get(ex.size) ?? 0) + ex.stock);
+      }
+      merged.set(identityKey, {
+        ...row,
+        key: identityKey,
+        sizes: { ...row.sizes },
+        trackedSizes: { ...row.trackedSizes },
+        extraSizes: [...row.extraSizes],
+        lowSizes: [...row.lowSizes],
+        items: [...row.items],
+        extraMap,
+      });
+      continue;
+    }
+
+    // Preferir nombre de modelo con stock activo si la fila existente tenía 0 stock
+    if (existing.totalStock === 0 && row.totalStock > 0) {
+      existing.model = row.model;
+      existing.team = row.team;
+      if (row.salePrice > 0) existing.salePrice = row.salePrice;
+    } else if (existing.salePrice <= 0 && row.salePrice > 0) {
+      existing.salePrice = row.salePrice;
+    }
+
+    for (const sz of ALL_JERSEY_SIZES) {
+      existing.sizes[sz] = (existing.sizes[sz] ?? 0) + (row.sizes[sz] ?? 0);
+      existing.trackedSizes[sz] = existing.trackedSizes[sz] || row.trackedSizes[sz];
+    }
+    for (const ex of row.extraSizes) {
+      existing.extraMap.set(
+        ex.size,
+        (existing.extraMap.get(ex.size) ?? 0) + ex.stock,
+      );
+    }
+
+    existing.totalStock += row.totalStock;
+    existing.totalFifoValue = round2(existing.totalFifoValue + row.totalFifoValue);
+    existing.items.push(...row.items);
+  }
+
+  const out = Array.from(merged.values()).map(({ extraMap, ...row }) => {
+    row.items.sort((a, b) => compareJerseySizes(a.size, b.size));
+    const extraSizes = Array.from(extraMap.entries())
+      .sort(([sa], [sb]) => compareJerseySizes(sa, sb))
+      .map(([sz, stock]) => ({
+        size: sz as JerseySize,
+        stock,
+        isLowStock: stock <= lowStockThreshold,
+      }));
+    const lowStandardSizes = ALL_JERSEY_SIZES.filter(
+      (s) => row.trackedSizes[s] && row.sizes[s] <= lowStockThreshold,
+    );
+    const lowExtraSizes = extraSizes
+      .filter((e) => e.isLowStock)
+      .map((e) => e.size);
+    const lowSizes: JerseySize[] = [...lowStandardSizes, ...lowExtraSizes];
+    const avgCogs =
+      row.totalStock > 0
+        ? round2(row.totalFifoValue / row.totalStock)
+        : round2(row.items[0]?.cogs ?? 0);
+
+    return {
+      ...row,
+      extraSizes,
+      avgCogs,
+      lowSizes,
+      isLowStock: row.totalStock <= lowStockThreshold,
+    };
+  });
+
+  out.sort(
+    (a, b) =>
+      a.team.localeCompare(b.team) ||
+      a.model.localeCompare(b.model) ||
+      a.version.localeCompare(b.version),
+  );
+
+  return out;
+}
+
+/**
+ * Centraliza cualquier cambio o eliminación de foto desde Catálogo Público:
+ * actualiza catalogPhotos bajo la clave única y propaga la imagen a todos los registros
+ * en state.inventory (incluso stock 0) y pedidos EN TRÁNSITO con la misma identidad.
+ */
+export function applyCatalogPhotoMutation(
+  state: AppState,
+  params: { modelKey: string; photoUrl?: string },
+): AppState {
+  if (!params.modelKey?.trim()) return state;
+  const targetIdentity = canonicalizeCatalogKey(params.modelKey);
+  const cleanPhoto = params.photoUrl?.trim() ?? '';
+
+  const updatedCatalogPhotos: Record<string, string> = {
+    ...(state.catalogPhotos ?? {}),
+  };
+  for (const existingKey of Object.keys(updatedCatalogPhotos)) {
+    if (canonicalizeCatalogKey(existingKey) === targetIdentity) {
+      delete updatedCatalogPhotos[existingKey];
+    }
+  }
+  if (cleanPhoto) {
+    updatedCatalogPhotos[targetIdentity] = cleanPhoto;
+  }
+
+  const nextInventory: InventoryItem[] = (state.inventory ?? []).map((item) => {
+    const itemIdentity = getModelIdentityKey({
+      model: item.model,
+      version: item.version,
+    });
+    if (itemIdentity !== targetIdentity) return item;
+    if (cleanPhoto) {
+      return { ...item, imageUrl: cleanPhoto };
+    }
+    const { imageUrl: _removed, ...rest } = item;
+    return rest;
+  });
+
+  const nextPurchaseBatches: PurchaseBatchRecord[] = (
+    state.purchaseBatches ?? []
+  ).map((batch) => {
+    let changed = false;
+    const nextItems = (batch.items ?? []).map((bi) => {
+      const biIdentity = getModelIdentityKey({
+        model: bi.model,
+        version: bi.version,
+      });
+      if (biIdentity !== targetIdentity) return bi;
+      if (cleanPhoto) {
+        if (bi.imageUrl?.trim() === cleanPhoto) return bi;
+        changed = true;
+        return { ...bi, imageUrl: cleanPhoto };
+      }
+      if (!bi.imageUrl) return bi;
+      changed = true;
+      const { imageUrl: _removed, ...rest } = bi;
+      return rest;
+    });
+    return changed ? { ...batch, items: nextItems } : batch;
+  });
+
+  const nextPurchases = (state.purchases ?? []).map((pur) => {
+    const purIdentity = getModelIdentityKey({
+      model: pur.model,
+      version: pur.version,
+    });
+    if (purIdentity !== targetIdentity) return pur;
+    if (cleanPhoto) {
+      if (pur.imageUrl?.trim() === cleanPhoto) return pur;
+      return { ...pur, imageUrl: cleanPhoto };
+    }
+    if (!pur.imageUrl) return pur;
+    const { imageUrl: _removed, ...rest } = pur;
+    return rest;
+  });
+
+  return {
+    ...state,
+    catalogPhotos: updatedCatalogPhotos,
+    inventory: nextInventory,
+    purchaseBatches: nextPurchaseBatches,
+    purchases: nextPurchases,
+  };
+}
+
+/**
+ * Propaga y hereda imágenes automáticamente tras registrar o recibir un lote de compra:
+ * - Si el modelo ya poseía imagen previa (catálogo, inventario o tránsito), la hereda automáticamente en el nuevo lote FIFO y la orden.
+ * - Si el modelo no tenía imagen previa (o estaba en stock 0 sin foto) y el lote trae una foto nueva,
+ *   la propaga al nuevo lote FIFO, a los registros anteriores del mismo modelo y al catálogo público.
+ */
+export function propagateModelPhotosAfterBatchMutation(
+  state: AppState,
+  params: {
+    targetBatch?: PurchaseBatchRecord;
+    priorState?: AppState;
+    modelPhotos?: Record<
+      string,
+      { model: string; version: JerseyVersion; photoUrl: string }
+    >;
+  },
+): AppState {
+  const targetBatch = params.targetBatch;
+  if (!targetBatch) return state;
+
+  const resolvedPhotoByIdentity = new Map<string, string>();
+  const batchKeys = new Map<string, { model: string; version: JerseyVersion }>();
+
+  for (const item of targetBatch.items ?? []) {
+    const identityKey = getModelIdentityKey({
+      model: item.model,
+      version: item.version,
+    });
+    if (!batchKeys.has(identityKey)) {
+      batchKeys.set(identityKey, {
+        model: item.model,
+        version: item.version,
+      });
+    }
+  }
+
+  for (const [identityKey, sample] of batchKeys.entries()) {
+    const existingAnywherePhoto = resolveModelPhotoAnywhere(
+      params.priorState ?? state,
+      sample,
+    );
+    const incomingFromMap = params.modelPhotos?.[identityKey]?.photoUrl?.trim();
+    const incomingFromBatchItem = targetBatch.items
+      .find(
+        (bi) =>
+          getModelIdentityKey({ model: bi.model, version: bi.version }) ===
+            identityKey && Boolean(bi.imageUrl?.trim()),
+      )
+      ?.imageUrl?.trim();
+
+    const finalPhoto =
+      existingAnywherePhoto || incomingFromMap || incomingFromBatchItem;
+    if (finalPhoto) {
+      resolvedPhotoByIdentity.set(identityKey, finalPhoto);
+    }
+  }
+
+  if (resolvedPhotoByIdentity.size === 0) return state;
+
+  const nextCatalogPhotos: Record<string, string> = {
+    ...(state.catalogPhotos ?? {}),
+  };
+  for (const [identityKey, photoUrl] of resolvedPhotoByIdentity.entries()) {
+    for (const existingKey of Object.keys(nextCatalogPhotos)) {
+      if (canonicalizeCatalogKey(existingKey) === identityKey) {
+        delete nextCatalogPhotos[existingKey];
+      }
+    }
+    nextCatalogPhotos[identityKey] = photoUrl;
+  }
+
+  const nextInventory: InventoryItem[] = (state.inventory ?? []).map((item) => {
+    const identityKey = getModelIdentityKey({
+      model: item.model,
+      version: item.version,
+    });
+    const photoUrl = resolvedPhotoByIdentity.get(identityKey);
+    if (!photoUrl || item.imageUrl?.trim() === photoUrl) return item;
+    return { ...item, imageUrl: photoUrl };
+  });
+
+  const nextPurchaseBatches: PurchaseBatchRecord[] = (
+    state.purchaseBatches ?? []
+  ).map((batch) => {
+    if (batch.id !== targetBatch.id) return batch;
+    let changed = false;
+    const nextItems = (batch.items ?? []).map((bi) => {
+      const identityKey = getModelIdentityKey({
+        model: bi.model,
+        version: bi.version,
+      });
+      const photoUrl = resolvedPhotoByIdentity.get(identityKey);
+      if (!photoUrl || bi.imageUrl?.trim() === photoUrl) return bi;
+      changed = true;
+      return { ...bi, imageUrl: photoUrl };
+    });
+    return changed ? { ...batch, items: nextItems } : batch;
+  });
+
+  const nextPurchases = (state.purchases ?? []).map((pur) => {
+    const identityKey = getModelIdentityKey({
+      model: pur.model,
+      version: pur.version,
+    });
+    const photoUrl = resolvedPhotoByIdentity.get(identityKey);
+    if (!photoUrl || pur.imageUrl?.trim() === photoUrl) return pur;
+    return { ...pur, imageUrl: photoUrl };
+  });
+
+  return {
+    ...state,
+    catalogPhotos: nextCatalogPhotos,
+    inventory: nextInventory,
+    purchaseBatches: nextPurchaseBatches,
+    purchases: nextPurchases,
+  };
+}
+

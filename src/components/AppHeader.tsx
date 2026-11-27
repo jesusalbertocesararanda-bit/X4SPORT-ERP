@@ -120,6 +120,10 @@ export function AppHeader({
         ? 'Conexión débil'
         : 'Conectado y sincronizado';
 
+  const cleanUserName = currentUser?.name
+    ? currentUser.name.replace(/\s*\(X4SPORT\)\s*$/i, '').trim()
+    : '';
+
   const getAlertDestinationLabel = (alert: OperationalAlert): string => {
     const sub: SubModuleId | undefined = alert.targetSubModule;
     if (sub === 'ventas-cxc' || alert.kind === 'overdue_receivable') {
@@ -139,7 +143,7 @@ export function AppHeader({
         isVisible ? 'translate-y-0' : '-translate-y-full'
       }`}
     >
-      <div className="mx-auto flex h-14 sm:h-16 max-w-7xl items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6">
+      <div className="mx-auto flex h-14 sm:h-16 max-w-7xl items-center justify-between gap-2 sm:gap-3 px-2.5 sm:px-6">
         {/* Izquierda: toggle móvil + breadcrumb dinámico */}
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-2.5">
           <button
@@ -147,7 +151,7 @@ export function AppHeader({
             data-testid="btn-mobile-menu"
             onClick={onOpenMobileSidebar}
             aria-label="Abrir menú lateral"
-            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
+            className="inline-flex lg:hidden min-h-[36px] min-w-[36px] sm:min-h-[38px] sm:min-w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800 shrink-0"
           >
             <Menu className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -155,28 +159,36 @@ export function AppHeader({
           <nav
             aria-label="Ruta actual"
             data-testid="header-module-title"
-            className="flex min-w-0 items-center gap-1.5 text-sm sm:text-base"
+            className="flex min-w-0 items-center text-[13px] sm:text-base"
           >
-            <span
-              className={`font-display truncate tracking-tight ${
-                subModuleLabel
-                  ? 'font-medium text-slate-500 dark:text-slate-400'
-                  : 'font-semibold text-slate-900 dark:text-white'
-              }`}
-            >
-              {moduleLabel}
+            {/* Móvil (< 640px): muestra solo el sub-módulo activo sin truncar */}
+            <span className="font-display sm:hidden whitespace-nowrap font-semibold tracking-tight text-slate-900 dark:text-white">
+              {subModuleLabel || moduleLabel}
             </span>
-            {subModuleLabel && (
-              <>
-                <ChevronRight
-                  className="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-600"
-                  aria-hidden="true"
-                />
-                <span className="font-display truncate font-semibold tracking-tight text-slate-900 dark:text-white">
-                  {subModuleLabel}
-                </span>
-              </>
-            )}
+
+            {/* Tablet / Escritorio (>= 640px): ruta completa */}
+            <span className="hidden sm:inline-flex min-w-0 items-center gap-1.5">
+              <span
+                className={`font-display truncate tracking-tight ${
+                  subModuleLabel
+                    ? 'font-medium text-slate-500 dark:text-slate-400'
+                    : 'font-semibold text-slate-900 dark:text-white'
+                }`}
+              >
+                {moduleLabel}
+              </span>
+              {subModuleLabel && (
+                <>
+                  <ChevronRight
+                    className="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-600"
+                    aria-hidden="true"
+                  />
+                  <span className="font-display truncate font-semibold tracking-tight text-slate-900 dark:text-white">
+                    {subModuleLabel}
+                  </span>
+                </>
+              )}
+            </span>
           </nav>
         </div>
 
@@ -189,16 +201,16 @@ export function AppHeader({
             data-testid="header-connection-status"
             data-status={connectionStatus}
             title={
-              currentUser?.name
-                ? `${currentUser.name} · ${connectionLabel}`
+              cleanUserName
+                ? `${cleanUserName} · ${connectionLabel}`
                 : connectionLabel
             }
             aria-label={
-              currentUser?.name
-                ? `${currentUser.name}, ${connectionLabel}`
+              cleanUserName
+                ? `${cleanUserName}, ${connectionLabel}`
                 : connectionLabel
             }
-            className={`inline-flex min-h-[38px] sm:min-h-[40px] items-center gap-2 rounded-lg border px-2.5 sm:px-3 py-1.5 text-xs transition-colors ${
+            className={`inline-flex min-h-[36px] sm:min-h-[40px] items-center gap-1.5 sm:gap-2 rounded-lg border px-2 sm:px-3 py-1 sm:py-1.5 text-xs transition-colors ${
               connectionStatus === 'offline'
                 ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-200'
                 : connectionStatus === 'poor'
@@ -220,16 +232,14 @@ export function AppHeader({
                   : 'Conexión débil'}
               </span>
             )}
-            {currentUser?.name && (
+            {cleanUserName && (
               <span
                 data-testid="header-active-user-name"
-                className={`font-semibold truncate ${
-                  connectionStatus !== 'online'
-                    ? 'hidden md:inline max-w-[140px]'
-                    : 'max-w-[96px] sm:max-w-[160px]'
+                className={`font-semibold whitespace-nowrap ${
+                  connectionStatus !== 'online' ? 'hidden md:inline' : ''
                 }`}
               >
-                {currentUser.name}
+                {cleanUserName}
               </span>
             )}
           </div>
@@ -245,7 +255,7 @@ export function AppHeader({
                 : 'Notificaciones (sin alertas pendientes)'
             }
             onClick={() => setNotifOpen((prev) => !prev)}
-            className={`relative inline-flex min-h-[38px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg border px-2.5 sm:px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+            className={`relative inline-flex min-h-[36px] sm:min-h-[40px] items-center justify-center gap-1.5 sm:gap-2 rounded-lg border px-2 sm:px-3.5 py-1.5 sm:py-2 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
               unseenCount > 0
                 ? 'border-red-500/45 bg-red-500/10 text-red-700 hover:bg-red-500/20 dark:text-red-200'
                 : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800'
