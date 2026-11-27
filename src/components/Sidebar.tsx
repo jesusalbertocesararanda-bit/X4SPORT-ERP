@@ -102,6 +102,15 @@ const STANDALONE_MODULES: StandaloneNode[] = [
   { id: 'catalogo', label: 'Catálogo Público', icon: Store },
 ];
 
+const SIDEBAR_BRANCHES_STORAGE_KEY = 'x4sport_sidebar_expanded_branches_v1';
+
+const DEFAULT_EXPANDED_BRANCHES: Record<string, boolean> = {
+  'tree-ventas': false,
+  'tree-compras': false,
+  'tree-inventario': false,
+  'tree-finanzas': false,
+};
+
 export function Sidebar({
   activeSubModule,
   isCollapsed,
@@ -116,18 +125,46 @@ export function Sidebar({
 }: SidebarProps) {
   const [expandedBranches, setExpandedBranches] = useState<
     Record<string, boolean>
-  >({
-    'tree-ventas': true,
-    'tree-compras': true,
-    'tree-inventario': true,
-    'tree-finanzas': true,
+  >(() => {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_BRANCHES_STORAGE_KEY);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const restored: Record<string, boolean> = {
+            ...DEFAULT_EXPANDED_BRANCHES,
+          };
+          for (const key of Object.keys(DEFAULT_EXPANDED_BRANCHES)) {
+            const val = (parsed as Record<string, unknown>)[key];
+            if (typeof val === 'boolean') {
+              restored[key] = val;
+            }
+          }
+          return restored;
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    return { ...DEFAULT_EXPANDED_BRANCHES };
   });
 
   const toggleBranch = (branchId: string) => {
-    setExpandedBranches((prev) => ({
-      ...prev,
-      [branchId]: !prev[branchId],
-    }));
+    setExpandedBranches((prev) => {
+      const next = {
+        ...prev,
+        [branchId]: !prev[branchId],
+      };
+      try {
+        localStorage.setItem(
+          SIDEBAR_BRANCHES_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
   };
 
   const handleNavigate = (subModule: SubModuleId) => {
@@ -253,7 +290,7 @@ export function Sidebar({
               const isBranchActive = branch.children.some(
                 (c) => c.id === activeSubModule,
               );
-              const isOpen = expandedBranches[branch.id] ?? true;
+              const isOpen = expandedBranches[branch.id] ?? false;
 
               if (isCollapsed) {
                 return (
@@ -268,10 +305,21 @@ export function Sidebar({
                       aria-label={branch.label}
                       onClick={() => {
                         onToggleCollapse();
-                        setExpandedBranches((prev) => ({
-                          ...prev,
-                          [branch.id]: true,
-                        }));
+                        setExpandedBranches((prev) => {
+                          const next = {
+                            ...prev,
+                            [branch.id]: true,
+                          };
+                          try {
+                            localStorage.setItem(
+                              SIDEBAR_BRANCHES_STORAGE_KEY,
+                              JSON.stringify(next),
+                            );
+                          } catch {
+                            // Ignore storage errors
+                          }
+                          return next;
+                        });
                       }}
                       className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                         isBranchActive
