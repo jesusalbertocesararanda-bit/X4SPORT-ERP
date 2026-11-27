@@ -198,8 +198,8 @@ export default function App() {
   useEffect(() => {
     document.title =
       isPublicCatalogRoute || isCatalogPreview
-        ? 'X4SPORT · Catálogo Oficial'
-        : 'X4SPORT · Gestión Operativa y Financiera';
+        ? 'Catálogo X4SPORT'
+        : 'X4SPORT ERP';
   }, [isPublicCatalogRoute, isCatalogPreview]);
 
   useEffect(() => {
