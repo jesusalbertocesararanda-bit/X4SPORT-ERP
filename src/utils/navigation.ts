@@ -77,7 +77,7 @@ export const SUBMODULE_ROUTES: Record<SubModuleId, SubModuleRouteMeta> = {
     id: 'finanzas-matriz',
     tab: 'finanzas',
     moduleLabel: 'Finanzas',
-    subModuleLabel: 'Matriz de 4 Capas y Caja',
+    subModuleLabel: 'Matriz de 4 Capas',
   },
   'finanzas-gastos': {
     id: 'finanzas-gastos',
@@ -90,6 +90,18 @@ export const SUBMODULE_ROUTES: Record<SubModuleId, SubModuleRouteMeta> = {
     tab: 'finanzas',
     moduleLabel: 'Finanzas',
     subModuleLabel: 'Reparto de Socios',
+  },
+  'finanzas-capital': {
+    id: 'finanzas-capital',
+    tab: 'finanzas',
+    moduleLabel: 'Finanzas',
+    subModuleLabel: 'Inyección de Capital',
+  },
+  'finanzas-caja': {
+    id: 'finanzas-caja',
+    tab: 'finanzas',
+    moduleLabel: 'Finanzas',
+    subModuleLabel: 'Cuadre de Caja',
   },
   reportes: {
     id: 'reportes',

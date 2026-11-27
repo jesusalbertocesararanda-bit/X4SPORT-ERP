@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Clock,
   Loader2,
   Search,
   Wallet,
@@ -107,7 +106,6 @@ export function ReceivablesView({
   }, [enrichedReceivables, searchQuery, statusFilter]);
 
   const totalReceivables = getTotalReceivables(state);
-  const overdueCount = enrichedReceivables.filter((e) => e.isOverdue).length;
 
   const toggleHistory = (id: string) => {
     setExpandedHistoryIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -168,53 +166,7 @@ export function ReceivablesView({
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl">
-          Cuentas por Cobrar (CxC)
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Control de clientes con saldo pendiente, días transcurridos, historial de abonos parciales y liquidación directa a caja.
-        </p>
-      </div>
-
-      {/* KPI Strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-[#0D1526] p-4">
-          <span className="text-xs text-slate-400">Cartera Pendiente Total</span>
-          <p
-            data-testid="cxc-total-pending"
-            className="font-mono-num mt-1 text-2xl font-bold text-amber-400"
-          >
-            {formatUSD(totalReceivables)}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-[#0D1526] p-4">
-          <span className="text-xs text-slate-400">Deudores Activos</span>
-          <p className="font-mono-num mt-1 text-2xl font-bold text-white">
-            {state.receivables.length}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-[#0D1526] p-4">
-          <span className="text-xs text-slate-400">
-            Vencidas (&ge;{receivableOverdueDays}d)
-          </span>
-          <p
-            className={`font-mono-num mt-1 text-2xl font-bold ${
-              overdueCount > 0 ? 'text-red-400' : 'text-emerald-400'
-            }`}
-          >
-            {overdueCount}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-[#0D1526] p-4">
-          <span className="text-xs text-slate-400">Cuentas Liquidadas</span>
-          <p className="font-mono-num mt-1 text-2xl font-bold text-emerald-400">
-            {state.collectedReceivablesCount}
-          </p>
-        </div>
-      </div>
-
+    <div className="space-y-4">
       {feedback && (
         <div
           role="status"
@@ -232,96 +184,125 @@ export function ReceivablesView({
         </div>
       )}
 
-      {/* Filtros + Método de Cobro */}
-      <section className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center flex-1">
-            <div className="relative flex-1 sm:max-w-sm">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                data-testid="cxc-search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar deudor, factura o monto..."
-                className="w-full min-h-[40px] rounded-lg border border-slate-700 bg-[#070D19] pl-9 pr-3 py-1.5 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
+      <section
+        aria-labelledby="receivables-heading"
+        className="rounded-xl border border-slate-800 bg-[#0D1526] p-4 sm:p-6 space-y-4"
+      >
+        {/* 1. Encabezado compacto con total general arriba */}
+        <div>
+          <h1
+            id="receivables-heading"
+            className="font-display text-lg font-semibold text-white sm:text-xl"
+          >
+            Cuentas por Cobrar Pendientes
+          </h1>
+          <p className="mt-0.5 text-xs text-slate-400">
+            Selecciona el método de cobro; el monto se suma automáticamente a caja.
+          </p>
+          <p
+            data-testid="cxc-total-pending"
+            className="mt-2 font-mono-num text-2xl sm:text-3xl font-bold text-amber-400"
+          >
+            {formatUSD(totalReceivables)}
+          </p>
+        </div>
+
+        {/* 2. Selector de método de cobro + buscador compacto + filtros discretos */}
+        <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3.5">
+          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2 shrink-0">
+              <label
+                htmlFor="cxc-payment-method"
+                className="text-xs font-medium text-slate-300 whitespace-nowrap"
+              >
+                Método de cobro recibido:
+              </label>
+              <select
+                id="cxc-payment-method"
+                data-testid="cxc-payment-method"
+                value={collectionMethod}
+                onChange={(e) =>
+                  setCollectionMethod(e.target.value as SinglePaymentMethod)
+                }
+                className="min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                {PAYMENT_METHODS.map((pm) => (
+                  <option key={pm} value={pm}>
+                    {pm}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filtrar cuentas">
-              {(
-                [
-                  { id: 'todas', label: 'Todas' },
-                  { id: 'vencidas', label: `Vencidas (≥${receivableOverdueDays}d)` },
-                  { id: 'parciales', label: 'Con Abonos' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setStatusFilter(opt.id)}
-                  aria-pressed={statusFilter === opt.id}
-                  className={`min-h-[36px] rounded-lg border px-3 py-1 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                    statusFilter === opt.id
-                      ? 'border-blue-500 bg-blue-600 text-white'
-                      : 'border-slate-700 bg-[#080E1C] text-slate-300 hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
+            <div className="flex flex-wrap items-center gap-2 flex-1 lg:justify-end">
+              <div className="relative flex-1 min-w-[180px] sm:max-w-xs">
+                <Search
+                  className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  data-testid="cxc-search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Buscar cliente o #factura..."
+                  className="w-full min-h-[36px] rounded-lg border border-slate-700 bg-[#070D19] pl-8 pr-2.5 py-1 text-xs text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <label
-              htmlFor="cxc-payment-method"
-              className="text-xs font-medium text-slate-300 whitespace-nowrap"
-            >
-              Método de cobro:
-            </label>
-            <select
-              id="cxc-payment-method"
-              data-testid="cxc-payment-method"
-              value={collectionMethod}
-              onChange={(e) =>
-                setCollectionMethod(e.target.value as SinglePaymentMethod)
-              }
-              className="min-h-[40px] rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              {PAYMENT_METHODS.map((pm) => (
-                <option key={pm} value={pm}>
-                  {pm}
-                </option>
-              ))}
-            </select>
+              <div
+                className="flex items-center gap-1 shrink-0"
+                role="group"
+                aria-label="Filtrar cuentas"
+              >
+                {(
+                  [
+                    { id: 'todas', label: 'Todas' },
+                    { id: 'parciales', label: 'Con abonos' },
+                    { id: 'vencidas', label: `> ${receivableOverdueDays} días` },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setStatusFilter(opt.id)}
+                    aria-pressed={statusFilter === opt.id}
+                    className={`min-h-[36px] rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                      statusFilter === opt.id
+                        ? 'border-blue-500 bg-blue-600 text-white'
+                        : 'border-slate-700 bg-[#070D19] text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* 3. Lista en filas horizontales compactas */}
         {state.receivables.length === 0 ? (
-          <div className="rounded-lg border border-slate-800 bg-[#080E1C] p-8 text-center">
+          <div className="rounded-lg border border-slate-800 bg-[#080E1C] p-6 text-center">
             <Wallet
-              className="mx-auto h-7 w-7 text-emerald-400"
+              className="mx-auto h-6 w-6 text-emerald-400"
               aria-hidden="true"
             />
-            <p className="mt-2 text-sm font-semibold text-white">
-              Sin cuentas por cobrar pendientes
+            <p className="mt-2 text-sm font-medium text-emerald-400">
+              Sin cuentas pendientes
             </p>
             <p className="mt-1 text-xs text-slate-400">
-              Todas las ventas a crédito han sido liquidadas a caja.
+              Todas las cuentas por cobrar han sido liquidadas a caja.
             </p>
           </div>
         ) : filteredReceivables.length === 0 ? (
-          <p className="rounded-lg border border-slate-800 bg-[#080E1C] p-6 text-center text-sm text-slate-400">
+          <p className="rounded-lg border border-slate-800 bg-[#080E1C] p-5 text-center text-xs text-slate-400">
             No se encontraron cuentas que coincidan con el filtro aplicado.
           </p>
         ) : (
           <div className="divide-y divide-slate-800/80">
             {filteredReceivables.map(
-              ({ rec, elapsedDays, originalAmount, paidSoFar, isOverdue }) => {
+              ({ rec, elapsedDays, paidSoFar, isOverdue }) => {
                 const isAbonoOpen = abonoTargetId === rec.id;
                 const isExpanded = Boolean(expandedHistoryIds[rec.id]);
                 const isBusy = isSubmittingId === rec.id;
@@ -335,35 +316,25 @@ export function ReceivablesView({
                   <article
                     key={rec.id}
                     data-testid={`cxc-row-${rec.id}`}
-                    className="py-4 space-y-3"
+                    className="py-2.5 sm:py-3 space-y-2"
                   >
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <h3 className="text-base font-semibold text-white">
-                            {rec.debtor}
-                          </h3>
-                          <span
-                            className={`inline-flex items-center gap-1 font-mono-num text-xs font-semibold ${
-                              isOverdue ? 'text-red-400' : 'text-slate-400'
-                            }`}
-                          >
-                            <Clock className="h-3.5 w-3.5" aria-hidden="true" />
-                            {elapsedDays} {elapsedDays === 1 ? 'día' : 'días'}
+                    <div className="flex items-center justify-between gap-2 sm:gap-3">
+                      {/* Izquierda */}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-white">
+                          {rec.debtor}
+                        </p>
+                        <p className="truncate text-xs text-slate-400">
+                          {rec.note || 'Cuenta por cobrar'} ·{' '}
+                          <span className={isOverdue ? 'font-semibold text-red-400' : ''}>
+                            {elapsedDays}d
                           </span>
                           {paidSoFar > 0 && (
-                            <span className="font-mono-num text-xs font-medium text-blue-300">
-                              Abonado {formatUSD(paidSoFar)} de{' '}
-                              {formatUSD(originalAmount)}
+                            <span className="text-blue-300">
+                              {' '}
+                              · Abonado {formatUSD(paidSoFar)}
                             </span>
                           )}
-                        </div>
-
-                        <p className="text-xs text-slate-400">
-                          {rec.note || 'Cuenta por cobrar'} · Creada el{' '}
-                          {new Date(rec.createdAt).toLocaleDateString('es-VE', {
-                            dateStyle: 'medium',
-                          })}
                           {collectionMethod === 'Pago Móvil / Bs' && (
                             <span className="font-mono-num text-blue-300">
                               {' '}
@@ -373,27 +344,24 @@ export function ReceivablesView({
                         </p>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                        <div className="text-right mr-1">
-                          <span className="block text-[10px] uppercase tracking-wider text-slate-400">
-                            Pendiente
-                          </span>
-                          <span
-                            data-testid={`cxc-amount-${rec.id}`}
-                            className="font-mono-num text-lg font-bold text-amber-300"
-                          >
-                            {formatUSD(rec.amount)}
-                          </span>
-                        </div>
+                      {/* Centro */}
+                      <span
+                        data-testid={`cxc-amount-${rec.id}`}
+                        className="shrink-0 font-mono-num text-sm font-bold text-white"
+                      >
+                        {formatUSD(rec.amount)}
+                      </span>
 
+                      {/* Derecha */}
+                      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                         <button
                           type="button"
                           data-testid={`btn-abono-${rec.id}`}
                           disabled={isBusy}
                           onClick={() => handleOpenAbono(rec)}
-                          className="min-h-[40px] rounded-lg border border-blue-500/40 bg-blue-600/15 px-3 py-1.5 text-xs font-semibold text-blue-200 transition-colors hover:bg-blue-600/25 hover:text-white whitespace-nowrap shrink-0"
+                          className="min-h-[36px] rounded-lg border border-slate-700 bg-[#080E1C] px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800 whitespace-nowrap"
                         >
-                          {isAbonoOpen ? 'Cancelar' : 'Registrar Abono'}
+                          {isAbonoOpen ? 'Cerrar' : 'Abonar'}
                         </button>
 
                         <button
@@ -401,7 +369,8 @@ export function ReceivablesView({
                           data-testid={`btn-liquidar-${rec.id}`}
                           disabled={isBusy}
                           onClick={() => void handleProcessCollection(rec)}
-                          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-60 whitespace-nowrap shrink-0"
+                          aria-label={`Cobrar total ${formatUSD(rec.amount)} a ${rec.debtor}`}
+                          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-60 whitespace-nowrap"
                         >
                           {isBusy ? (
                             <Loader2
@@ -414,7 +383,7 @@ export function ReceivablesView({
                               aria-hidden="true"
                             />
                           )}
-                          Liquidar Total
+                          Cobrar
                         </button>
                       </div>
                     </div>
@@ -428,14 +397,14 @@ export function ReceivablesView({
                             Number(abonoAmountInput),
                           );
                         }}
-                        className="flex flex-col gap-3 rounded-lg border border-slate-700 bg-[#080E1C] p-3.5 sm:flex-row sm:items-center sm:justify-between"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-[#080E1C] p-2.5"
                       >
-                        <div className="flex flex-wrap items-center gap-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
                           <label
                             htmlFor={`abono-input-${rec.id}`}
-                            className="text-xs font-medium text-slate-300"
+                            className="text-xs text-slate-300"
                           >
-                            Monto del abono (USDT):
+                            Monto del abono ($):
                           </label>
                           <input
                             id={`abono-input-${rec.id}`}
@@ -450,14 +419,14 @@ export function ReceivablesView({
                             onChange={(e) =>
                               setAbonoAmountInput(e.target.value)
                             }
-                            className="font-mono-num min-h-[40px] w-32 rounded-lg border border-slate-700 bg-[#070D19] px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="font-mono-num min-h-[36px] w-28 rounded-lg border border-slate-700 bg-[#070D19] px-2.5 py-1 text-xs text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                           />
                           {previewRemaining !== null && (
                             <span
                               data-testid={`abono-remaining-preview-${rec.id}`}
                               className="font-mono-num text-xs text-slate-300"
                             >
-                              Resta después del abono:{' '}
+                              Resta:{' '}
                               <strong className="text-white">
                                 {formatUSD(previewRemaining)}
                               </strong>
@@ -469,7 +438,7 @@ export function ReceivablesView({
                           type="submit"
                           data-testid={`btn-confirm-abono-${rec.id}`}
                           disabled={isBusy}
-                          className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60 whitespace-nowrap shrink-0"
+                          className="min-h-[36px] rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60 whitespace-nowrap"
                         >
                           Confirmar Abono
                         </button>
@@ -484,10 +453,10 @@ export function ReceivablesView({
                           className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-300 hover:text-blue-200"
                         >
                           {isExpanded ? (
-                            <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                            <ChevronUp className="h-3 w-3" aria-hidden="true" />
                           ) : (
                             <ChevronDown
-                              className="h-3.5 w-3.5"
+                              className="h-3 w-3"
                               aria-hidden="true"
                             />
                           )}
@@ -495,7 +464,7 @@ export function ReceivablesView({
                         </button>
 
                         {isExpanded && (
-                          <ul className="mt-2 space-y-1 rounded-lg border border-slate-800 bg-[#080E1C] p-3 text-xs text-slate-300">
+                          <ul className="mt-1.5 space-y-1 rounded-lg border border-slate-800 bg-[#080E1C] p-2.5 text-xs text-slate-300">
                             {rec.installments!.map((inst) => (
                               <li
                                 key={inst.id}

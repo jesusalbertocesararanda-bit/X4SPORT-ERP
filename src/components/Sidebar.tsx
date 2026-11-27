@@ -86,9 +86,11 @@ const TREE_MODULES: TreeBranchNode[] = [
     label: 'Finanzas',
     icon: Wallet,
     children: [
-      { id: 'finanzas-matriz', label: 'Matriz de 4 Capas y Caja' },
+      { id: 'finanzas-matriz', label: 'Matriz de 4 Capas' },
       { id: 'finanzas-gastos', label: 'Gastos (Operativos y Producción)' },
       { id: 'finanzas-socios', label: 'Reparto de Socios' },
+      { id: 'finanzas-capital', label: 'Inyección de Capital' },
+      { id: 'finanzas-caja', label: 'Cuadre de Caja' },
     ],
   },
 ];

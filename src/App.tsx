@@ -1618,9 +1618,14 @@ export default function App() {
                       ? 'gastos'
                       : activeSubModule === 'finanzas-socios'
                         ? 'socios'
-                        : 'matriz'
+                        : activeSubModule === 'finanzas-capital'
+                          ? 'capital'
+                          : activeSubModule === 'finanzas-caja'
+                            ? 'caja'
+                            : 'matriz'
                   }
                   matrixParams={generalConfig.matrixParams}
+                  onOpenReceivables={() => handleSelectSubModule('ventas-cxc')}
                   onCollectReceivable={handleCollectReceivable}
                   onReinvestDividends={handleReinvestDividends}
                   onWithdrawDividends={handleWithdrawDividends}

@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownLeft,
+  ArrowUpRight,
   Banknote,
   CheckCircle2,
+  CreditCard,
   Download,
   Landmark,
   Lock,
@@ -51,8 +53,9 @@ import {
 interface FinanceViewProps {
   state: AppState;
   currentUser?: ERPUser | null;
-  activeSection?: 'matriz' | 'gastos' | 'socios' | 'cxc';
+  activeSection?: 'matriz' | 'gastos' | 'socios' | 'capital' | 'caja' | 'cxc';
   matrixParams?: MatrixConfigParams;
+  onOpenReceivables?: () => void;
   onCollectReceivable: (
     receivableId: string,
     paymentMethod: PaymentMethod,
@@ -133,6 +136,7 @@ export function FinanceView({
   currentUser,
   activeSection,
   matrixParams,
+  onOpenReceivables,
   onCollectReceivable,
   onReinvestDividends,
   onWithdrawDividends,
@@ -155,12 +159,22 @@ export function FinanceView({
     Math.max(1, effectiveMatrixParams.maritimeGoalUsd ?? 1500),
   );
 
+  const showAllSections = !activeSection;
+  const showMatrizSection = showAllSections || activeSection === 'matriz';
+  const showSociosSection = showAllSections || activeSection === 'socios';
+  const showCxcSection = showAllSections || activeSection === 'cxc';
+  const showGastosSection = showAllSections || activeSection === 'gastos';
+  const showCapitalSection = showAllSections || activeSection === 'capital';
+  const showCajaSection = showAllSections || activeSection === 'caja';
+
   useEffect(() => {
     if (!activeSection) return;
     const sectionHeadingMap: Record<NonNullable<FinanceViewProps['activeSection']>, string> = {
       matriz: 'funds-heading',
       gastos: 'petty-cash-heading',
       socios: 'dividends-heading',
+      capital: 'capital-injections-heading',
+      caja: 'cash-reconciliation-heading',
       cxc: 'receivables-heading',
     };
     const targetId = sectionHeadingMap[activeSection];
@@ -239,6 +253,8 @@ export function FinanceView({
   const [downloadingHtml, setDownloadingHtml] = useState(false);
 
   const totalReceivables = getTotalReceivables(state);
+  const totalPendingReceivables = totalReceivables;
+  const pendingReceivablesCount = state.receivables.length;
   const cashBackedSummary = getCashBackedFundsSummary(state);
   const unassignedCash = round2(
     Math.max(0, cashBackedSummary.cashOnHand - cashBackedSummary.totalAllocatedFunds),
@@ -612,102 +628,149 @@ export function FinanceView({
         </div>
       )}
 
-      {/* Tarjeta Principal: Efectivo Físico en Caja (USDT) + Arqueo / Ajustar Caja */}
-      <section
-        aria-label="Efectivo Físico en Caja"
-        className="rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-[#0D1A2D] via-[#0D1526] to-[#08121E] p-5 sm:p-6 shadow-xl"
-      >
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
-                <Banknote className="h-3.5 w-3.5" aria-hidden="true" />
-                Efectivo Físico en Caja (USDT)
-              </span>
-              <span
-                data-testid="vital-reserve-status-badge"
-                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold ${
-                  isBelowVitalReserve
-                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                }`}
-              >
-                {isBelowVitalReserve ? (
-                  <Lock className="h-3 w-3" aria-hidden="true" />
-                ) : (
-                  <Unlock className="h-3 w-3" aria-hidden="true" />
-                )}
-                {isBelowVitalReserve
-                  ? `Bajo Mínimo Vital (${formatUSD(vitalReserveMinUsd)}) · Dividendos Bloqueados`
-                  : `Mínimo Vital Cubierto (≥ ${formatUSD(vitalReserveMinUsd)})`}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <p
-                data-testid="hero-cash-on-hand"
-                className="font-mono-num text-3xl font-bold tracking-tight text-white sm:text-4xl"
-              >
-                {formatUSDT(state.cashOnHand)}
-              </p>
-              <span className="font-mono-num text-xs text-slate-400">
-                {formatVES(state.cashOnHand * state.exchangeRates.bcv)} BCV ·{' '}
-                {formatVES(state.cashOnHand * state.exchangeRates.usdt)} USDT
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-300">
-              Invariante contable:{' '}
-              <strong className="font-mono-num text-white">
-                Suma de Fondos ({formatUSDT(cashBackedSummary.totalAllocatedFunds)})
-              </strong>{' '}
-              {Math.abs(cashBackedSummary.totalAllocatedFunds - state.cashOnHand) <= 0.01 ? (
-                <span className="text-emerald-400 font-semibold">
-                  = Efectivo Físico en Caja (100% respaldado)
+      {showMatrizSection && (
+        <>
+      {/* Tarjeta Principal: Efectivo Físico en Caja (USDT) + Acceso Directo CxC */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-stretch">
+        <section
+          aria-label="Efectivo Físico en Caja"
+          className={`rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-[#0D1A2D] via-[#0D1526] to-[#08121E] p-5 sm:p-6 shadow-xl flex flex-col justify-center ${
+            onOpenReceivables ? 'lg:col-span-8' : 'lg:col-span-12'
+          }`}
+        >
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
+                  <Banknote className="h-3.5 w-3.5" aria-hidden="true" />
+                  Efectivo Físico en Caja (USDT)
                 </span>
-              ) : unassignedCash > 0 ? (
-                <span className="text-blue-300">
-                  + Saldo libre en caja ({formatUSDT(unassignedCash)}) ={' '}
+                <span
+                  data-testid="vital-reserve-status-badge"
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold ${
+                    isBelowVitalReserve
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                  }`}
+                >
+                  {isBelowVitalReserve ? (
+                    <Lock className="h-3 w-3" aria-hidden="true" />
+                  ) : (
+                    <Unlock className="h-3 w-3" aria-hidden="true" />
+                  )}
+                  {isBelowVitalReserve
+                    ? `Bajo Mínimo Vital (${formatUSD(vitalReserveMinUsd)}) · Dividendos Bloqueados`
+                    : `Mínimo Vital Cubierto (≥ ${formatUSD(vitalReserveMinUsd)})`}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <p
+                  data-testid="hero-cash-on-hand"
+                  className="font-mono-num text-3xl font-bold tracking-tight text-white sm:text-4xl"
+                >
                   {formatUSDT(state.cashOnHand)}
+                </p>
+                <span className="font-mono-num text-xs text-slate-400">
+                  {formatVES(state.cashOnHand * state.exchangeRates.bcv)} BCV ·{' '}
+                  {formatVES(state.cashOnHand * state.exchangeRates.usdt)} USDT
                 </span>
-              ) : (
-                <span className="text-amber-300">
-                  ≤ Efectivo Físico en Caja
-                </span>
-              )}
-            </p>
-          </div>
+              </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {unassignedCash > 0.01 && onSyncFreeCashToFunds && (
-              <button
-                type="button"
-                data-testid="btn-sync-free-cash"
-                onClick={handleSyncFreeCash}
-                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-blue-500/40 bg-blue-600/15 px-3.5 py-2 text-xs font-semibold text-blue-200 transition-colors hover:bg-blue-600/25 hover:text-white"
-              >
-                <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                Igualar Fondos (+{formatUSD(unassignedCash)})
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                type="button"
-                data-testid="btn-open-arqueo"
-                onClick={() => {
-                  setModalCountedCashInput(state.cashOnHand.toFixed(2));
-                  setModalReconcileReason('');
-                  setIsArqueoModalOpen(true);
-                }}
-                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-950/40 transition-colors hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-              >
-                <Scale className="h-4 w-4 shrink-0" aria-hidden="true" />
-                Arqueo / Ajustar Caja
-              </button>
-            )}
+              <p className="text-xs text-slate-300">
+                Invariante contable:{' '}
+                <strong className="font-mono-num text-white">
+                  Suma de Fondos ({formatUSDT(cashBackedSummary.totalAllocatedFunds)})
+                </strong>{' '}
+                {Math.abs(cashBackedSummary.totalAllocatedFunds - state.cashOnHand) <= 0.01 ? (
+                  <span className="text-emerald-400 font-semibold">
+                    = Efectivo Físico en Caja (100% respaldado)
+                  </span>
+                ) : unassignedCash > 0 ? (
+                  <span className="text-blue-300">
+                    + Saldo libre en caja ({formatUSDT(unassignedCash)}) ={' '}
+                    {formatUSDT(state.cashOnHand)}
+                  </span>
+                ) : (
+                  <span className="text-amber-300">
+                    ≤ Efectivo Físico en Caja
+                  </span>
+                )}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              {unassignedCash > 0.01 && onSyncFreeCashToFunds && (
+                <button
+                  type="button"
+                  data-testid="btn-sync-free-cash"
+                  onClick={handleSyncFreeCash}
+                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-blue-500/40 bg-blue-600/15 px-3.5 py-2 text-xs font-semibold text-blue-200 transition-colors hover:bg-blue-600/25 hover:text-white"
+                >
+                  <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                  Igualar Fondos (+{formatUSD(unassignedCash)})
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  data-testid="btn-open-arqueo"
+                  onClick={() => {
+                    setModalCountedCashInput(state.cashOnHand.toFixed(2));
+                    setModalReconcileReason('');
+                    setIsArqueoModalOpen(true);
+                  }}
+                  className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-950/40 transition-colors hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+                >
+                  <Scale className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  Arqueo / Ajustar Caja
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+
+        {onOpenReceivables && (
+          <button
+            type="button"
+            data-testid="btn-shortcut-cxc"
+            onClick={onOpenReceivables}
+            className="group flex flex-col justify-between rounded-2xl border border-amber-500/30 bg-[#0D1526] p-5 text-left shadow-xl transition-colors hover:border-amber-400/60 hover:bg-slate-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 lg:col-span-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-amber-400 shrink-0">
+                  <CreditCard className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">
+                    Cuentas por Cobrar (CxC)
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {pendingReceivablesCount}{' '}
+                    {pendingReceivablesCount === 1
+                      ? 'cuenta pendiente'
+                      : 'cuentas pendientes'}
+                  </p>
+                </div>
+              </div>
+              <ArrowUpRight
+                className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-amber-300"
+                aria-hidden="true"
+              />
+            </div>
+
+            <div className="mt-4 flex items-baseline justify-between gap-2 border-t border-slate-800/80 pt-3">
+              <span className="font-mono-num text-2xl font-bold text-amber-400">
+                {formatUSD(totalPendingReceivables)}
+              </span>
+              <span className="text-xs font-semibold text-blue-300 whitespace-nowrap">
+                Ver y cobrar →
+              </span>
+            </div>
+          </button>
+        )}
+      </div>
 
       <section aria-labelledby="funds-heading" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -915,11 +978,17 @@ export function FinanceView({
           </div>
         </div>
       </section>
+        </>
+      )}
 
+      {(showSociosSection || showCxcSection) && (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {showSociosSection && (
         <section
           aria-labelledby="dividends-heading"
-          className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 lg:col-span-6"
+          className={`rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 ${
+            showCxcSection ? 'lg:col-span-6' : 'lg:col-span-12'
+          }`}
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
@@ -1032,10 +1101,14 @@ export function FinanceView({
             </table>
           </div>
         </section>
+        )}
 
+        {showCxcSection && (
         <section
           aria-labelledby="receivables-heading"
-          className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 lg:col-span-6"
+          className={`rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 ${
+            showSociosSection ? 'lg:col-span-6' : 'lg:col-span-12'
+          }`}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -1197,8 +1270,11 @@ export function FinanceView({
             </div>
           )}
         </section>
+        )}
       </div>
+      )}
 
+      {showGastosSection && (
       <section
         aria-labelledby="petty-cash-heading"
         className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5"
@@ -1526,12 +1602,17 @@ export function FinanceView({
           </div>
         )}
       </section>
+      )}
 
       {/* INYECCIONES DE DINERO Y CONCILIACIÓN DE CAJA FÍSICA */}
+      {(showCapitalSection || showCajaSection) && (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {showCapitalSection && (
         <section
           aria-labelledby="capital-injections-heading"
-          className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5 lg:col-span-7"
+          className={`rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5 ${
+            showCajaSection ? 'lg:col-span-7' : 'lg:col-span-12'
+          }`}
         >
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -1748,10 +1829,14 @@ export function FinanceView({
             </div>
           )}
         </section>
+        )}
 
+        {showCajaSection && (
         <section
           aria-labelledby="cash-reconciliation-heading"
-          className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5 lg:col-span-5"
+          className={`rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5 ${
+            showCapitalSection ? 'lg:col-span-5' : 'lg:col-span-12'
+          }`}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1922,7 +2007,9 @@ export function FinanceView({
             );
           })()}
         </section>
+        )}
       </div>
+      )}
 
       {/* Modal Arqueo / Ajustar Caja */}
       {isAdmin && isArqueoModalOpen && (

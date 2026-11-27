@@ -28,6 +28,8 @@ export type SubModuleId =
   | 'finanzas-matriz'
   | 'finanzas-gastos'
   | 'finanzas-socios'
+  | 'finanzas-capital'
+  | 'finanzas-caja'
   | 'reportes'
   | 'estadisticas'
   | 'cargas'
