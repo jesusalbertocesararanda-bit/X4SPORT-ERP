@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BellRing,
@@ -14,13 +14,13 @@ import {
   Lock,
   Mail,
   Plus,
-  RefreshCcw,
   RefreshCw,
   Save,
   Settings,
   ShieldAlert,
   Store,
   Trash2,
+  UploadCloud,
   UserCheck,
   UserPlus,
   Users,
@@ -40,7 +40,11 @@ import {
   MAIN_ADMIN_EMAIL,
   type ERPUser,
 } from '../utils/auth';
-import { DEFAULT_GENERAL_CONFIG, round2 } from '../utils/finance';
+import {
+  exportFullStateToExcel,
+  parseFullStateFromExcel,
+} from '../utils/excelBackup';
+import { DEFAULT_GENERAL_CONFIG, formatUSD, round2 } from '../utils/finance';
 import type { GoogleCalendarAuthState } from '../utils/googleCalendar';
 import {
   buildShareableCatalogUrl,
@@ -73,7 +77,8 @@ interface ConfigViewProps {
     bcv: number,
     usdt: number,
   ) => Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
-  onResetDemoData: () => void;
+  onRestoreFullState?: (restoredState: AppState) => Promise<void> | void;
+  onResetDemoData?: () => void;
   onUpdateAuthorizedUsers?: (users: AuthorizedUserRecord[]) => void;
 }
 
@@ -94,7 +99,7 @@ export function ConfigView({
   onOpenExcelImport,
   onSyncRatesFromApi,
   onUpdateRates,
-  onResetDemoData,
+  onRestoreFullState,
   onUpdateAuthorizedUsers,
 }: ConfigViewProps) {
   const showAllSections = !activeSection;
@@ -179,7 +184,14 @@ export function ConfigView({
   const [bcvInput, setBcvInput] = useState(state.exchangeRates.bcv.toFixed(2));
   const [usdtInput, setUsdtInput] = useState(state.exchangeRates.usdt.toFixed(2));
   const [downloadingHtml, setDownloadingHtml] = useState(false);
-  const [confirmDemoReset, setConfirmDemoReset] = useState(false);
+  const [downloadingFullBackup, setDownloadingFullBackup] = useState(false);
+  const [isParsingBackup, setIsParsingBackup] = useState(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [pendingRestoreBackup, setPendingRestoreBackup] = useState<{
+    fileName: string;
+    state: AppState;
+  } | null>(null);
+  const restoreFileInputRef = useRef<HTMLInputElement | null>(null);
   const [copiedCatalogUrl, setCopiedCatalogUrl] = useState(false);
   const [savingGeneral, setSavingGeneral] = useState(false);
   const [isSavingRates, setIsSavingRates] = useState(false);
@@ -603,6 +615,80 @@ export function ConfigView({
       });
     } finally {
       setDownloadingHtml(false);
+    }
+  };
+
+  const handleDownloadFullBackupExcel = () => {
+    if (downloadingFullBackup) return;
+    setFeedback(null);
+    setDownloadingFullBackup(true);
+    try {
+      const fileName = exportFullStateToExcel(state);
+      setFeedback({
+        type: 'success',
+        text: `Respaldo completo descargado en "${fileName}" con todas las hojas operativas e integridad exacta.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'No se pudo generar el respaldo completo en Excel.',
+      });
+    } finally {
+      setDownloadingFullBackup(false);
+    }
+  };
+
+  const handleSelectRestoreBackupFile = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setFeedback(null);
+    setPendingRestoreBackup(null);
+    setIsParsingBackup(true);
+    try {
+      const restoredState = await parseFullStateFromExcel(file);
+      setPendingRestoreBackup({ fileName: file.name, state: restoredState });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'No se pudo validar el archivo de respaldo Excel (.xlsx).',
+      });
+    } finally {
+      setIsParsingBackup(false);
+    }
+  };
+
+  const handleConfirmRestoreBackup = async () => {
+    if (!pendingRestoreBackup || !onRestoreFullState || isRestoringBackup) return;
+    setFeedback(null);
+    setIsRestoringBackup(true);
+    try {
+      await onRestoreFullState(pendingRestoreBackup.state);
+      const restoredName = pendingRestoreBackup.fileName;
+      setPendingRestoreBackup(null);
+      setFeedback({
+        type: 'success',
+        text: `Respaldo completo "${restoredName}" restaurado y sincronizado en Firebase exitosamente.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'Error al aplicar y sincronizar el respaldo completo en Firebase.',
+      });
+    } finally {
+      setIsRestoringBackup(false);
     }
   };
 
@@ -1474,56 +1560,55 @@ export function ConfigView({
         )}
 
         <div className="rounded-xl border border-slate-800 bg-[#070D19] overflow-hidden">
-          <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/80">
+          <div className="max-h-[420px] overflow-y-auto divide-y divide-slate-800/80">
             {authorizedUsersList.map((u) => {
               const isMainAdmin = isProtectedAdminEmail(u.email);
               return (
                 <div
                   key={u.id}
-                  className="flex items-center justify-between gap-3 p-3 hover:bg-slate-800/30 transition-colors"
+                  className="flex flex-col gap-3 p-3.5 sm:flex-row sm:items-center sm:justify-between hover:bg-slate-800/30 transition-colors"
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div
-                      className={`h-8 w-8 rounded-lg ${
+                      className={`h-9 w-9 rounded-lg ${
                         u.avatarBg || 'bg-blue-600'
-                      } flex items-center justify-center text-white text-xs font-bold shrink-0`}
+                      } flex items-center justify-center text-white text-xs font-bold shrink-0 mt-0.5`}
                     >
                       {u.name.charAt(0)}
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs font-semibold text-white truncate">
-                          {u.name}
-                        </p>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                          {u.role === 'admin' ? 'Admin' : 'Socio'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 truncate">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-white">
+                        {u.name}
+                      </p>
+                      <p className="break-all text-xs text-slate-400">
                         {u.email}
                       </p>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                          {u.role === 'admin' ? 'Admin' : 'Socio'}
+                        </span>
+                        {u.firstLoginPending ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                            Primer ingreso pendiente
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                            Activo
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-                    {u.firstLoginPending ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        Primer ingreso pendiente
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        Activo
-                      </span>
-                    )}
-
+                  <div className="flex items-center gap-2 pt-2 border-t border-slate-800/70 sm:border-0 sm:pt-0 shrink-0">
                     <button
                       type="button"
                       data-testid={`btn-reset-password-${u.email}`}
                       onClick={() => handleOpenResetPasswordModal(u)}
                       title={`Reiniciar contraseña de ${u.name}`}
-                      className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-blue-500/35 bg-blue-600/15 px-2.5 py-1 text-[11px] font-semibold text-blue-200 hover:bg-blue-600/25 hover:text-white transition-colors"
+                      className="inline-flex flex-1 sm:flex-initial min-h-[34px] items-center justify-center gap-1.5 rounded-lg border border-blue-500/35 bg-blue-600/15 px-3 py-1.5 text-[11px] font-semibold text-blue-200 hover:bg-blue-600/25 hover:text-white transition-colors whitespace-nowrap"
                     >
-                      <KeyRound className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       <span>Reiniciar contraseña</span>
                     </button>
 
@@ -1533,7 +1618,7 @@ export function ConfigView({
                         onClick={() => handleDeleteUser(u.email)}
                         title={`Eliminar acceso a ${u.name}`}
                         aria-label={`Eliminar acceso a ${u.name}`}
-                        className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                        className="inline-flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border border-red-500/25 bg-red-500/10 p-1.5 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors shrink-0"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -1718,23 +1803,134 @@ export function ConfigView({
           </section>
       )}
 
-      {/* Respaldo Excel, Google Calendar y Datos Demo */}
+      {/* Respaldo Completo Excel (.xlsx), Sincronización y Google Calendar */}
       {showRespaldo && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <section className="space-y-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5">
-              <h2 className="text-sm font-semibold text-white">
-                Respaldo Excel (.xlsx) y Exportación HTML
-              </h2>
-              <p className="text-xs text-slate-400">
-                Importa tu hoja de cálculo oficial con mapeo automático a Firebase o descarga el paquete autocontenido.
-              </p>
-              <div className="flex flex-wrap gap-2.5 pt-1">
+            <section className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5">
+              <div>
+                <h2 className="text-sm font-semibold text-white">
+                  Respaldo Completo del ERP (.xlsx) y Sincronización
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Descarga un libro Excel con todas las hojas del negocio y snapshot exacto, o restaura un respaldo completo en caso de pérdida de datos.
+                </p>
+              </div>
+
+              <input
+                ref={restoreFileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                data-testid="input-restore-full-backup-xlsx"
+                onChange={(e) => void handleSelectRestoreBackupFile(e)}
+                className="hidden"
+              />
+
+              <div className="flex flex-wrap gap-2.5">
+                <button
+                  type="button"
+                  data-testid="btn-download-full-backup-xlsx"
+                  onClick={handleDownloadFullBackupExcel}
+                  disabled={downloadingFullBackup}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
+                >
+                  <Download className="h-4 w-4" aria-hidden="true" />
+                  {downloadingFullBackup
+                    ? 'Generando respaldo...'
+                    : 'Descargar Respaldo Completo (.xlsx)'}
+                </button>
+
+                {onRestoreFullState && (
+                  <button
+                    type="button"
+                    data-testid="btn-restore-full-backup-xlsx"
+                    onClick={() => restoreFileInputRef.current?.click()}
+                    disabled={isParsingBackup || isRestoringBackup}
+                    className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/20 hover:text-white disabled:opacity-60"
+                  >
+                    <UploadCloud className="h-4 w-4" aria-hidden="true" />
+                    {isParsingBackup
+                      ? 'Validando archivo...'
+                      : 'Restaurar Respaldo (.xlsx)'}
+                  </button>
+                )}
+              </div>
+
+              {pendingRestoreBackup && (
+                <div
+                  data-testid="restore-backup-confirmation"
+                  className="space-y-3 rounded-xl border border-amber-500/40 bg-[#080E1C] p-4"
+                >
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle
+                      className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-xs font-semibold text-white">
+                        Confirmar restauración desde:{' '}
+                        <span className="font-mono text-amber-300 break-all">
+                          {pendingRestoreBackup.fileName}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-slate-300">
+                        Este respaldo contiene{' '}
+                        <strong className="text-white">
+                          {pendingRestoreBackup.state.inventory.length}
+                        </strong>{' '}
+                        productos (SKUs),{' '}
+                        <strong className="text-white">
+                          {pendingRestoreBackup.state.sales.length}
+                        </strong>{' '}
+                        ventas,{' '}
+                        <strong className="text-white">
+                          {pendingRestoreBackup.state.purchaseBatches?.length ||
+                            pendingRestoreBackup.state.purchases.length}
+                        </strong>{' '}
+                        compras/lotes,{' '}
+                        <strong className="text-white">
+                          {pendingRestoreBackup.state.receivables.length}
+                        </strong>{' '}
+                        CxC y caja de{' '}
+                        <strong className="font-mono-num text-emerald-400">
+                          {formatUSD(pendingRestoreBackup.state.cashOnHand)}
+                        </strong>
+                        . Al confirmar se reemplazará el estado actual en Firebase.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      data-testid="btn-cancel-restore-backup"
+                      onClick={() => setPendingRestoreBackup(null)}
+                      disabled={isRestoringBackup}
+                      className="min-h-[36px] rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-confirm-restore-backup"
+                      onClick={() => void handleConfirmRestoreBackup()}
+                      disabled={isRestoringBackup}
+                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                    >
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      {isRestoringBackup
+                        ? 'Restaurando en Firebase...'
+                        : 'Confirmar y Restaurar Todo'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2.5 border-t border-slate-800/80 pt-3">
                 <button
                   type="button"
                   data-testid="btn-open-excel-import"
                   onClick={onOpenExcelImport}
-                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-4 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-600/25 hover:text-white"
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-3.5 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-600/25 hover:text-white"
                 >
                   <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
                   Sincronizar Excel (.xlsx)
@@ -1744,7 +1940,7 @@ export function ConfigView({
                   type="button"
                   onClick={() => void handleDownloadStandaloneHtml()}
                   disabled={downloadingHtml}
-                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-4 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800 hover:text-white disabled:opacity-60"
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-3.5 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800 hover:text-white disabled:opacity-60"
                 >
                   <Download className="h-4 w-4 text-blue-400" aria-hidden="true" />
                   {downloadingHtml ? 'Generando...' : 'Descargar index.html'}
@@ -1759,52 +1955,6 @@ export function ConfigView({
               onDisconnect={onDisconnectGoogleCalendar}
             />
           </div>
-
-          {/* Restaurar inventario demo */}
-          <section className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-white">
-                Datos de Demostración (176 unidades)
-              </h2>
-              <p className="text-xs text-slate-400">
-                Restaura el catálogo de prueba de 176 franelas si deseas probar ventas o matriz de stock.
-              </p>
-            </div>
-            {!confirmDemoReset ? (
-              <button
-                type="button"
-                onClick={() => setConfirmDemoReset(true)}
-                className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 whitespace-nowrap shrink-0"
-              >
-                <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                Restaurar Catálogo Demo
-              </button>
-            ) : (
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onResetDemoData();
-                    setConfirmDemoReset(false);
-                    setFeedback({
-                      type: 'success',
-                      text: 'Catálogo de demostración restaurado en Firebase.',
-                    });
-                  }}
-                  className="min-h-[38px] rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
-                >
-                  Confirmar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDemoReset(false)}
-                  className="min-h-[38px] rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                >
-                  Cancelar
-                </button>
-              </div>
-            )}
-          </section>
         </div>
       )}
 

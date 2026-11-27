@@ -25,6 +25,8 @@ export type SubModuleId =
   | 'inventario-stock'
   | 'inventario-auditoria'
   | 'inventario-ajustes'
+  | 'inventario-movimientos'
+  | 'inventario-reposicion'
   | 'finanzas-matriz'
   | 'finanzas-gastos'
   | 'finanzas-socios'

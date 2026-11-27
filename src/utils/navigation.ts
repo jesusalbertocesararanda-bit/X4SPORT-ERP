@@ -73,6 +73,18 @@ export const SUBMODULE_ROUTES: Record<SubModuleId, SubModuleRouteMeta> = {
     moduleLabel: 'Inventario',
     subModuleLabel: 'Ajustes de Inventario',
   },
+  'inventario-movimientos': {
+    id: 'inventario-movimientos',
+    tab: 'inventario',
+    moduleLabel: 'Inventario',
+    subModuleLabel: 'Movimientos',
+  },
+  'inventario-reposicion': {
+    id: 'inventario-reposicion',
+    tab: 'inventario',
+    moduleLabel: 'Inventario',
+    subModuleLabel: 'Reposición y Pedidos',
+  },
   'finanzas-matriz': {
     id: 'finanzas-matriz',
     tab: 'finanzas',

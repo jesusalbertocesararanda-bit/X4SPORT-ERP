@@ -5,6 +5,7 @@ interface ThemeSelectorProps {
   value: ThemePreference;
   onChange: (next: ThemePreference) => void;
   showLabels?: 'always' | 'xl' | 'never';
+  fullWidth?: boolean;
   testIdPrefix?: string;
 }
 
@@ -38,6 +39,7 @@ export function ThemeSelector({
   value,
   onChange,
   showLabels = 'xl',
+  fullWidth = false,
   testIdPrefix = 'theme-selector',
 }: ThemeSelectorProps) {
   return (
@@ -45,7 +47,9 @@ export function ThemeSelector({
       role="group"
       aria-label="Selector de apariencia"
       data-testid={testIdPrefix}
-      className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-700/90 dark:bg-[#0B1222]"
+      className={`${
+        fullWidth ? 'grid w-full grid-cols-3 gap-0.5' : 'inline-flex items-center'
+      } rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-700/90 dark:bg-[#0B1222]`}
     >
       {OPTIONS.map((option) => {
         const Icon = option.icon;
@@ -59,7 +63,9 @@ export function ThemeSelector({
             aria-label={option.title}
             title={option.title}
             onClick={() => onChange(option.id)}
-            className={`inline-flex min-h-[30px] items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+            className={`inline-flex min-h-[30px] items-center justify-center rounded-md py-1 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+              fullWidth ? 'w-full gap-1 px-1.5' : 'gap-1.5 px-2'
+            } ${
               isActive
                 ? 'bg-white text-slate-900 shadow-xs dark:bg-blue-600 dark:text-white'
                 : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'

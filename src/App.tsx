@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, Sparkles, X } from 'lucide-react';
-import { AppHeader } from './components/AppHeader';
+import { AlertTriangle, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
+import { AppHeader, type ConnectionStatus } from './components/AppHeader';
 import { AdjustmentsView } from './components/AdjustmentsView';
 import { AuditView } from './components/AuditView';
 import { BulkImportView } from './components/BulkImportView';
@@ -13,12 +13,14 @@ import {
   type BulkImportMetaPayload,
 } from './components/ExcelImportModal';
 import { FinanceView } from './components/FinanceView';
+import { InventoryMovementsView } from './components/InventoryMovementsView';
 import { InventoryView } from './components/InventoryView';
 import { LoginModal } from './components/LoginModal';
 import { PublicCatalogView } from './components/PublicCatalogView';
 import { PurchasesView } from './components/PurchasesView';
 import { ReceivablesView } from './components/ReceivablesView';
 import { ReportsView } from './components/ReportsView';
+import { RestockAdvisorView } from './components/RestockAdvisorView';
 import { ReturnsView } from './components/ReturnsView';
 import { SalesView } from './components/SalesView';
 import { Sidebar } from './components/Sidebar';
@@ -192,8 +194,80 @@ export default function App() {
   const [loginToast, setLoginToast] = useState<string | null>(null);
   const [restrictedToast, setRestrictedToast] = useState<string | null>(null);
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
+  const [isBrowserOnline, setIsBrowserOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true,
+  );
+  const [isPoorNetwork, setIsPoorNetwork] = useState<boolean>(() => {
+    if (typeof navigator === 'undefined') return false;
+    const conn = (
+      navigator as unknown as {
+        connection?: { effectiveType?: string; downlink?: number };
+      }
+    ).connection;
+    if (!conn) return false;
+    return (
+      conn.effectiveType === '2g' ||
+      conn.effectiveType === 'slow-2g' ||
+      (typeof conn.downlink === 'number' &&
+        conn.downlink > 0 &&
+        conn.downlink < 0.5)
+    );
+  });
   const { themePreference, resolvedTheme, setThemePreference } =
     useThemePreference({ forceSystemTheme: isPublicCatalogRoute });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    type NetworkInfoLike = {
+      effectiveType?: string;
+      downlink?: number;
+      addEventListener?: (type: string, listener: () => void) => void;
+      removeEventListener?: (type: string, listener: () => void) => void;
+    };
+
+    const navConn = (
+      navigator as unknown as { connection?: NetworkInfoLike }
+    ).connection;
+
+    const evaluateNetworkState = () => {
+      setIsBrowserOnline(
+        typeof navigator !== 'undefined' ? navigator.onLine : true,
+      );
+      if (!navConn) {
+        setIsPoorNetwork(false);
+        return;
+      }
+      const poor =
+        navConn.effectiveType === '2g' ||
+        navConn.effectiveType === 'slow-2g' ||
+        (typeof navConn.downlink === 'number' &&
+          navConn.downlink > 0 &&
+          navConn.downlink < 0.5);
+      setIsPoorNetwork(poor);
+    };
+
+    const handleOnline = () => evaluateNetworkState();
+    const handleOffline = () => setIsBrowserOnline(false);
+
+    evaluateNetworkState();
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    navConn?.addEventListener?.('change', evaluateNetworkState);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      navConn?.removeEventListener?.('change', evaluateNetworkState);
+    };
+  }, []);
+
+  const isSynced = dbError === null && !isHydratingDb;
+  const connectionStatus: ConnectionStatus = !isBrowserOnline
+    ? 'offline'
+    : !isSynced || isPoorNetwork
+      ? 'poor'
+      : 'online';
 
   useEffect(() => {
     document.title =
@@ -1210,6 +1284,47 @@ export default function App() {
     return { ok: true };
   };
 
+  const handleBulkRegisterTransitBatches = async (payload: {
+    batches: RegisterImportBatchInput[];
+    importRecord: BulkImportRecord;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!checkAdminPermission('Cargas Masivas de Datos')) {
+      return {
+        ok: false,
+        error: 'Acceso restringido: Solo Administrador Principal (Jesús César)',
+      };
+    }
+    const opKey = `bulk-transit-${payload.importRecord.id}`;
+    return runAtomicErpOperation(opKey, (current) => {
+      let working = current;
+      for (const batchInput of payload.batches) {
+        const res = registerImportBatch(working, {
+          ...batchInput,
+          totalFreightCost: 0,
+          isDirectReception: false,
+          actorName: batchInput.actorName ?? currentUser?.name,
+        });
+        if (!res.ok) {
+          return {
+            ok: false,
+            error: `Lote "${batchInput.referenceName}": ${res.error ?? 'Error al registrar pedido En Tránsito.'}`,
+            state: current,
+          };
+        }
+        working = res.state;
+      }
+      return {
+        ok: true,
+        state: {
+          ...working,
+          bulkImports: [payload.importRecord, ...(working.bulkImports ?? [])],
+          userPurgedEmpty: false,
+          isExplicitDemo: false,
+        },
+      };
+    });
+  };
+
   const handlePurgeGhostData = async () => {
     if (!checkAdminPermission('Borrado de Fábrica y Purgado')) return;
     const clean = await purgeAllDataInFirebase(
@@ -1350,6 +1465,24 @@ export default function App() {
             </button>
           </div>
         )}
+        {connectionStatus === 'offline' && (
+          <div
+            role="status"
+            aria-live="assertive"
+            data-testid="offline-connection-banner"
+            className={`fixed right-5 z-50 flex items-center gap-2.5 rounded-xl border border-red-500/45 bg-[#1f0a0a]/95 backdrop-blur-md px-4 py-3 text-xs text-red-100 shadow-2xl transition-all duration-300 animate-in fade-in slide-in-from-top-2 ${
+              loginToast ? 'top-20' : 'top-5'
+            }`}
+          >
+            <WifiOff className="h-4 w-4 text-red-400 shrink-0" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="font-bold text-red-100 leading-tight">Sin conexión</p>
+              <p className="mt-0.5 text-[11px] font-medium text-red-200/85 leading-snug">
+                No hay acceso a internet · Verifica tu red para sincronizar
+              </p>
+            </div>
+          </div>
+        )}
         {restrictedToast && (
           <div
             role="alert"
@@ -1439,6 +1572,24 @@ export default function App() {
           </button>
         </div>
       )}
+      {connectionStatus === 'offline' && (
+        <div
+          role="status"
+          aria-live="assertive"
+          data-testid="offline-connection-banner"
+          className={`fixed right-5 z-50 flex items-center gap-2.5 rounded-xl border border-red-500/45 bg-[#1f0a0a]/95 backdrop-blur-md px-4 py-3 text-xs text-red-100 shadow-2xl transition-all duration-300 animate-in fade-in slide-in-from-top-2 ${
+            loginToast ? 'top-20' : 'top-5'
+          }`}
+        >
+          <WifiOff className="h-4 w-4 text-red-400 shrink-0" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="font-bold text-red-100 leading-tight">Sin conexión</p>
+            <p className="mt-0.5 text-[11px] font-medium text-red-200/85 leading-snug">
+              No hay acceso a internet · Verifica tu red para sincronizar
+            </p>
+          </div>
+        </div>
+      )}
       {restrictedToast && (
         <div
           role="alert"
@@ -1462,8 +1613,10 @@ export default function App() {
         isCollapsed={sidebarCollapsed}
         mobileOpen={mobileSidebarOpen}
         currentUser={currentUser}
-        isSynced={dbError === null && !isHydratingDb}
+        isSynced={isSynced}
         storeName={generalConfig.brandIdentity.storeName}
+        themePreference={themePreference}
+        onChangeThemePreference={setThemePreference}
         onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         onSelectSubModule={handleSelectSubModule}
@@ -1475,15 +1628,13 @@ export default function App() {
           moduleLabel={breadcrumb.moduleLabel}
           subModuleLabel={breadcrumb.subModuleLabel}
           currentUser={currentUser}
+          connectionStatus={connectionStatus}
           alerts={activeAlerts}
           alertThresholds={generalConfig.alertThresholds}
           seenAlertIds={effectiveSeenAlertIds}
-          themePreference={themePreference}
-          onChangeThemePreference={setThemePreference}
           onToggleAlertSeen={handleToggleAlertSeen}
           onMarkAllAlertsSeen={handleMarkAllAlertsSeen}
           onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-          onStartSale={() => setActiveSubModule('ventas-registrar')}
           onNavigateAlert={handleNavigateAlert}
           onOpenChangePassword={() => setIsChangePasswordOpen(true)}
         />
@@ -1552,7 +1703,17 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'inventario' && (
+              {activeTab === 'inventario' && activeSubModule === 'inventario-movimientos' && (
+                <InventoryMovementsView state={state} />
+              )}
+
+              {activeTab === 'inventario' && activeSubModule === 'inventario-reposicion' && (
+                <RestockAdvisorView state={state} />
+              )}
+
+              {activeTab === 'inventario' &&
+                activeSubModule !== 'inventario-movimientos' &&
+                activeSubModule !== 'inventario-reposicion' && (
                 <InventoryView
                   state={state}
                   lowStockThreshold={generalConfig.alertThresholds.lowStockThreshold}
@@ -1648,6 +1809,7 @@ export default function App() {
                   currentUserName={currentUser?.name ?? 'Admin'}
                   onApplyImportedState={handleApplyImportedState}
                   onCommitBulkState={handleCommitBulkState}
+                  onRegisterTransitImportBatches={handleBulkRegisterTransitBatches}
                   onPurgeGhostData={handlePurgeGhostData}
                 />
               )}
@@ -1692,6 +1854,9 @@ export default function App() {
                   onOpenExcelImport={() => setIsExcelModalOpen(true)}
                   onSyncRatesFromApi={syncRatesFromApi}
                   onUpdateRates={handleUpdateRates}
+                  onRestoreFullState={(restoredState) =>
+                    handleApplyImportedState(restoredState)
+                  }
                   onResetDemoData={handleResetDemoData}
                   onUpdateAuthorizedUsers={handleUpdateAuthorizedUsers}
                 />

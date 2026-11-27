@@ -7,33 +7,30 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
-  KeyRound,
   Menu,
   Package,
   RotateCcw,
-  ShoppingBag,
   X,
 } from 'lucide-react';
 import type { AlertThresholdsConfig, SubModuleId } from '../types/erp';
 import type { ERPUser } from '../utils/auth';
 import type { OperationalAlert } from '../utils/finance';
 import { getUnseenAlertCount } from '../utils/notifications';
-import type { ThemePreference } from '../utils/theme';
-import { ThemeSelector } from './ThemeSelector';
+
+export type ConnectionStatus = 'online' | 'poor' | 'offline';
 
 interface AppHeaderProps {
   moduleLabel: string;
   subModuleLabel?: string;
   currentUser?: ERPUser | null;
+  connectionStatus?: ConnectionStatus;
   alerts: OperationalAlert[];
   alertThresholds: AlertThresholdsConfig;
   seenAlertIds: string[];
-  themePreference: ThemePreference;
-  onChangeThemePreference: (next: ThemePreference) => void;
   onToggleAlertSeen: (alertId: string) => void;
   onMarkAllAlertsSeen: () => void;
   onOpenMobileSidebar: () => void;
-  onStartSale: () => void;
+  onStartSale?: () => void;
   onNavigateAlert: (alert: OperationalAlert) => void;
   onOpenChangePassword?: () => void;
 }
@@ -42,17 +39,14 @@ export function AppHeader({
   moduleLabel,
   subModuleLabel,
   currentUser,
+  connectionStatus = 'online',
   alerts,
   alertThresholds,
   seenAlertIds,
-  themePreference,
-  onChangeThemePreference,
   onToggleAlertSeen,
   onMarkAllAlertsSeen,
   onOpenMobileSidebar,
-  onStartSale,
   onNavigateAlert,
-  onOpenChangePassword,
 }: AppHeaderProps) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -112,6 +106,20 @@ export function AppHeader({
   const seenSet = new Set(seenAlertIds);
   const unseenCount = getUnseenAlertCount(alerts, seenAlertIds);
 
+  const connectionDotClass =
+    connectionStatus === 'offline'
+      ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]'
+      : connectionStatus === 'poor'
+        ? 'bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.75)]'
+        : 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.75)]';
+
+  const connectionLabel =
+    connectionStatus === 'offline'
+      ? 'Sin conexión'
+      : connectionStatus === 'poor'
+        ? 'Conexión débil'
+        : 'Conectado y sincronizado';
+
   const getAlertDestinationLabel = (alert: OperationalAlert): string => {
     const sub: SubModuleId | undefined = alert.targetSubModule;
     if (sub === 'ventas-cxc' || alert.kind === 'overdue_receivable') {
@@ -131,9 +139,9 @@ export function AppHeader({
         isVisible ? 'translate-y-0' : '-translate-y-full'
       }`}
     >
-      <div className="mx-auto flex h-14 sm:h-16 max-w-7xl items-center justify-between gap-2.5 sm:gap-3 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 sm:h-16 max-w-7xl items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6">
         {/* Izquierda: toggle móvil + breadcrumb dinámico */}
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-2.5">
           <button
             type="button"
             data-testid="btn-mobile-menu"
@@ -172,43 +180,59 @@ export function AppHeader({
           </nav>
         </div>
 
-        {/* Derecha: Apariencia (desktop/tablet), Cambiar mi contraseña, Nueva Venta y Notificaciones */}
+        {/* Derecha: Estado de conexión + Usuario y Notificaciones */}
         <div
           ref={popoverRef}
-          className="relative flex items-center gap-2 sm:gap-2.5 shrink-0"
+          className="relative flex items-center gap-1.5 sm:gap-2.5 shrink-0"
         >
-          <div className="hidden sm:flex items-center">
-            <ThemeSelector
-              value={themePreference}
-              onChange={onChangeThemePreference}
-              showLabels="xl"
-              testIdPrefix="theme-selector"
-            />
-          </div>
-
-          {currentUser && onOpenChangePassword && (
-            <button
-              type="button"
-              data-testid="btn-change-own-password"
-              onClick={onOpenChangePassword}
-              title={`Cambiar mi contraseña (${currentUser.email})`}
-              aria-label="Cambiar mi contraseña"
-              className="inline-flex min-h-[38px] sm:min-h-[40px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 sm:px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-500/45 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-            >
-              <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
-              <span className="hidden lg:inline">Cambiar mi contraseña</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            data-testid="btn-header-make-sale"
-            onClick={onStartSale}
-            className="inline-flex min-h-[38px] sm:min-h-[40px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 sm:px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.98] whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          <div
+            data-testid="header-connection-status"
+            data-status={connectionStatus}
+            title={
+              currentUser?.name
+                ? `${currentUser.name} · ${connectionLabel}`
+                : connectionLabel
+            }
+            aria-label={
+              currentUser?.name
+                ? `${currentUser.name}, ${connectionLabel}`
+                : connectionLabel
+            }
+            className={`inline-flex min-h-[38px] sm:min-h-[40px] items-center gap-2 rounded-lg border px-2.5 sm:px-3 py-1.5 text-xs transition-colors ${
+              connectionStatus === 'offline'
+                ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-200'
+                : connectionStatus === 'poor'
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200'
+            }`}
           >
-            <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Nueva Venta</span>
-          </button>
+            <span
+              data-testid="header-connection-dot"
+              className={`h-2.5 w-2.5 rounded-full shrink-0 ${connectionDotClass}`}
+            />
+            {connectionStatus !== 'online' && (
+              <span
+                data-testid="header-connection-label"
+                className="text-[10px] sm:text-[11px] font-semibold whitespace-nowrap"
+              >
+                {connectionStatus === 'offline'
+                  ? 'Sin conexión'
+                  : 'Conexión débil'}
+              </span>
+            )}
+            {currentUser?.name && (
+              <span
+                data-testid="header-active-user-name"
+                className={`font-semibold truncate ${
+                  connectionStatus !== 'online'
+                    ? 'hidden md:inline max-w-[140px]'
+                    : 'max-w-[96px] sm:max-w-[160px]'
+                }`}
+              >
+                {currentUser.name}
+              </span>
+            )}
+          </div>
 
           <button
             type="button"
@@ -412,19 +436,6 @@ export function AppHeader({
             </div>
           )}
         </div>
-      </div>
-
-      {/* Barra compacta de apariencia accesible en móvil (<640px) */}
-      <div className="flex sm:hidden items-center justify-between border-t border-slate-200/80 dark:border-slate-800/80 px-4 py-1.5">
-        <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-          Apariencia
-        </span>
-        <ThemeSelector
-          value={themePreference}
-          onChange={onChangeThemePreference}
-          showLabels="always"
-          testIdPrefix="theme-selector-mobile"
-        />
       </div>
     </header>
   );

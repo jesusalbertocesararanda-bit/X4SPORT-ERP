@@ -11,13 +11,18 @@ import {
   ShoppingBag,
   SlidersHorizontal,
   Trash2,
+  Truck,
   Upload,
   X,
 } from 'lucide-react';
 import type {
   AppState,
   BulkImportRecord,
+  JerseySize,
+  JerseyVersion,
   MatrixConfigParams,
+  PurchaseFundingSource,
+  ShippingType,
 } from '../types/erp';
 import {
   applyBulkUploadPreview,
@@ -31,7 +36,15 @@ import {
   parseExcelFileWithSheetJS,
   type ExcelImportPreview,
 } from '../utils/excelImport';
-import { formatUSD, formatUSDT, getTodayLocalDateIso } from '../utils/finance';
+import {
+  extractTeamFromModel,
+  formatUSD,
+  formatUSDT,
+  getTodayLocalDateIso,
+  registerImportBatch,
+  round2,
+  type RegisterImportBatchInput,
+} from '../utils/finance';
 import type { BulkImportMetaPayload } from './ExcelImportModal';
 
 interface BulkImportViewProps {
@@ -43,7 +56,463 @@ interface BulkImportViewProps {
     importMeta?: BulkImportMetaPayload,
   ) => Promise<void>;
   onCommitBulkState?: (newState: AppState) => Promise<{ ok: boolean; error?: string }>;
+  onRegisterTransitImportBatches?: (payload: {
+    batches: RegisterImportBatchInput[];
+    importRecord: BulkImportRecord;
+  }) => Promise<{ ok: boolean; error?: string }>;
   onPurgeGhostData?: () => Promise<void>;
+}
+
+interface TransitValidatedRow {
+  rowNumber: number;
+  status: 'valido' | 'duplicado' | 'error';
+  statusReason: string;
+  date: string;
+  referenceName: string;
+  shippingType: ShippingType;
+  supplier: string;
+  team: string;
+  model: string;
+  version: JerseyVersion;
+  player: string;
+  size: JerseySize;
+  quantity: number;
+  factoryUnitCost: number;
+  merchandiseTotalUsd: number;
+  batchFreightEstimateHintUsd: number;
+  salePrice?: number;
+  usdtRate: number;
+  dedupKey: string;
+}
+
+interface TransitUploadPreview {
+  fileName: string;
+  sheetName: string;
+  detectedColumns: string[];
+  missingRequiredColumns: string[];
+  rows: TransitValidatedRow[];
+  validCount: number;
+  duplicateCount: number;
+  errorCount: number;
+  validUnits: number;
+  validMerchandiseUsd: number;
+  estimatedFreightPendingUsd: number;
+  batchCount: number;
+}
+
+function normTransitToken(val: unknown): string {
+  return String(val ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function parseTransitNumber(val: unknown): number | null {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : null;
+  const cleaned = String(val ?? '')
+    .replace(/[$\s]/g, '')
+    .replace(',', '.')
+    .trim();
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseTransitDateIso(val: unknown, fallback: string): string {
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return val.toISOString().slice(0, 10);
+  }
+  const s = String(val ?? '').trim();
+  const isoMatch = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+  if (isoMatch) return isoMatch[1];
+  const dmyMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(s);
+  if (dmyMatch) {
+    const [, d, m, y] = dmyMatch;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  if (typeof val === 'number' && val > 20000 && val < 80000) {
+    const epoch = new Date(Date.UTC(1899, 11, 30) + val * 86_400_000);
+    if (!Number.isNaN(epoch.getTime())) return epoch.toISOString().slice(0, 10);
+  }
+  return fallback;
+}
+
+function findTransitColIndex(headers: string[], aliases: string[]): number {
+  const normHeaders = headers.map((h) => normTransitToken(h));
+  for (const alias of aliases) {
+    const exact = normHeaders.indexOf(normTransitToken(alias));
+    if (exact >= 0) return exact;
+  }
+  for (const alias of aliases) {
+    const partial = normHeaders.findIndex((h) =>
+      h.includes(normTransitToken(alias)),
+    );
+    if (partial >= 0) return partial;
+  }
+  return -1;
+}
+
+function parseTransitVersion(raw: unknown, model = ''): JerseyVersion {
+  const r = normTransitToken(raw);
+  const combined = `${r} ${normTransitToken(model)}`;
+  if (r.includes('retro') || (!r && combined.includes('retro'))) {
+    return 'Retro';
+  }
+  if (r.includes('player') || r.includes('jugador')) {
+    return 'Player';
+  }
+  return 'Fans';
+}
+
+function parseTransitSize(raw: unknown): JerseySize {
+  const clean = String(raw ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+  if (!clean) return 'M';
+  if (clean === '2XL' || clean === 'XXL') return 'XXL';
+  return clean as JerseySize;
+}
+
+async function tryParseTransitComprasPreview(
+  file: File,
+  state: AppState,
+): Promise<TransitUploadPreview | null> {
+  if (typeof window === 'undefined' || !window.XLSX) return null;
+  const buffer = await file.arrayBuffer();
+  const workbook = window.XLSX.read(buffer, {
+    type: 'array',
+    cellDates: true,
+  });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) return null;
+
+  const ws = workbook.Sheets[firstSheetName];
+  const matrix = window.XLSX.utils.sheet_to_json(ws, {
+    header: 1,
+    defval: '',
+    raw: true,
+  }) as unknown[][];
+
+  let headerRowIdx = -1;
+  for (let i = 0; i < Math.min(matrix.length, 20); i++) {
+    const row = matrix[i] ?? [];
+    const nonEmpty = row.filter((c) => String(c ?? '').trim() !== '');
+    if (nonEmpty.length < 3) continue;
+    const joined = nonEmpty.map((c) => normTransitToken(c)).join(' ');
+    if (
+      joined.includes('modelo') ||
+      joined.includes('equipo') ||
+      joined.includes('producto') ||
+      joined.includes('talla') ||
+      joined.includes('cantidad')
+    ) {
+      headerRowIdx = i;
+      break;
+    }
+  }
+  if (headerRowIdx < 0) return null;
+
+  const headers = (matrix[headerRowIdx] ?? []).map((h) => String(h ?? '').trim());
+  const dataRows = matrix.slice(headerRowIdx + 1);
+
+  const colStatus = findTransitColIndex(headers, ['estado', 'estatus', 'status']);
+  if (colStatus < 0) return null;
+
+  const hasTransitRow = dataRows.some((row) => {
+    if (!row || row.every((c) => String(c ?? '').trim() === '')) return false;
+    return normTransitToken(row[colStatus]).includes('transit');
+  });
+  if (!hasTransitRow) {
+    return null;
+  }
+
+  const colDate = findTransitColIndex(headers, ['fecha', 'date']);
+  const colRef = findTransitColIndex(headers, [
+    'referencia / lote',
+    'lote / referencia',
+    'referencia',
+    'lote',
+    'ref',
+  ]);
+  const colShip = findTransitColIndex(headers, [
+    'modalidad envio',
+    'modalidad de envio',
+    'tipo importacion',
+    'modalidad',
+    'tipo envio',
+    'tipo',
+  ]);
+  const colSupplier = findTransitColIndex(headers, [
+    'proveedor',
+    'supplier',
+    'origen',
+  ]);
+  const colModel = findTransitColIndex(headers, [
+    'equipo / producto',
+    'equipo/producto',
+    'equipo / modelo',
+    'modelo',
+    'producto',
+    'model',
+  ]);
+  const colVer = findTransitColIndex(headers, ['version', 'versión']);
+  const colPlayer = findTransitColIndex(headers, [
+    'jugador / dorsal',
+    'jugador',
+    'dorsal',
+  ]);
+  const colSize = findTransitColIndex(headers, ['talla', 'size']);
+  const colQty = findTransitColIndex(headers, ['cantidad', 'cant', 'qty']);
+  const colFactory = findTransitColIndex(headers, [
+    'costo unitario base',
+    'costo unit. base',
+    'costo fabrica',
+    'costo unitario',
+    'costo',
+    'factory',
+  ]);
+  const colBatchFreight = findTransitColIndex(headers, [
+    'envio estimado referencia',
+    'envio referencia',
+    'envio estimado lote',
+    'flete estimado lote',
+    'envio estimado',
+    'flete estimado',
+  ]);
+  const colUnitFreight = findTransitColIndex(headers, [
+    'flete unit',
+    'flete unitario',
+  ]);
+  const colSalePrice = findTransitColIndex(headers, ['precio venta', 'pvp']);
+  const colUsdt = findTransitColIndex(headers, ['tasa usdt', 'usdt']);
+
+  const missingRequiredColumns: string[] = [];
+  if (colModel < 0) missingRequiredColumns.push('Equipo / Producto (Modelo)');
+  if (colSize < 0) missingRequiredColumns.push('Talla');
+  if (colQty < 0) missingRequiredColumns.push('Cantidad');
+  if (colFactory < 0) missingRequiredColumns.push('Costo Unitario Base (USDT)');
+
+  if (missingRequiredColumns.length > 0) {
+    return {
+      fileName: file.name,
+      sheetName: firstSheetName,
+      detectedColumns: headers.filter(Boolean),
+      missingRequiredColumns,
+      rows: [],
+      validCount: 0,
+      duplicateCount: 0,
+      errorCount: 0,
+      validUnits: 0,
+      validMerchandiseUsd: 0,
+      estimatedFreightPendingUsd: 0,
+      batchCount: 0,
+    };
+  }
+
+  // Backup freight check in Resumen_Financiero if available
+  let summaryFreightFallback = 0;
+  const summaryWs = workbook.Sheets['Resumen_Financiero'];
+  if (summaryWs) {
+    const summaryMatrix = window.XLSX.utils.sheet_to_json(summaryWs, {
+      header: 1,
+      defval: '',
+      raw: true,
+    }) as unknown[][];
+    for (const sRow of summaryMatrix) {
+      const label = normTransitToken(sRow?.[0]);
+      if (label.includes('envio estimado')) {
+        const val = parseTransitNumber(sRow?.[1]);
+        if (val !== null && val > 0) {
+          summaryFreightFallback = round2(val);
+        }
+      }
+    }
+  }
+
+  const today = getTodayLocalDateIso();
+  const existingBatchKeys = new Set<string>();
+  (state.purchaseBatches ?? []).forEach((b) => {
+    if (b.clientOperationId) {
+      existingBatchKeys.add(normTransitToken(b.clientOperationId));
+    }
+    existingBatchKeys.add(
+      `${normTransitToken(b.referenceName)}|${b.entryDate}|${normTransitToken(b.shippingType)}`,
+    );
+    b.items.forEach((it) => {
+      existingBatchKeys.add(
+        `line:${b.entryDate}|${normTransitToken(b.referenceName)}|${normTransitToken(it.model)}|${normTransitToken(it.version)}|${normTransitToken(it.size)}|${it.quantity}`,
+      );
+    });
+  });
+
+  const seenLineKeys = new Set<string>();
+  let runningCash = state.cashOnHand;
+  const rows: TransitValidatedRow[] = [];
+
+  dataRows.forEach((rawRow, idx) => {
+    if (!rawRow || rawRow.every((c) => String(c ?? '').trim() === '')) return;
+    const rawModel = String(rawRow[colModel] ?? '').trim();
+    if (normTransitToken(rawModel).startsWith('total')) return;
+
+    const statusToken = normTransitToken(rawRow[colStatus]);
+    if (statusToken && !statusToken.includes('transit')) {
+      return;
+    }
+
+    const rowNumber = headerRowIdx + idx + 2;
+    const date = colDate >= 0 ? parseTransitDateIso(rawRow[colDate], today) : today;
+    const referenceName =
+      colRef >= 0 && String(rawRow[colRef] ?? '').trim()
+        ? String(rawRow[colRef]).trim()
+        : `Pedido En Tránsito ${date}`;
+    const shippingType: ShippingType =
+      colShip >= 0 && normTransitToken(rawRow[colShip]).includes('marit')
+        ? 'Marítimo'
+        : 'Aéreo';
+    const supplier =
+      colSupplier >= 0 && String(rawRow[colSupplier] ?? '').trim()
+        ? String(rawRow[colSupplier]).trim()
+        : '1688 / Alibaba';
+
+    const playerRaw =
+      colPlayer >= 0 ? String(rawRow[colPlayer] ?? '').trim() : '';
+    const model =
+      playerRaw &&
+      playerRaw !== '—' &&
+      rawModel &&
+      !normTransitToken(rawModel).includes(normTransitToken(playerRaw))
+        ? `${rawModel} · ${playerRaw}`
+        : rawModel;
+
+    const version =
+      colVer >= 0 ? parseTransitVersion(rawRow[colVer], model) : 'Fans';
+    const size = parseTransitSize(rawRow[colSize]);
+    const qtyRaw = parseTransitNumber(rawRow[colQty]);
+    const quantity = qtyRaw !== null ? Math.floor(qtyRaw) : 0;
+    const factoryUnitCost = round2(parseTransitNumber(rawRow[colFactory]) ?? 0);
+    const merchandiseTotalUsd = round2(factoryUnitCost * Math.max(0, quantity));
+
+    const batchFreightColVal =
+      colBatchFreight >= 0
+        ? round2(Math.max(0, parseTransitNumber(rawRow[colBatchFreight]) ?? 0))
+        : 0;
+    const unitFreightVal =
+      colUnitFreight >= 0
+        ? round2(Math.max(0, parseTransitNumber(rawRow[colUnitFreight]) ?? 0))
+        : 0;
+    const batchFreightEstimateHintUsd =
+      batchFreightColVal > 0
+        ? batchFreightColVal
+        : round2(unitFreightVal * Math.max(0, quantity));
+
+    const salePrice =
+      colSalePrice >= 0 ? parseTransitNumber(rawRow[colSalePrice]) ?? undefined : undefined;
+    const usdtRate =
+      colUsdt >= 0
+        ? parseTransitNumber(rawRow[colUsdt]) ?? state.exchangeRates.usdt
+        : state.exchangeRates.usdt;
+
+    const lineDedupKey = `line:${date}|${normTransitToken(referenceName)}|${normTransitToken(model)}|${normTransitToken(version)}|${normTransitToken(size)}|${quantity}`;
+    const batchKey = `${normTransitToken(referenceName)}|${date}|${normTransitToken(shippingType)}`;
+
+    let status: 'valido' | 'duplicado' | 'error' = 'valido';
+    let statusReason = 'Listo para registrar En Tránsito';
+
+    if (!rawModel) {
+      status = 'error';
+      statusReason = 'Equipo / Modelo vacío';
+    } else if (quantity <= 0) {
+      status = 'error';
+      statusReason = 'Cantidad debe ser > 0';
+    } else if (factoryUnitCost <= 0) {
+      status = 'error';
+      statusReason = 'Precio unitario base debe ser > $0.00';
+    } else if (
+      existingBatchKeys.has(lineDedupKey) ||
+      existingBatchKeys.has(batchKey) ||
+      seenLineKeys.has(lineDedupKey)
+    ) {
+      status = 'duplicado';
+      statusReason = 'Lote / línea ya registrado previamente';
+    } else if (merchandiseTotalUsd > runningCash) {
+      status = 'error';
+      statusReason = `Caja insuficiente ($${runningCash.toFixed(2)} disponibles para mercancía $${merchandiseTotalUsd.toFixed(2)})`;
+    } else {
+      runningCash = round2(runningCash - merchandiseTotalUsd);
+      seenLineKeys.add(lineDedupKey);
+    }
+
+    rows.push({
+      rowNumber,
+      status,
+      statusReason,
+      date,
+      referenceName,
+      shippingType,
+      supplier,
+      team: extractTeamFromModel(model),
+      model,
+      version,
+      player: playerRaw || '—',
+      size,
+      quantity,
+      factoryUnitCost,
+      merchandiseTotalUsd,
+      batchFreightEstimateHintUsd,
+      salePrice: salePrice && salePrice > 0 ? round2(salePrice) : undefined,
+      usdtRate: round2(usdtRate),
+      dedupKey: `bulk-transit-${batchKey}`,
+    });
+  });
+
+  const validRows = rows.filter((r) => r.status === 'valido');
+  const duplicateRows = rows.filter((r) => r.status === 'duplicado');
+  const errorRows = rows.filter((r) => r.status === 'error');
+
+  // Agrupar envío estimado pendiente por lote
+  const groupKeys = new Set<string>();
+  const batchFreightByGroup = new Map<string, number>();
+  for (const r of validRows) {
+    const gKey = `${r.referenceName}|${r.date}|${r.shippingType}`;
+    groupKeys.add(gKey);
+    if (colBatchFreight >= 0) {
+      const prev = batchFreightByGroup.get(gKey) ?? 0;
+      if (r.batchFreightEstimateHintUsd > prev) {
+        batchFreightByGroup.set(gKey, r.batchFreightEstimateHintUsd);
+      }
+    } else {
+      batchFreightByGroup.set(
+        gKey,
+        round2((batchFreightByGroup.get(gKey) ?? 0) + r.batchFreightEstimateHintUsd),
+      );
+    }
+  }
+
+  let estimatedFreightPendingUsd = round2(
+    Array.from(batchFreightByGroup.values()).reduce((s, v) => s + v, 0),
+  );
+  if (estimatedFreightPendingUsd <= 0 && summaryFreightFallback > 0 && validRows.length > 0) {
+    estimatedFreightPendingUsd = summaryFreightFallback;
+  }
+
+  return {
+    fileName: file.name,
+    sheetName: firstSheetName,
+    detectedColumns: headers.filter(Boolean),
+    missingRequiredColumns,
+    rows,
+    validCount: validRows.length,
+    duplicateCount: duplicateRows.length,
+    errorCount: errorRows.length,
+    validUnits: validRows.reduce((s, r) => s + r.quantity, 0),
+    validMerchandiseUsd: round2(
+      validRows.reduce((s, r) => s + r.merchandiseTotalUsd, 0),
+    ),
+    estimatedFreightPendingUsd,
+    batchCount: groupKeys.size,
+  };
 }
 
 interface CardDefinition {
@@ -123,6 +592,7 @@ export function BulkImportView({
   currentUserName = 'Admin',
   onApplyImportedState,
   onCommitBulkState,
+  onRegisterTransitImportBatches,
   onPurgeGhostData,
 }: BulkImportViewProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -133,6 +603,12 @@ export function BulkImportView({
 
   const [incrementalPreview, setIncrementalPreview] =
     useState<BulkUploadPreview | null>(null);
+  const [transitPreview, setTransitPreview] =
+    useState<TransitUploadPreview | null>(null);
+  const [transitFundingSource, setTransitFundingSource] =
+    useState<PurchaseFundingSource>(() =>
+      (state.funds?.replacement ?? 0) > 0 ? 'replacement' : 'cashOnHand',
+    );
 
   const [fullBackupFileName, setFullBackupFileName] = useState<string>('');
   const [fullBackupPreview, setFullBackupPreview] =
@@ -199,6 +675,7 @@ export function BulkImportView({
     setIsParsing(true);
     setFeedback(null);
     setIncrementalPreview(null);
+    setTransitPreview(null);
     setFullBackupPreview(null);
     setPendingFullState(null);
 
@@ -221,6 +698,17 @@ export function BulkImportView({
         setFullBackupPreview(result.preview);
         setPendingFullState(result.state);
       } else {
+        if (activeUploadKind === 'compras') {
+          const parsedTransit = await tryParseTransitComprasPreview(file, state);
+          if (parsedTransit) {
+            setTransitFundingSource(
+              (state.funds?.replacement ?? 0) > 0 ? 'replacement' : 'cashOnHand',
+            );
+            setTransitPreview(parsedTransit);
+            return;
+          }
+        }
+
         const result = await parseBulkUploadFileWithSheetJS(
           activeUploadKind,
           file,
@@ -243,6 +731,7 @@ export function BulkImportView({
 
   const clearPreview = () => {
     setIncrementalPreview(null);
+    setTransitPreview(null);
     setFullBackupPreview(null);
     setPendingFullState(null);
     setFullBackupFileName('');
@@ -294,6 +783,149 @@ export function BulkImportView({
           err instanceof Error
             ? err.message
             : 'Error al confirmar la carga masiva en Firebase.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleConfirmTransitSave = async () => {
+    if (!transitPreview) return;
+    const validRows = transitPreview.rows.filter((r) => r.status === 'valido');
+    if (validRows.length === 0) {
+      setFeedback({
+        type: 'error',
+        text: 'No hay filas válidas En Tránsito para registrar.',
+      });
+      return;
+    }
+
+    setIsSaving(true);
+    setFeedback(null);
+    try {
+      const groups = new Map<string, TransitValidatedRow[]>();
+      for (const r of validRows) {
+        const key = `${r.referenceName}|${r.date}|${r.shippingType}`;
+        const list = groups.get(key) ?? [];
+        list.push(r);
+        groups.set(key, list);
+      }
+
+      const batches: RegisterImportBatchInput[] = [];
+      for (const [, items] of groups.entries()) {
+        const first = items[0];
+        batches.push({
+          entryDate: first.date,
+          referenceName: first.referenceName,
+          shippingType: first.shippingType,
+          supplier: first.supplier,
+          totalFreightCost: 0,
+          fundingSource: transitFundingSource,
+          retailPricingMode: 'per-item',
+          isDirectReception: false,
+          usdtRate: first.usdtRate,
+          clientOperationId: first.dedupKey,
+          actorName: currentUserName,
+          items: items.map((it) => ({
+            team: it.team,
+            model: it.model,
+            version: it.version,
+            size: it.size,
+            quantity: it.quantity,
+            factoryUnitCost: it.factoryUnitCost,
+            salePrice: it.salePrice,
+          })),
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      const totalUnits = transitPreview.validUnits;
+      const totalMerchUsd = transitPreview.validMerchandiseUsd;
+      const pendingShipUsd = transitPreview.estimatedFreightPendingUsd;
+
+      const importRecord: BulkImportRecord = {
+        id: `imp-transit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        fileName: transitPreview.fileName,
+        importDate: nowIso.slice(0, 10),
+        userName: currentUserName || 'Admin',
+        sheetsDetected: [transitPreview.sheetName || 'Pedido En Tránsito'],
+        comprasRows: validRows.length,
+        comprasUnits: totalUnits,
+        comprasCostUsd: totalMerchUsd,
+        ventasRows: 0,
+        ventasUnits: 0,
+        ventasRevenueUsd: 0,
+        resultingSkusCount: state.inventory.length,
+        resultingStockUnits: state.inventory.reduce((s, i) => s + i.stock, 0),
+        cashOnHandUsd: round2(state.cashOnHand - totalMerchUsd),
+        usdtRate: round2(state.exchangeRates.usdt),
+        bcvRate: round2(state.exchangeRates.bcv),
+        status: 'Aplicada',
+        notes: `En Tránsito: ${totalUnits} prendas (${batches.length} lote/s). Mercancía descontada hoy ${formatUSD(totalMerchUsd)}; envío est. ${formatUSD(pendingShipUsd)} pendiente al recibir.`,
+        createdAt: nowIso,
+      };
+
+      if (onRegisterTransitImportBatches) {
+        const res = await onRegisterTransitImportBatches({
+          batches,
+          importRecord,
+        });
+        if (!res.ok) {
+          setFeedback({
+            type: 'error',
+            text:
+              res.error ??
+              'No se pudo registrar el pedido En Tránsito en Firebase.',
+          });
+          return;
+        }
+      } else {
+        let working = state;
+        for (const batchInput of batches) {
+          const res = registerImportBatch(working, batchInput);
+          if (!res.ok) {
+            setFeedback({
+              type: 'error',
+              text:
+                res.error ??
+                'No se pudo registrar el lote En Tránsito.',
+            });
+            return;
+          }
+          working = res.state;
+        }
+        const nextState: AppState = {
+          ...working,
+          bulkImports: [importRecord, ...(working.bulkImports ?? [])],
+        };
+        if (onCommitBulkState) {
+          const commitRes = await onCommitBulkState(nextState);
+          if (!commitRes.ok) {
+            setFeedback({
+              type: 'error',
+              text:
+                commitRes.error ??
+                'Error al guardar el lote En Tránsito en Firebase.',
+            });
+            return;
+          }
+        } else {
+          await onApplyImportedState(nextState);
+        }
+      }
+
+      setFeedback({
+        type: 'success',
+        text: `Pedido En Tránsito registrado en Compras (${totalUnits} prendas · Mercancía descontada hoy: ${formatUSD(totalMerchUsd)}). Envío estimado ${formatUSD(pendingShipUsd)} pendiente por liquidar al confirmar recepción en Guacara.`,
+      });
+      setTransitPreview(null);
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'Error al registrar el pedido En Tránsito en Firebase.',
       });
     } finally {
       setIsSaving(false);
@@ -743,6 +1375,265 @@ export function BulkImportView({
                 {isSaving
                   ? 'Guardando en Firebase...'
                   : 'Confirmar y Guardar en Firebase (Solo Válidos)'}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* En Tránsito Dedicated Preview Panel */}
+      {transitPreview && (
+        <section
+          aria-labelledby="transit-preview-title"
+          data-testid="bulk-transit-preview-panel"
+          className="rounded-2xl border border-blue-500/35 bg-[#0D1526] p-5 sm:p-6 space-y-5"
+        >
+          <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Truck className="h-5 w-5 text-blue-400" aria-hidden="true" />
+                <h2
+                  id="transit-preview-title"
+                  className="font-display text-lg font-bold text-white"
+                >
+                  Vista Previa · Registro de Pedido EN TRÁNSITO
+                </h2>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                Archivo:{' '}
+                <span className="font-semibold text-slate-200">
+                  {transitPreview.fileName}
+                </span>{' '}
+                · Pestaña:{' '}
+                <span className="font-semibold text-slate-200">
+                  {transitPreview.sheetName}
+                </span>
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={clearPreview}
+              className="inline-flex items-center gap-1.5 self-start rounded-xl border border-slate-700 bg-[#080E1C] px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+              Descartar vista previa
+            </button>
+          </div>
+
+          {transitPreview.missingRequiredColumns.length > 0 && (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
+              <span>
+                Faltan columnas obligatorias en el archivo:{' '}
+                <strong>
+                  {transitPreview.missingRequiredColumns.join(', ')}
+                </strong>
+                .
+              </span>
+            </div>
+          )}
+
+          {/* Resumen Financiero En Tránsito: Mercancía hoy vs Envío pendiente al recibir */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-blue-500/35 bg-blue-500/10 p-4">
+              <span className="text-[11px] font-semibold text-blue-200">
+                Prendas a registrar En Tránsito
+              </span>
+              <p
+                data-testid="transit-preview-units"
+                className="font-mono-num mt-1 text-2xl font-bold text-white"
+              >
+                {transitPreview.validUnits} prendas
+              </p>
+              <p className="mt-0.5 text-[11px] text-blue-200/80">
+                {transitPreview.validCount} línea(s) válidas en {transitPreview.batchCount} lote(s) · No ingresan a inventario hasta recibir en Compras
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 p-4">
+              <span className="text-[11px] font-semibold text-emerald-200">
+                Mercancía a descontar HOY (sin envío)
+              </span>
+              <p
+                data-testid="transit-preview-merchandise"
+                className="font-mono-num mt-1 text-2xl font-bold text-emerald-300"
+              >
+                {formatUSD(transitPreview.validMerchandiseUsd)}
+              </p>
+              <div className="mt-2">
+                <label
+                  htmlFor="transit-funding-source"
+                  className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-200/90 mb-1"
+                >
+                  Origen de fondos a descontar hoy
+                </label>
+                <select
+                  id="transit-funding-source"
+                  data-testid="select-transit-funding-source"
+                  value={transitFundingSource}
+                  onChange={(e) =>
+                    setTransitFundingSource(
+                      e.target.value as PurchaseFundingSource,
+                    )
+                  }
+                  className="w-full rounded-lg border border-emerald-500/40 bg-[#080E1C] px-2.5 py-1.5 text-xs font-semibold text-white"
+                >
+                  <option value="replacement">
+                    Fondo de Reposición ({formatUSD(state.funds?.replacement ?? 0)})
+                  </option>
+                  <option value="growthReinvestment">
+                    Fondo de Reinversión ({formatUSD(state.funds?.growthReinvestment ?? 0)})
+                  </option>
+                  <option value="cashOnHand">
+                    Caja General ({formatUSD(state.cashOnHand)})
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-4">
+              <span className="text-[11px] font-semibold text-amber-200">
+                Envío estimado pendiente por liquidar al recibir en bodega
+              </span>
+              <p
+                data-testid="transit-preview-freight"
+                className="font-mono-num mt-1 text-2xl font-bold text-amber-300"
+              >
+                {formatUSD(transitPreview.estimatedFreightPendingUsd)}
+              </p>
+              <p className="mt-1 text-[11px] leading-snug text-amber-200/85">
+                <strong>No se descuenta hoy</strong> ni se suma al costo unitario todavía. Al confirmar recepción en <em>Compras</em> liquidarás el flete real y cualquier faltante.
+              </p>
+            </div>
+          </div>
+
+          {/* Contadores rápidos */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
+              <span className="text-[11px] text-slate-400">Válidas</span>
+              <p className="font-mono-num text-lg font-bold text-emerald-300">
+                {transitPreview.validCount}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
+              <span className="text-[11px] text-slate-400">Duplicados Omitidos</span>
+              <p className="font-mono-num text-lg font-bold text-amber-300">
+                {transitPreview.duplicateCount}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
+              <span className="text-[11px] text-slate-400">Errores</span>
+              <p className="font-mono-num text-lg font-bold text-red-300">
+                {transitPreview.errorCount}
+              </p>
+            </div>
+          </div>
+
+          {/* Tabla de filas En Tránsito */}
+          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#080E1C]">
+            <table className="w-full min-w-[740px] text-left text-xs">
+              <thead className="border-b border-slate-800 bg-[#0B1222] text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <tr>
+                  <th className="px-3 py-2.5">Fila</th>
+                  <th className="px-3 py-2.5">Fecha</th>
+                  <th className="px-3 py-2.5">Prenda / Versión / Talla</th>
+                  <th className="px-3 py-2.5">Lote / Modalidad</th>
+                  <th className="px-3 py-2.5 text-right">Uds</th>
+                  <th className="px-3 py-2.5 text-right">Unit. Base</th>
+                  <th className="px-3 py-2.5 text-right">Mercancía USDT</th>
+                  <th className="px-3 py-2.5">Estado</th>
+                  <th className="px-3 py-2.5">Validación</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/70">
+                {transitPreview.rows.map((row) => (
+                  <tr
+                    key={`${row.rowNumber}-${row.model}-${row.size}`}
+                    className="hover:bg-slate-800/30"
+                  >
+                    <td className="font-mono-num px-3 py-2.5 text-slate-400">
+                      #{row.rowNumber}
+                    </td>
+                    <td className="font-mono-num px-3 py-2.5 text-slate-300 whitespace-nowrap">
+                      {row.date}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium text-white">
+                      {row.model}{' '}
+                      <span className="text-blue-300">
+                        ({row.version} · {row.size})
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-400">
+                      {row.referenceName} · {row.shippingType}
+                    </td>
+                    <td className="font-mono-num px-3 py-2.5 text-right text-slate-200">
+                      {row.quantity}
+                    </td>
+                    <td className="font-mono-num px-3 py-2.5 text-right text-slate-300">
+                      {formatUSD(row.factoryUnitCost)}
+                    </td>
+                    <td className="font-mono-num px-3 py-2.5 text-right font-semibold text-emerald-300">
+                      {formatUSD(row.merchandiseTotalUsd)}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      {row.status === 'valido' ? (
+                        <span className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                          En Tránsito
+                        </span>
+                      ) : row.status === 'duplicado' ? (
+                        <span className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                          Duplicado
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-300">
+                          Error
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-300">
+                      {row.statusReason}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-slate-400">
+              Se creará el lote <strong className="text-blue-300">EN TRÁNSITO</strong> descontando únicamente{' '}
+              <strong className="text-emerald-300">
+                {formatUSD(transitPreview.validMerchandiseUsd)}
+              </strong>{' '}
+              de mercancía; el inventario FIFO se creará al marcar <em>Recibido</em> en Compras.
+            </p>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={clearPreview}
+                className="min-h-[40px] rounded-xl border border-slate-700 bg-[#080E1C] px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                data-testid="btn-confirm-transit-import"
+                onClick={() => void handleConfirmTransitSave()}
+                disabled={
+                  isSaving ||
+                  transitPreview.validCount === 0 ||
+                  transitPreview.missingRequiredColumns.length > 0
+                }
+                className="inline-flex min-h-[40px] items-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Truck className="h-4 w-4" aria-hidden="true" />
+                {isSaving
+                  ? 'Registrando En Tránsito...'
+                  : 'Confirmar y Registrar En Tránsito'}
               </button>
             </div>
           </div>

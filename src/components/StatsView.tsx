@@ -1,19 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Chart from 'chart.js/auto';
 import {
-  AlertTriangle,
   BarChart3,
-  Calculator,
   CalendarRange,
-  CheckCircle2,
-  Download,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
 import type {
   AppState,
   PartnerName,
-  ShippingType,
   TeamCategory,
 } from '../types/erp';
 import {
@@ -26,10 +21,8 @@ import {
   round2,
 } from '../utils/finance';
 import {
-  buildRecommendedOrderExcelSheet,
   computeModelCostHistory,
   computeSalesRanking,
-  computeSmartOrderRecommendation,
   getAvailableModelsForCostHistory,
   type RankingPeriodMode,
 } from '../utils/statistics';
@@ -97,15 +90,6 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
     return availableModels[0]?.key ?? '';
   }, [availableModels, selectedModelKey]);
 
-  // 3. Recomendador Inteligente de Pedidos state
-  const [capitalInput, setCapitalInput] = useState<string>('500');
-  const [orderShippingType, setOrderShippingType] =
-    useState<ShippingType>('Aéreo');
-  const [exportFeedback, setExportFeedback] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
-
   const totalUnits = getTotalUnits(state);
   const totalInvCost = getTotalInventoryCostValue(state);
   const totalReceivables = getTotalReceivables(state);
@@ -149,22 +133,6 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
   const modelCostHistory = useMemo(
     () => computeModelCostHistory(state, effectiveModelKey),
     [effectiveModelKey, state],
-  );
-
-  const parsedCapitalUsd = useMemo(() => {
-    const n = Number(capitalInput);
-    return Number.isFinite(n) && n > 0 ? round2(n) : 0;
-  }, [capitalInput]);
-
-  const recommendation = useMemo(
-    () =>
-      computeSmartOrderRecommendation(
-        state,
-        parsedCapitalUsd,
-        orderShippingType,
-        todayIso,
-      ),
-    [orderShippingType, parsedCapitalUsd, state, todayIso],
   );
 
   // Existing Chart 1: Inventory distribution by team (units)
@@ -478,48 +446,14 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
     return () => chart.destroy();
   }, [chartGridColor, chartTextColor, chartTickColor, modelCostHistory]);
 
-  const handleDownloadRecommendedOrder = () => {
-    setExportFeedback(null);
-    if (recommendation.lines.length === 0) {
-      setExportFeedback({
-        type: 'error',
-        text: 'Ingresa un capital mayor a $0.00 USDT que alcance al menos para 1 franela antes de exportar.',
-      });
-      return;
-    }
-    if (typeof window === 'undefined' || !window.XLSX) {
-      setExportFeedback({
-        type: 'error',
-        text: 'Librería SheetJS (xlsx) aún no disponible en este navegador.',
-      });
-      return;
-    }
-
-    const spec = buildRecommendedOrderExcelSheet(
-      recommendation,
-      state.exchangeRates.usdt,
-      todayIso,
-    );
-    const XLSX = window.XLSX;
-    const ws = XLSX.utils.aoa_to_sheet([[...spec.headers], ...spec.rows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, spec.sheetName);
-    XLSX.writeFile(wb, spec.fileName);
-
-    setExportFeedback({
-      type: 'success',
-      text: `Pedido recomendado (${recommendation.totalUnits} uds · ${formatUSD(recommendation.totalAllocatedUsd)}) descargado con la plantilla oficial de Compras Masivas.`,
-    });
-  };
-
   return (
     <div className="space-y-8">
       <div>
         <h1 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl">
-          Estadísticas, Costos y Compras Inteligentes
+          Estadísticas y Análisis Comercial
         </h1>
         <p className="mt-1 text-sm text-slate-400">
-          Ranking de ventas semanal/mensual, evolución de costos de importación por modelo, recomendador de pedidos y comisiones de socios.
+          Ranking de ventas semanal/mensual, evolución de costos de importación por modelo y comisiones de socios.
         </p>
       </div>
 
@@ -918,227 +852,6 @@ export function StatsView({ state, resolvedTheme = 'dark' }: StatsViewProps) {
             </div>
           </div>
         )}
-      </section>
-
-      {/* ==================================================================== */}
-      {/* 3. RECOMENDADOR INTELIGENTE DE PEDIDOS                               */}
-      {/* ==================================================================== */}
-      <section
-        aria-labelledby="smart-order-heading"
-        data-testid="stats-smart-order-section"
-        className="rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6 space-y-5"
-      >
-        <div className="flex flex-col gap-4 border-b border-slate-800 pb-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <Calculator className="h-5 w-5 text-emerald-400" aria-hidden="true" />
-              <h2
-                id="smart-order-heading"
-                className="font-display text-lg font-semibold text-white"
-              >
-                Recomendador Inteligente de Pedidos
-              </h2>
-            </div>
-            <p className="mt-0.5 text-xs text-slate-400">
-              {recommendation.sourceNote}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label
-                htmlFor="smart-order-capital"
-                className="block text-[11px] font-semibold text-slate-300 mb-1"
-              >
-                Capital disponible para invertir (USDT)
-              </label>
-              <input
-                id="smart-order-capital"
-                type="number"
-                min="0"
-                step="10"
-                value={capitalInput}
-                onChange={(e) => setCapitalInput(e.target.value)}
-                className="font-mono-num w-44 rounded-xl border border-slate-700 bg-[#080E1C] px-3 py-2 text-xs font-semibold text-white"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="smart-order-shipping"
-                className="block text-[11px] font-semibold text-slate-300 mb-1"
-              >
-                Tipo de Importación
-              </label>
-              <select
-                id="smart-order-shipping"
-                value={orderShippingType}
-                onChange={(e) =>
-                  setOrderShippingType(e.target.value as ShippingType)
-                }
-                className="rounded-xl border border-slate-700 bg-[#080E1C] px-3 py-2 text-xs font-semibold text-white"
-              >
-                <option value="Aéreo">Aéreo</option>
-                <option value="Marítimo">Marítimo</option>
-              </select>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleDownloadRecommendedOrder}
-              disabled={recommendation.lines.length === 0}
-              className="inline-flex min-h-[38px] items-center gap-2 whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Download className="h-4 w-4 shrink-0" aria-hidden="true" />
-              Descargar Pedido Recomendado (.xlsx)
-            </button>
-          </div>
-        </div>
-
-        {exportFeedback && (
-          <div
-            role={exportFeedback.type === 'error' ? 'alert' : 'status'}
-            className={`flex items-center gap-2.5 rounded-xl px-4 py-3 text-xs font-medium ${
-              exportFeedback.type === 'error'
-                ? 'border border-red-500/35 bg-red-500/10 text-red-200'
-                : 'border border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
-            }`}
-          >
-            {exportFeedback.type === 'success' ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
-            ) : (
-              <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
-            )}
-            <span>{exportFeedback.text}</span>
-          </div>
-        )}
-
-        {/* Alerta de Modelos de baja rotación (No traer en exceso) */}
-        {recommendation.lowRotationAlerts.length > 0 && (
-          <div
-            role="region"
-            aria-label="Modelos de baja rotación"
-            data-testid="low-rotation-alerts"
-            className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-4 space-y-2.5"
-          >
-            <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
-              <span>
-                Modelos de baja rotación (No traer en exceso) — {recommendation.lowRotationAlerts.length} SKU(s) excluidos del pedido
-              </span>
-            </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {recommendation.lowRotationAlerts.slice(0, 9).map((alert) => (
-                <div
-                  key={alert.skuId}
-                  className="rounded-lg border border-amber-500/25 bg-[#080E1C]/80 px-3 py-2 text-xs"
-                >
-                  <p className="font-semibold text-white">
-                    {alert.model}{' '}
-                    <span className="text-amber-300">
-                      ({alert.version} · {alert.size})
-                    </span>
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-amber-200/90">
-                    {alert.reason}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Budget Allocation KPIs */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
-            <span className="text-[11px] text-slate-400">Unidades a Pedir</span>
-            <p className="font-mono-num mt-0.5 text-lg font-bold text-white">
-              {recommendation.totalUnits} uds
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
-            <span className="text-[11px] text-slate-400">Inversión Asignada</span>
-            <p className="font-mono-num mt-0.5 text-lg font-bold text-emerald-400">
-              {formatUSD(recommendation.totalAllocatedUsd)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
-            <span className="text-[11px] text-slate-400">Remanente Libre</span>
-            <p className="font-mono-num mt-0.5 text-lg font-bold text-blue-300">
-              {formatUSD(recommendation.remainingUsd)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-800 bg-[#080E1C] p-3">
-            <span className="text-[11px] text-slate-400">Mix por Tallas</span>
-            <p className="font-mono-num mt-1 text-[11px] text-slate-200">
-              {recommendation.sizeBreakdown
-                .filter((s) => s.units > 0)
-                .map((s) => `${s.size}:${s.units}`)
-                .join(' · ') || '—'}
-            </p>
-          </div>
-        </div>
-
-        {/* Recommended Order Lines Table */}
-        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#080E1C]">
-          <table className="w-full min-w-[780px] text-left text-xs">
-            <thead className="border-b border-slate-800 bg-[#0B1222] text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              <tr>
-                <th className="px-3 py-2.5">Modelo</th>
-                <th className="px-3 py-2.5">Versión</th>
-                <th className="px-3 py-2.5">Talla</th>
-                <th className="px-3 py-2.5 text-right">Stock Act.</th>
-                <th className="px-3 py-2.5 text-right">Vendidas</th>
-                <th className="px-3 py-2.5 text-right">% Demanda</th>
-                <th className="px-3 py-2.5 text-right">Costo Prom.</th>
-                <th className="px-3 py-2.5 text-right">Pedir (Uds)</th>
-                <th className="px-3 py-2.5 text-right">Subtotal USDT</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/70">
-              {recommendation.lines.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-4 py-6 text-center text-slate-400">
-                    Ajusta el capital disponible en USDT para generar el desglose exacto del pedido recomendado.
-                  </td>
-                </tr>
-              ) : (
-                recommendation.lines.map((line) => (
-                  <tr
-                    key={`${line.model}-${line.version}-${line.size}`}
-                    className="hover:bg-slate-800/30"
-                  >
-                    <td className="px-3 py-2.5 font-semibold text-white">
-                      {line.model}
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-300">{line.version}</td>
-                    <td className="px-3 py-2.5 font-semibold text-blue-300">
-                      {line.size}
-                    </td>
-                    <td className="font-mono-num px-3 py-2.5 text-right text-slate-400">
-                      {line.currentStock}
-                    </td>
-                    <td className="font-mono-num px-3 py-2.5 text-right text-slate-300">
-                      {line.historicalSold}
-                    </td>
-                    <td className="font-mono-num px-3 py-2.5 text-right text-slate-300">
-                      {line.salesSharePct.toFixed(1)}%
-                    </td>
-                    <td className="font-mono-num px-3 py-2.5 text-right text-amber-300">
-                      {formatUSD(line.landedUnitCost)}
-                    </td>
-                    <td className="font-mono-num px-3 py-2.5 text-right font-bold text-emerald-400">
-                      {line.recommendedQty}
-                    </td>
-                    <td className="font-mono-num px-3 py-2.5 text-right font-semibold text-white">
-                      {formatUSD(line.lineTotalCost)}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
       </section>
 
       {/* ==================================================================== */}

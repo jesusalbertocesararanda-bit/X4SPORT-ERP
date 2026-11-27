@@ -6,6 +6,8 @@ import {
   FileText,
   LayoutDashboard,
   LogOut,
+  Monitor,
+  Moon,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -13,20 +15,24 @@ import {
   ShoppingBag,
   ShoppingCart,
   Store,
+  Sun,
   UploadCloud,
   Wallet,
-  X,
 } from 'lucide-react';
 import type { SubModuleId } from '../types/erp';
 import { canAccessConfiguration, type ERPUser } from '../utils/auth';
+import type { ThemePreference } from '../utils/theme';
+import { ThemeSelector } from './ThemeSelector';
 
 interface SidebarProps {
   activeSubModule: SubModuleId;
   isCollapsed: boolean;
   mobileOpen: boolean;
   currentUser: ERPUser | null;
-  isSynced: boolean;
+  isSynced?: boolean;
   storeName?: string;
+  themePreference?: ThemePreference;
+  onChangeThemePreference?: (next: ThemePreference) => void;
   onToggleCollapse: () => void;
   onCloseMobile: () => void;
   onSelectSubModule: (subModule: SubModuleId) => void;
@@ -79,6 +85,8 @@ const TREE_MODULES: TreeBranchNode[] = [
       { id: 'inventario-stock', label: 'Stock Disponible' },
       { id: 'inventario-auditoria', label: 'Auditoría y Conteos' },
       { id: 'inventario-ajustes', label: 'Ajustes de Inventario' },
+      { id: 'inventario-movimientos', label: 'Movimientos' },
+      { id: 'inventario-reposicion', label: 'Reposición y Pedidos' },
     ],
   },
   {
@@ -130,8 +138,9 @@ export function Sidebar({
   isCollapsed,
   mobileOpen,
   currentUser,
-  isSynced,
   storeName = 'X4SPORT',
+  themePreference,
+  onChangeThemePreference,
   onToggleCollapse,
   onCloseMobile,
   onSelectSubModule,
@@ -259,10 +268,11 @@ export function Sidebar({
           <button
             type="button"
             onClick={onCloseMobile}
-            aria-label="Cerrar menú lateral"
-            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+            title="Ocultar menú lateral"
+            aria-label="Ocultar menú lateral"
+            className="inline-flex lg:hidden min-h-[38px] min-w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white active:-translate-x-0.5 transition-transform"
           >
-            <X className="h-4 w-4" aria-hidden="true" />
+            <PanelLeftClose className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -453,75 +463,87 @@ export function Sidebar({
               );
             })}
           </div>
+
+          {/* Apariencia (debajo de Catálogo Público) */}
+          {themePreference && onChangeThemePreference && (
+            !isCollapsed || mobileOpen ? (
+              <div
+                data-testid="sidebar-appearance-section"
+                className="mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80 px-1 space-y-1.5"
+              >
+                <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Apariencia
+                </p>
+                <ThemeSelector
+                  value={themePreference}
+                  onChange={onChangeThemePreference}
+                  showLabels="always"
+                  fullWidth
+                  testIdPrefix="sidebar-theme-selector"
+                />
+              </div>
+            ) : (
+              <div
+                data-testid="sidebar-appearance-collapsed"
+                className="hidden lg:flex justify-center mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80"
+              >
+                <button
+                  type="button"
+                  data-testid="sidebar-theme-cycle-btn"
+                  onClick={() => {
+                    const order: ThemePreference[] = ['light', 'dark', 'system'];
+                    const idx = order.indexOf(themePreference);
+                    onChangeThemePreference(order[(idx + 1) % order.length]);
+                  }}
+                  title={`Apariencia: ${
+                    themePreference === 'light'
+                      ? 'Claro'
+                      : themePreference === 'dark'
+                        ? 'Oscuro'
+                        : 'Sistema'
+                  } (clic para cambiar)`}
+                  aria-label="Cambiar apariencia"
+                  className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  {themePreference === 'light' ? (
+                    <Sun className="h-4 w-4 text-amber-500" aria-hidden="true" />
+                  ) : themePreference === 'dark' ? (
+                    <Moon className="h-4 w-4 text-blue-400" aria-hidden="true" />
+                  ) : (
+                    <Monitor className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            )
+          )}
         </nav>
 
-        {/* Footer de Sidebar: Usuario activo + Cerrar Sesión + Configuración fija al final */}
-        <div className="mt-auto border-t border-slate-200 dark:border-slate-800/90 p-2.5 space-y-2">
-          {currentUser && (
-            <div
-              className={`rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800/90 dark:bg-[#0D1526] p-2 ${
-                isCollapsed ? 'lg:flex lg:flex-col lg:items-center lg:gap-2' : ''
+        {/* Footer de Sidebar: Cerrar Sesión */}
+        {currentUser && (
+          <div className="mt-auto border-t border-slate-200 dark:border-slate-800/90 p-2.5">
+            <button
+              type="button"
+              data-testid="btn-logout"
+              onClick={() => {
+                onCloseMobile();
+                onLogout();
+              }}
+              title="Cerrar Sesión"
+              aria-label="Cerrar Sesión"
+              className={`flex min-h-[36px] w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 hover:text-red-900 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 ${
+                isCollapsed ? 'lg:mx-auto lg:h-9 lg:w-9 lg:px-0' : 'px-3 py-1.5'
               }`}
             >
-              <div
-                className={`flex items-center gap-2 ${
-                  isCollapsed ? 'lg:justify-center' : 'justify-between'
-                }`}
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`h-2 w-2 rounded-full shrink-0 ${
-                      isSynced
-                        ? 'bg-emerald-500 animate-pulse'
-                        : 'bg-amber-500 animate-ping'
-                    }`}
-                    title={
-                      isSynced
-                        ? 'Sincronizado en tiempo real con Firebase'
-                        : 'Sincronizando...'
-                    }
-                  />
-                  <span
-                    className={`text-xs font-semibold text-slate-900 dark:text-white truncate ${
-                      isCollapsed ? 'lg:hidden' : ''
-                    }`}
-                  >
-                    {currentUser.name}
-                  </span>
-                </div>
-                <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-500/20 dark:text-blue-300 dark:border-blue-500/30 font-semibold shrink-0 ${
-                    isCollapsed ? 'lg:hidden' : ''
-                  }`}
-                >
-                  {currentUser.role === 'admin' ? 'Admin' : 'Socio'}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                data-testid="btn-logout"
-                onClick={() => {
-                  onCloseMobile();
-                  onLogout();
-                }}
-                title="Cerrar Sesión"
-                aria-label="Cerrar Sesión"
-                className={`mt-2 flex min-h-[34px] w-full items-center justify-center gap-1.5 rounded-md border border-red-200 bg-red-50 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-100 hover:text-red-900 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 ${
-                  isCollapsed ? 'lg:mt-0 lg:h-8 lg:w-8 lg:px-0' : 'px-2.5 py-1'
-                }`}
-              >
-                <LogOut
-                  className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400"
-                  aria-hidden="true"
-                />
-                <span className={isCollapsed ? 'lg:hidden' : ''}>
-                  Cerrar Sesión
-                </span>
-              </button>
-            </div>
-          )}
-        </div>
+              <LogOut
+                className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400"
+                aria-hidden="true"
+              />
+              <span className={isCollapsed ? 'lg:hidden' : ''}>
+                Cerrar Sesión
+              </span>
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );
