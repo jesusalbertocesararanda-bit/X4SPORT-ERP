@@ -13,7 +13,6 @@ import {
   EyeOff,
   FileSpreadsheet,
   Flame,
-  Loader2,
   Minus,
   PackageCheck,
   Plane,
@@ -44,13 +43,6 @@ import {
   parseCatalogImageList,
   resolveCatalogPhoto,
 } from '../utils/publicCatalog';
-import {
-  buildSupplierOrderGroups,
-  DEFAULT_SUPPLIER_PATCH,
-  exportSupplierOrderExcel,
-  extractBaseModelAndPlayer,
-  SUPPLIER_PATCH_OPTIONS,
-} from '../utils/supplierOrderExcel';
 
 interface RestockAdvisorViewProps {
   state: AppState;
@@ -228,6 +220,75 @@ const NATIONAL_TEAM_RE =
 
 const EUROPEAN_CLUB_RE =
   /\b(real\s+madrid|barcelona|barca|bar[cç]a|atl[eé]tico(?:\s+de)?\s+madrid|atleti|paris\s+saint[\s-]+germain|psg|manchester|man\s+city|man\s+utd|liverpool|arsenal|chelsea|tottenham|spurs|newcastle|aston\s+villa|bayern|borussia\s+dortmund|dortmund|bvb|leverkusen|inter(?:\s+de)?\s+mil[aá]n|internazionale|ac\s+mil[aá]n|milan|juventus|juve|napoli|n[aá]poles|roma|lazio|atalanta|ajax|benfica|porto|oporto|sporting|sevilla|valencia|villarreal|betis|real\s+sociedad|athletic\s+bilbao|lyon|marsella|marseille|monaco|europa|europeo(?:s)?)\b/i;
+
+const DEFAULT_SUPPLIER_PATCH = '欧洲冠军联赛';
+
+const SUPPLIER_PATCH_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '欧洲冠军联赛', label: '欧洲冠军联赛 (Champions League)' },
+  { value: '2026年世界杯纪念章', label: '2026年世界杯纪念章 (Mundial 2026)' },
+  { value: '西甲联赛臂章', label: '西甲联赛臂章 (La Liga)' },
+  { value: '英超联赛臂章', label: '英超联赛臂章 (Premier League)' },
+  { value: '法甲联赛臂章', label: '法甲联赛臂章 (Ligue 1)' },
+  { value: '意甲联赛臂章', label: '意甲联赛臂章 (Serie A)' },
+  { value: '德甲联赛臂章', label: '德甲联赛臂章 (Bundesliga)' },
+  { value: '无臂章', label: '无臂章 (Sin parche)' },
+];
+
+function extractBaseModelAndPlayer(
+  rawModel: string,
+  fallbackPlayer: string,
+): { baseModel: string; playerLabel: string } {
+  let cleanModel = (rawModel || '').trim();
+  let playerCandidate = (fallbackPlayer || '').trim();
+
+  const sepParts = cleanModel
+    .split(/\s*[·|]\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (sepParts.length > 1) {
+    cleanModel = sepParts[0];
+    if (!playerCandidate || playerCandidate === '—') {
+      playerCandidate = sepParts.slice(1).join(' ');
+    }
+  }
+
+  const parenMatch = cleanModel.match(/\(([^)]*#\d+[^)]*)\)/);
+  if (parenMatch?.[1]) {
+    if (!playerCandidate || playerCandidate === '—') {
+      playerCandidate = parenMatch[1].trim();
+    }
+    cleanModel = cleanModel.replace(parenMatch[0], '').trim();
+  }
+
+  const trailingHashMatch = cleanModel.match(
+    /\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+)?\s*#\d+)\s*$/,
+  );
+  if (trailingHashMatch?.[1]) {
+    if (!playerCandidate || playerCandidate === '—') {
+      playerCandidate = trailingHashMatch[1].trim();
+    }
+    cleanModel = cleanModel
+      .slice(0, cleanModel.length - trailingHashMatch[0].length)
+      .trim();
+  }
+
+  let playerLabel = '无印号';
+  if (playerCandidate && playerCandidate !== '—') {
+    const formatted = playerCandidate
+      .replace(/#/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase();
+    if (formatted) {
+      playerLabel = formatted;
+    }
+  }
+
+  return {
+    baseModel: cleanModel || rawModel.trim(),
+    playerLabel,
+  };
+}
 
 function norm(value: string): string {
   return (value || '')
@@ -512,7 +573,6 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     text: string;
   } | null>(null);
   const [copiedRecently, setCopiedRecently] = useState(false);
-  const [isExportingSupplier, setIsExportingSupplier] = useState(false);
 
   // Calendario logístico (hoy + 18d Aéreo / hoy + 90d Marítimo)
   const calendarForecast = useMemo(() => {
@@ -1481,21 +1541,13 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     [selectedOrderLines],
   );
 
-  const supplierOrderGroups = useMemo(
-    () =>
-      buildSupplierOrderGroups(
-        selectedOrderLines.map((r) => ({
-          team: r.team,
-          model: r.model,
-          version: r.version,
-          player: r.player,
-          size: r.size,
-          orderQty: r.orderQty,
-        })),
-        state,
-      ),
-    [selectedOrderLines, state],
-  );
+  const activeSupplierModelCount = useMemo(() => {
+    const groups = new Set<string>();
+    for (const r of selectedOrderLines) {
+      groups.add(r.modelGroupKey);
+    }
+    return groups.size;
+  }, [selectedOrderLines]);
 
   // Envío estimado de referencia por separado (lotes históricos de cantidad similar)
   const referenceShippingEstimate = useMemo(() => {
@@ -1722,47 +1774,91 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     }
   };
 
-  // Botón Excel Matricial Chino con Fotos (CERO precios)
-  const handleDownloadSupplierOrder = async () => {
+  // Botón Lista Proveedor (.xlsx) -> Tabla plana ordenada sin fotos ni precios
+  const handleDownloadSupplierOrder = () => {
     setFeedback(null);
+    if (typeof window === 'undefined' || !window.XLSX) {
+      setFeedback({
+        type: 'error',
+        text: 'La librería SheetJS (xlsx) aún está cargando o no está disponible sin conexión.',
+      });
+      return;
+    }
     if (selectedOrderLines.length === 0) {
       setFeedback({
         type: 'error',
-        text: 'Incluye al menos 1 talla con cantidad mayor a 0 antes de descargar la orden del proveedor.',
+        text: 'Incluye al menos 1 talla con cantidad mayor a 0 antes de descargar la lista del proveedor.',
       });
       return;
     }
 
-    setIsExportingSupplier(true);
-    try {
-      const result = await exportSupplierOrderExcel({
-        lines: selectedOrderLines.map((r) => ({
-          team: r.team,
-          model: r.model,
-          version: r.version,
-          player: r.player,
-          size: r.size,
-          orderQty: r.orderQty,
-        })),
-        state,
-        patchByGroup,
-        todayIso,
-      });
-      setFeedback({
-        type: 'success',
-        text: `Orden matricial "${result.fileName}" descargada (${result.groupsCount} modelo(s) · ${result.totalUnits} piezas · ${result.embeddedPhotosCount} foto(s) incrustada(s), sin precios).`,
-      });
-    } catch (err) {
-      setFeedback({
-        type: 'error',
-        text:
-          err instanceof Error && err.message
-            ? err.message
-            : 'No se pudo generar el archivo Excel matricial para proveedor.',
-      });
-    } finally {
-      setIsExportingSupplier(false);
-    }
+    const sortedLines = [...selectedOrderLines].sort((a, b) => {
+      const mComp = a.baseModel.localeCompare(b.baseModel);
+      if (mComp !== 0) return mComp;
+      const vComp = a.version.localeCompare(b.version);
+      if (vComp !== 0) return vComp;
+      const sComp = getSizeRank(a.size) - getSizeRank(b.size);
+      if (sComp !== 0) return sComp;
+      return a.player.localeCompare(b.player);
+    });
+
+    const headers = [
+      '#',
+      'Modelo / Equipo',
+      'Versión',
+      'Jugador / Dorsal',
+      'Talla',
+      'Cantidad a Pedir',
+      'Parche Seleccionado',
+    ];
+
+    const rows = sortedLines.map((r, idx) => {
+      const selectedPatch =
+        patchByGroup[r.modelGroupKey] ?? DEFAULT_SUPPLIER_PATCH;
+      const patchOption = SUPPLIER_PATCH_OPTIONS.find(
+        (o) => o.value === selectedPatch,
+      );
+      return [
+        idx + 1,
+        r.baseModel,
+        r.version,
+        r.player && r.player !== '—' ? r.player : 'Sin nombre',
+        r.size,
+        r.orderQty,
+        patchOption ? patchOption.label : selectedPatch,
+      ];
+    });
+
+    const totalRow = [
+      '',
+      'Total de Prendas',
+      '',
+      '',
+      '',
+      `${selectedUnitsTotal} uds`,
+      '',
+    ];
+
+    const fileName = `X4SPORT_Lista_Proveedor_${todayIso}.xlsx`;
+    const XLSX = window.XLSX;
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows, totalRow]);
+    ws['!cols'] = [
+      { wch: 5 },
+      { wch: 42 },
+      { wch: 11 },
+      { wch: 22 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 36 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Lista_Proveedor');
+    XLSX.writeFile(wb, fileName);
+
+    setFeedback({
+      type: 'success',
+      text: `Lista proveedor "${fileName}" descargada (${activeSupplierModelCount} modelo(s) · ${selectedUnitsTotal} piezas, sin precios).`,
+    });
   };
 
   // Botón Cargas Masivas (.xlsx) -> Estado 'En Tránsito', Costo Unitario Base SIN envío
@@ -1894,7 +1990,7 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
             Reposición y Pedidos
           </h1>
           <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-            Rotación real sobre días disponibles · Cruce inteligente Aéreo (~18d) vs. Marítimo (~90d) · Temporada europea · Exportación china con fotos y Cargas Masivas.
+            Rotación real sobre días disponibles · Cruce inteligente Aéreo (~18d) vs. Marítimo (~90d) · Temporada europea · Lista Proveedor y Cargas Masivas.
           </p>
         </div>
 
@@ -1923,23 +2019,11 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
           <button
             type="button"
             data-testid="btn-export-supplier-excel"
-            disabled={isExportingSupplier}
-            onClick={() => void handleDownloadSupplierOrder()}
-            className="inline-flex min-h-[38px] items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-65 dark:border-slate-700 dark:bg-[#0D1526] dark:text-slate-100 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            onClick={handleDownloadSupplierOrder}
+            className="inline-flex min-h-[38px] items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-[#0D1526] dark:text-slate-100 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
           >
-            {isExportingSupplier ? (
-              <Loader2
-                className="h-3.5 w-3.5 shrink-0 animate-spin"
-                aria-hidden="true"
-              />
-            ) : (
-              <Download className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            )}
-            <span>
-              {isExportingSupplier
-                ? 'Generando Excel con fotos...'
-                : 'Descargar Orden Proveedor (.xlsx)'}
-            </span>
+            <Download className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>Descargar Lista Proveedor (.xlsx)</span>
           </button>
 
           <button
@@ -2855,14 +2939,14 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
         </div>
       )}
 
-      {/* Resumen rápido de grupos listos para Excel chino */}
-      {supplierOrderGroups.length > 0 && (
+      {/* Resumen rápido de modelos listos para Lista Proveedor */}
+      {activeSupplierModelCount > 0 && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Listo para exportar a proveedor chino:{' '}
+          Listo para exportar a Lista Proveedor:{' '}
           <strong className="text-slate-700 dark:text-slate-200">
-            {supplierOrderGroups.length} modelo(s)
+            {activeSupplierModelCount} modelo(s)
           </strong>{' '}
-          ({selectedUnitsTotal} piezas totales) con fotos incrustadas y sin precios en el Excel de fábrica.
+          ({selectedUnitsTotal} piezas totales) en Excel limpio sin precios.
         </p>
       )}
     </div>
