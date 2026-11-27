@@ -1064,10 +1064,30 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     state.purchases,
   ]);
 
+  // Modelos donde TODAS las tallas son Rotación Lenta / Baja -> desactivados por defecto (0 pzs · $0.00)
+  const lowRotationOnlyModels = useMemo(() => {
+    const byGroup = new Map<string, RestockBaseRow[]>();
+    for (const r of baseRows) {
+      const list = byGroup.get(r.modelGroupKey) ?? [];
+      list.push(r);
+      byGroup.set(r.modelGroupKey, list);
+    }
+    const result: Record<string, boolean> = {};
+    for (const [groupKey, list] of byGroup.entries()) {
+      result[groupKey] =
+        list.length > 0 && list.every((r) => r.rotationTier === 'low');
+    }
+    return result;
+  }, [baseRows]);
+
   // 4) Motor de decisión logística (Aéreo ~18d vs Marítimo ~90d + Temporada Europea + Tránsito)
   const planRows = useMemo<RestockPlanRow[]>(() => {
     return baseRows.map((row) => {
-      const isModelExcluded = Boolean(excludedModels[row.modelGroupKey]);
+      const defaultExcluded = Boolean(lowRotationOnlyModels[row.modelGroupKey]);
+      const isModelExcluded =
+        excludedModels[row.modelGroupKey] !== undefined
+          ? excludedModels[row.modelGroupKey]
+          : defaultExcluded;
 
       const seasonBlocked =
         calendarForecast.isEuropeanClosingWindow &&
@@ -1276,6 +1296,7 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     benchmarkPricing.versionRates,
     calendarForecast,
     excludedModels,
+    lowRotationOnlyModels,
     planningMode,
     qtyOverrides,
     rowCostOverrides,
@@ -1362,7 +1383,15 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     }
 
     const cards: ModelGroupCard[] = [];
-    for (const [groupKey, rows] of map.entries()) {
+    for (const [groupKey, rawRows] of map.entries()) {
+      const rows = [...rawRows].sort((a, b) => {
+        const aSelected = a.orderQty > 0 ? 1 : 0;
+        const bSelected = b.orderQty > 0 ? 1 : 0;
+        if (bSelected !== aSelected) return bSelected - aSelected;
+        const sComp = getSizeRank(a.size) - getSizeRank(b.size);
+        if (sComp !== 0) return sComp;
+        return a.player.localeCompare(b.player);
+      });
       const first = rows[0];
       const thumbs = resolveModelCardThumbnail(
         first.model,
@@ -1376,6 +1405,10 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
       const totalMerchandiseUsd = round2(
         rows.reduce((s, r) => s + r.lineMerchandiseUsd, 0),
       );
+      const isExcluded =
+        excludedModels[groupKey] !== undefined
+          ? excludedModels[groupKey]
+          : Boolean(lowRotationOnlyModels[groupKey]);
 
       cards.push({
         modelGroupKey: groupKey,
@@ -1383,7 +1416,7 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
         team: first.team,
         version: first.version,
         marketKind: first.marketKind,
-        isExcluded: Boolean(excludedModels[groupKey]),
+        isExcluded,
         photoUrl: thumbs.photoUrl,
         fallbackPhotoUrl: thumbs.fallbackPhotoUrl,
         seasonWarning,
@@ -1402,10 +1435,24 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     }
 
     cards.sort((a, b) => {
-      if (a.isExcluded !== b.isExcluded) return a.isExcluded ? 1 : -1;
-      if (b.totalOrderQty !== a.totalOrderQty) {
-        return b.totalOrderQty - a.totalOrderQty;
+      const aActiveOrder = !a.isExcluded && a.totalOrderQty > 0;
+      const bActiveOrder = !b.isExcluded && b.totalOrderQty > 0;
+      if (aActiveOrder !== bActiveOrder) return aActiveOrder ? -1 : 1;
+
+      if (aActiveOrder && bActiveOrder) {
+        if (b.totalOrderQty !== a.totalOrderQty) {
+          return b.totalOrderQty - a.totalOrderQty;
+        }
+        if (a.hasUrgentAir !== b.hasUrgentAir) {
+          return a.hasUrgentAir ? -1 : 1;
+        }
+        if (a.hasHighRotation !== b.hasHighRotation) {
+          return a.hasHighRotation ? -1 : 1;
+        }
+        return a.baseModel.localeCompare(b.baseModel);
       }
+
+      if (a.isExcluded !== b.isExcluded) return a.isExcluded ? 1 : -1;
       if (a.hasHighRotation !== b.hasHighRotation) {
         return a.hasHighRotation ? -1 : 1;
       }
@@ -1413,7 +1460,7 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
     });
 
     return cards;
-  }, [excludedModels, filteredRows, state]);
+  }, [excludedModels, filteredRows, lowRotationOnlyModels, state]);
 
   // Totales del pedido activo (SOLO mercancía)
   const selectedOrderLines = useMemo(
@@ -1557,16 +1604,19 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
   const cashOnHandBalance = round2(state.cashOnHand ?? 0);
 
   const hasCustomEdits =
-    Object.values(excludedModels).some(Boolean) ||
+    Object.keys(excludedModels).length > 0 ||
     Object.keys(qtyOverrides).length > 0 ||
     Object.keys(versionRateOverrides).length > 0 ||
     Object.keys(rowCostOverrides).length > 0;
 
   // Handlers de edición
-  const handleToggleExcludeModel = (modelGroupKey: string) => {
+  const handleToggleExcludeModel = (
+    modelGroupKey: string,
+    currentExcluded: boolean,
+  ) => {
     setExcludedModels((prev) => ({
       ...prev,
-      [modelGroupKey]: !prev[modelGroupKey],
+      [modelGroupKey]: !currentExcluded,
     }));
   };
 
@@ -2487,15 +2537,15 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
               >
                 {/* Encabezado de Tarjeta de Modelo */}
                 <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3.5 dark:border-slate-800 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="flex items-start gap-3 min-w-0">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
                     <ModelThumb
                       photoUrl={card.photoUrl}
                       fallbackPhotoUrl={card.fallbackPhotoUrl}
                       alt={`${card.baseModel} ${card.version}`}
                     />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="font-display text-base font-bold text-slate-900 dark:text-white truncate">
+                        <h2 className="font-display text-base font-bold text-slate-900 dark:text-white whitespace-normal break-words leading-snug">
                           {card.baseModel}
                         </h2>
                         {card.hasHighRotation && (
@@ -2576,7 +2626,10 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
                       type="button"
                       data-testid={`btn-toggle-model-${card.modelGroupKey}`}
                       onClick={() =>
-                        handleToggleExcludeModel(card.modelGroupKey)
+                        handleToggleExcludeModel(
+                          card.modelGroupKey,
+                          card.isExcluded,
+                        )
                       }
                       className={`inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs font-semibold transition-colors ${
                         card.isExcluded
@@ -2744,21 +2797,19 @@ export function RestockAdvisorView({ state }: RestockAdvisorViewProps) {
                                 type="number"
                                 min="0"
                                 step="1"
-                                disabled={card.isExcluded}
                                 aria-label={`Cantidad a pedir para ${row.baseModel} talla ${row.size}`}
                                 data-testid={`input-qty-${row.key}`}
                                 value={row.orderQty}
                                 onChange={(e) =>
                                   handleChangeRowQty(row, e.target.value)
                                 }
-                                className="font-mono-num tabular-nums h-7 w-14 rounded-md border border-slate-300 bg-white px-1.5 text-center text-xs font-bold text-slate-900 focus:border-blue-500 focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-[#080F1E] dark:text-white"
+                                className="font-mono-num tabular-nums h-7 w-14 rounded-md border border-slate-300 bg-white px-1.5 text-center text-xs font-bold text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-[#080F1E] dark:text-white"
                               />
                               <button
                                 type="button"
-                                disabled={card.isExcluded}
                                 onClick={() => handleStepRowQty(row, 1)}
                                 aria-label={`Sumar 1 a ${row.baseModel} talla ${row.size}`}
-                                className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 dark:border-slate-700 dark:bg-[#080F1E] dark:text-slate-200 dark:hover:bg-slate-800"
+                                className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-[#080F1E] dark:text-slate-200 dark:hover:bg-slate-800"
                               >
                                 <Plus className="h-3 w-3" aria-hidden="true" />
                               </button>
