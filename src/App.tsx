@@ -1671,6 +1671,18 @@ export default function App() {
                   generalConfig={generalConfig}
                   rateSync={rateSync}
                   calendarAuth={calendarAuth}
+                  activeSection={
+                    activeSubModule === 'config-marca-catalogo'
+                      ? 'marca-catalogo'
+                      : activeSubModule === 'config-usuarios-seguridad'
+                        ? 'usuarios-seguridad'
+                        : activeSubModule === 'config-tasas'
+                          ? 'tasas'
+                          : activeSubModule === 'config-respaldo'
+                            ? 'respaldo'
+                            : 'matriz-alertas'
+                  }
+                  onOpenChangePassword={() => setIsChangePasswordOpen(true)}
                   onSaveGeneralConfig={handleSaveGeneralConfig}
                   onConnectGoogleCalendar={handleConnectGoogleCalendar}
                   onDisconnectGoogleCalendar={handleDisconnectGoogleCalendar}

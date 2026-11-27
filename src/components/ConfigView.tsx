@@ -54,6 +54,13 @@ interface ConfigViewProps {
   generalConfig: GeneralConfig;
   rateSync: RateSyncInfo;
   calendarAuth: GoogleCalendarAuthState;
+  activeSection?:
+    | 'matriz-alertas'
+    | 'marca-catalogo'
+    | 'usuarios-seguridad'
+    | 'tasas'
+    | 'respaldo';
+  onOpenChangePassword?: () => void;
   onSaveGeneralConfig: (config: GeneralConfig) => Promise<void>;
   onConnectGoogleCalendar: () => Promise<boolean>;
   onDisconnectGoogleCalendar: () => Promise<void>;
@@ -76,6 +83,8 @@ export function ConfigView({
   generalConfig,
   rateSync,
   calendarAuth,
+  activeSection,
+  onOpenChangePassword,
   onSaveGeneralConfig,
   onConnectGoogleCalendar,
   onDisconnectGoogleCalendar,
@@ -88,6 +97,15 @@ export function ConfigView({
   onResetDemoData,
   onUpdateAuthorizedUsers,
 }: ConfigViewProps) {
+  const showAllSections = !activeSection;
+  const showMatrizAlertas =
+    showAllSections || activeSection === 'matriz-alertas';
+  const showMarcaCatalogo =
+    showAllSections || activeSection === 'marca-catalogo';
+  const showUsuariosSeguridad =
+    showAllSections || activeSection === 'usuarios-seguridad';
+  const showTasas = showAllSections || activeSection === 'tasas';
+  const showRespaldo = showAllSections || activeSection === 'respaldo';
   // 4-Layer Matrix Config State
   const [commissionPct, setCommissionPct] = useState(
     String(generalConfig.matrixParams.commissionPct),
@@ -768,8 +786,10 @@ export function ConfigView({
         </div>
       )}
 
-      {/* Formulario Maestro: Matriz de 4 Capas + Umbrales de Alertas + Identidad de Factura JPG */}
+      {/* Formulario Maestro: Matriz de 4 Capas + Umbrales de Alertas + Identidad de Factura JPG + EmailJS */}
+      {(showMatrizAlertas || showMarcaCatalogo || showUsuariosSeguridad) && (
       <form onSubmit={handleSaveGeneralParameters} className="space-y-6">
+        {showMatrizAlertas && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* 1. Parámetros Matriz de 4 Capas */}
           <section className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6">
@@ -1110,8 +1130,10 @@ export function ConfigView({
             </div>
           </section>
         </div>
+        )}
 
         {/* 3. Identidad de Factura JPG y Marca */}
+        {showMarcaCatalogo && (
         <section className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -1225,9 +1247,10 @@ export function ConfigView({
             </div>
           </div>
         </section>
+        )}
 
         {/* 4. Envío de Códigos OTP por Correo (EmailJS) — Solo Administrador Principal */}
-        {canAccessConfiguration(currentUser) && (
+        {showUsuariosSeguridad && canAccessConfiguration(currentUser) && (
           <section
             data-testid="config-emailjs-section"
             className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6"
@@ -1311,34 +1334,38 @@ export function ConfigView({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
-              <span className="text-[11px] text-slate-400">
-                {generalConfig.updatedAt
-                  ? `Última sincronización: ${new Date(
-                      generalConfig.updatedAt,
-                    ).toLocaleString('es-VE', {
-                      dateStyle: 'short',
-                      timeStyle: 'short',
-                    })}`
-                  : 'Usando parámetros iniciales estándar'}
-              </span>
-              <button
-                type="submit"
-                data-testid="btn-save-general-config"
-                disabled={savingGeneral}
-                className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
-              >
-                <Save className="h-4 w-4" aria-hidden="true" />
-                {savingGeneral
-                  ? 'Guardando en Firebase...'
-                  : 'Guardar Configuración General'}
-              </button>
-            </div>
           </section>
         )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-[#0D1526] px-5 py-4">
+          <span className="text-[11px] text-slate-400">
+            {generalConfig.updatedAt
+              ? `Última sincronización: ${new Date(
+                  generalConfig.updatedAt,
+                ).toLocaleString('es-VE', {
+                  dateStyle: 'short',
+                  timeStyle: 'short',
+                })}`
+              : 'Usando parámetros iniciales estándar'}
+          </span>
+          <button
+            type="submit"
+            data-testid="btn-save-general-config"
+            disabled={savingGeneral}
+            className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
+          >
+            <Save className="h-4 w-4" aria-hidden="true" />
+            {savingGeneral
+              ? 'Guardando en Firebase...'
+              : 'Guardar Configuración General'}
+          </button>
+        </div>
       </form>
+      )}
 
       {/* Gestión de Usuarios y Socios Autorizados (Roles SAP) */}
+      {showUsuariosSeguridad && (
+      <>
       <section className="space-y-4 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1519,16 +1546,32 @@ export function ConfigView({
         </div>
       </section>
 
-      {/* Google Calendar + Catálogo Público + Tasas + Respaldos */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="space-y-6">
-          <GoogleCalendarBanner
-            variant="card"
-            authState={calendarAuth}
-            onConnect={onConnectGoogleCalendar}
-            onDisconnect={onDisconnectGoogleCalendar}
-          />
+      {onOpenChangePassword && (
+        <section className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 font-display text-base font-semibold text-white">
+              <Lock className="h-4 w-4 text-blue-400" aria-hidden="true" />
+              Seguridad de Cuenta Administrativa
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Actualiza la contraseña de tu sesión actual ({currentUser?.email ?? MAIN_ADMIN_EMAIL}) con sincronización inmediata en Firebase.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenChangePassword}
+            className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600/15 px-4 py-2 text-xs font-semibold text-blue-200 transition-colors hover:bg-blue-600/25 hover:text-white whitespace-nowrap shrink-0"
+          >
+            <KeyRound className="h-4 w-4" aria-hidden="true" />
+            Cambiar Mi Contraseña
+          </button>
+        </section>
+      )}
+      </>
+      )}
 
+      {/* Catálogo Público Interactivo */}
+      {showMarcaCatalogo && (
           <section className="space-y-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1584,10 +1627,11 @@ export function ConfigView({
               </button>
             </div>
           </section>
-        </div>
+      )}
 
-        <div className="space-y-6">
-          <section className="space-y-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5">
+      {/* Tasas de Cambio Globales (BCV / USDT) */}
+      {showTasas && (
+          <section className="space-y-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:p-6">
             <h2 className="text-sm font-semibold text-white">
               Tasas de Cambio Globales (BCV / USDT)
             </h2>
@@ -1672,84 +1716,97 @@ export function ConfigView({
               </div>
             </form>
           </section>
+      )}
 
-          <section className="space-y-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5">
-            <h2 className="text-sm font-semibold text-white">
-              Respaldo Excel (.xlsx) y Exportación HTML
-            </h2>
-            <p className="text-xs text-slate-400">
-              Importa tu hoja de cálculo oficial con mapeo automático a Firebase o descarga el paquete autocontenido.
-            </p>
-            <div className="flex flex-wrap gap-2.5 pt-1">
-              <button
-                type="button"
-                data-testid="btn-open-excel-import"
-                onClick={onOpenExcelImport}
-                className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-4 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-600/25 hover:text-white"
-              >
-                <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                Sincronizar Excel (.xlsx)
-              </button>
+      {/* Respaldo Excel, Google Calendar y Datos Demo */}
+      {showRespaldo && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <section className="space-y-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5">
+              <h2 className="text-sm font-semibold text-white">
+                Respaldo Excel (.xlsx) y Exportación HTML
+              </h2>
+              <p className="text-xs text-slate-400">
+                Importa tu hoja de cálculo oficial con mapeo automático a Firebase o descarga el paquete autocontenido.
+              </p>
+              <div className="flex flex-wrap gap-2.5 pt-1">
+                <button
+                  type="button"
+                  data-testid="btn-open-excel-import"
+                  onClick={onOpenExcelImport}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-4 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-600/25 hover:text-white"
+                >
+                  <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                  Sincronizar Excel (.xlsx)
+                </button>
 
-              <button
-                type="button"
-                onClick={() => void handleDownloadStandaloneHtml()}
-                disabled={downloadingHtml}
-                className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-4 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800 hover:text-white disabled:opacity-60"
-              >
-                <Download className="h-4 w-4 text-blue-400" aria-hidden="true" />
-                {downloadingHtml ? 'Generando...' : 'Descargar index.html'}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadStandaloneHtml()}
+                  disabled={downloadingHtml}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-4 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800 hover:text-white disabled:opacity-60"
+                >
+                  <Download className="h-4 w-4 text-blue-400" aria-hidden="true" />
+                  {downloadingHtml ? 'Generando...' : 'Descargar index.html'}
+                </button>
+              </div>
+            </section>
+
+            <GoogleCalendarBanner
+              variant="card"
+              authState={calendarAuth}
+              onConnect={onConnectGoogleCalendar}
+              onDisconnect={onDisconnectGoogleCalendar}
+            />
+          </div>
+
+          {/* Restaurar inventario demo */}
+          <section className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-white">
+                Datos de Demostración (176 unidades)
+              </h2>
+              <p className="text-xs text-slate-400">
+                Restaura el catálogo de prueba de 176 franelas si deseas probar ventas o matriz de stock.
+              </p>
             </div>
+            {!confirmDemoReset ? (
+              <button
+                type="button"
+                onClick={() => setConfirmDemoReset(true)}
+                className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 whitespace-nowrap shrink-0"
+              >
+                <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                Restaurar Catálogo Demo
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onResetDemoData();
+                    setConfirmDemoReset(false);
+                    setFeedback({
+                      type: 'success',
+                      text: 'Catálogo de demostración restaurado en Firebase.',
+                    });
+                  }}
+                  className="min-h-[38px] rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
+                >
+                  Confirmar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDemoReset(false)}
+                  className="min-h-[38px] rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
           </section>
         </div>
-      </div>
-
-      {/* Restaurar inventario demo */}
-      <section className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0D1526] p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-white">
-            Datos de Demostración (176 unidades)
-          </h2>
-          <p className="text-xs text-slate-400">
-            Restaura el catálogo de prueba de 176 franelas si deseas probar ventas o matriz de stock.
-          </p>
-        </div>
-        {!confirmDemoReset ? (
-          <button
-            type="button"
-            onClick={() => setConfirmDemoReset(true)}
-            className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 whitespace-nowrap shrink-0"
-          >
-            <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            Restaurar Catálogo Demo
-          </button>
-        ) : (
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                onResetDemoData();
-                setConfirmDemoReset(false);
-                setFeedback({
-                  type: 'success',
-                  text: 'Catálogo de demostración restaurado en Firebase.',
-                });
-              }}
-              className="min-h-[38px] rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
-            >
-              Confirmar
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmDemoReset(false)}
-              className="min-h-[38px] rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
-            >
-              Cancelar
-            </button>
-          </div>
-        )}
-      </section>
+      )}
 
       {/* Versión del sistema */}
       <div

@@ -34,7 +34,12 @@ export type SubModuleId =
   | 'estadisticas'
   | 'cargas'
   | 'catalogo'
-  | 'configuracion';
+  | 'configuracion'
+  | 'config-matriz-alertas'
+  | 'config-marca-catalogo'
+  | 'config-usuarios-seguridad'
+  | 'config-tasas'
+  | 'config-respaldo';
 
 export interface MatrixConfigParams {
   commissionPct: number; // Default 4%

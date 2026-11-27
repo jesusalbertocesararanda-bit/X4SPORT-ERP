@@ -129,6 +129,36 @@ export const SUBMODULE_ROUTES: Record<SubModuleId, SubModuleRouteMeta> = {
     moduleLabel: 'Configuración',
     subModuleLabel: 'Parámetros Generales',
   },
+  'config-matriz-alertas': {
+    id: 'config-matriz-alertas',
+    tab: 'configuracion',
+    moduleLabel: 'Configuración',
+    subModuleLabel: 'Matriz y Alertas',
+  },
+  'config-marca-catalogo': {
+    id: 'config-marca-catalogo',
+    tab: 'configuracion',
+    moduleLabel: 'Configuración',
+    subModuleLabel: 'Marca y Catálogo',
+  },
+  'config-usuarios-seguridad': {
+    id: 'config-usuarios-seguridad',
+    tab: 'configuracion',
+    moduleLabel: 'Configuración',
+    subModuleLabel: 'Usuarios y Seguridad',
+  },
+  'config-tasas': {
+    id: 'config-tasas',
+    tab: 'configuracion',
+    moduleLabel: 'Configuración',
+    subModuleLabel: 'Tasas de Cambio',
+  },
+  'config-respaldo': {
+    id: 'config-respaldo',
+    tab: 'configuracion',
+    moduleLabel: 'Configuración',
+    subModuleLabel: 'Respaldo y Datos',
+  },
 };
 
 export function tabToDefaultSubModule(tab: TabId): SubModuleId {
@@ -158,7 +188,7 @@ export function tabToDefaultSubModule(tab: TabId): SubModuleId {
     case 'catalogo':
       return 'catalogo';
     case 'configuracion':
-      return 'configuracion';
+      return 'config-matriz-alertas';
   }
 }
 

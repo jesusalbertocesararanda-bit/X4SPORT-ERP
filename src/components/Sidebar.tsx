@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import type { SubModuleId } from '../types/erp';
-import type { ERPUser } from '../utils/auth';
+import { canAccessConfiguration, type ERPUser } from '../utils/auth';
 
 interface SidebarProps {
   activeSubModule: SubModuleId;
@@ -102,6 +102,19 @@ const STANDALONE_MODULES: StandaloneNode[] = [
   { id: 'catalogo', label: 'Catálogo Público', icon: Store },
 ];
 
+const CONFIG_TREE_MODULE: TreeBranchNode = {
+  id: 'tree-configuracion',
+  label: 'Configuración',
+  icon: Settings,
+  children: [
+    { id: 'config-matriz-alertas', label: 'Matriz y Alertas' },
+    { id: 'config-marca-catalogo', label: 'Marca y Catálogo' },
+    { id: 'config-usuarios-seguridad', label: 'Usuarios y Seguridad' },
+    { id: 'config-tasas', label: 'Tasas de Cambio' },
+    { id: 'config-respaldo', label: 'Respaldo y Datos' },
+  ],
+};
+
 const SIDEBAR_BRANCHES_STORAGE_KEY = 'x4sport_sidebar_expanded_branches_v1';
 
 const DEFAULT_EXPANDED_BRANCHES: Record<string, boolean> = {
@@ -109,6 +122,7 @@ const DEFAULT_EXPANDED_BRANCHES: Record<string, boolean> = {
   'tree-compras': false,
   'tree-inventario': false,
   'tree-finanzas': false,
+  'tree-configuracion': false,
 };
 
 export function Sidebar({
@@ -171,6 +185,11 @@ export function Sidebar({
     onSelectSubModule(subModule);
     onCloseMobile();
   };
+
+  const canSeeConfig = canAccessConfiguration(currentUser);
+  const visibleTreeModules: TreeBranchNode[] = canSeeConfig
+    ? [...TREE_MODULES, CONFIG_TREE_MODULE]
+    : TREE_MODULES;
 
   return (
     <>
@@ -283,13 +302,14 @@ export function Sidebar({
             </span>
           </button>
 
-          {/* Árboles desplegables: Ventas, Compras, Inventario, Finanzas */}
+          {/* Árboles desplegables: Ventas, Compras, Inventario, Finanzas (+ Configuración para Admin) */}
           <div className="space-y-1.5 pt-1">
-            {TREE_MODULES.map((branch) => {
+            {visibleTreeModules.map((branch) => {
               const Icon = branch.icon;
-              const isBranchActive = branch.children.some(
-                (c) => c.id === activeSubModule,
-              );
+              const isBranchActive =
+                branch.children.some((c) => c.id === activeSubModule) ||
+                (branch.id === 'tree-configuracion' &&
+                  activeSubModule === 'configuracion');
               const isOpen = expandedBranches[branch.id] ?? false;
 
               if (isCollapsed) {
@@ -501,36 +521,6 @@ export function Sidebar({
               </button>
             </div>
           )}
-
-          <button
-            type="button"
-            data-testid="btn-sidebar-settings"
-            onClick={() => handleNavigate('configuracion')}
-            title="Configuración"
-            aria-label="Configuración"
-            aria-current={
-              activeSubModule === 'configuracion' ? 'page' : undefined
-            }
-            className={`flex min-h-[42px] w-full items-center rounded-lg border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
-              isCollapsed
-                ? 'justify-center px-2 lg:h-10 lg:w-10 lg:mx-auto lg:px-0'
-                : 'gap-2.5 px-3'
-            } ${
-              activeSubModule === 'configuracion'
-                ? 'border-blue-500/35 bg-blue-50 text-blue-700 dark:border-blue-500/45 dark:bg-blue-600/20 dark:text-white'
-                : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200 dark:hover:border-slate-700 dark:hover:bg-slate-800 dark:hover:text-white'
-            }`}
-          >
-            <Settings
-              className={`h-4 w-4 shrink-0 ${
-                activeSubModule === 'configuracion'
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-slate-500 dark:text-slate-400'
-              }`}
-              aria-hidden="true"
-            />
-            <span className={isCollapsed ? 'lg:hidden' : ''}>Configuración</span>
-          </button>
         </div>
       </aside>
     </>
