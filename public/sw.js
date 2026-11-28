@@ -1,4 +1,4 @@
-const CACHE_NAME = 'x4sport-pwa-v1';
+const CACHE_NAME = 'x4sport-pwa-v2';
 
 const BYPASSED_HOST_KEYWORDS = [
   'firebaseio.com',
@@ -33,7 +33,7 @@ function shouldBypassRequest(request) {
     return true;
   }
 
-  // No cachear endpoints de API ni peticiones externas de datos
+  // Ignorar peticiones externas, APIs y endpoints dinámicos
   if (url.origin !== self.location.origin) return true;
   if (url.pathname.startsWith('/api/')) return true;
 
@@ -76,30 +76,50 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    fetch(event.request)
-      .then((networkResponse) => {
-        if (
-          networkResponse &&
-          networkResponse.ok &&
-          networkResponse.type === 'basic'
-        ) {
-          const responseClone = networkResponse.clone();
-          void caches
-            .open(CACHE_NAME)
-            .then((cache) => cache.put(event.request, responseClone))
-            .catch(() => undefined);
-        }
-        return networkResponse;
-      })
-      .catch(async () => {
-        const cached = await caches.match(event.request);
-        if (cached) return cached;
-        if (event.request.mode === 'navigate') {
-          const fallbackIndex = await caches.match('/');
-          if (fallbackIndex) return fallbackIndex;
-        }
-        return Response.error();
+  // Solo atender navegación para criterios de instalabilidad sin cachear datos dinámicos
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => {
+        const cachedRoot = await caches.match('/');
+        return cachedRoot || Response.error();
       }),
+    );
+  }
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const data = event.notification && event.notification.data ? event.notification.data : {};
+  const targetView = typeof data.view === 'string' && data.view.trim() ? data.view.trim() : '';
+  const targetUrl =
+    typeof data.url === 'string' && data.url.trim()
+      ? data.url.trim()
+      : targetView
+        ? `/?view=${encodeURIComponent(targetView)}`
+        : '/';
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then(async (clientList) => {
+        for (const client of clientList) {
+          if ('focus' in client) {
+            await client.focus();
+            if (targetView && typeof client.postMessage === 'function') {
+              client.postMessage({
+                type: 'X4SPORT_NAVIGATE_VIEW',
+                view: targetView,
+                url: targetUrl,
+              });
+            }
+            return;
+          }
+        }
+        if (self.clients.openWindow) {
+          await self.clients.openWindow(targetUrl);
+        }
+      })
+      .catch(() => undefined),
   );
 });

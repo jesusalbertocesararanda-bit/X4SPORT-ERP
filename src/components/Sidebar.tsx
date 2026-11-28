@@ -139,6 +139,10 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+type WindowWithInstallPrompt = Window & {
+  __deferredInstallPrompt?: BeforeInstallPromptEvent | null;
+};
+
 export function Sidebar({
   activeSubModule,
   isCollapsed,
@@ -153,7 +157,11 @@ export function Sidebar({
   onLogout,
 }: SidebarProps) {
   const [deferredInstallPrompt, setDeferredInstallPrompt] =
-    useState<BeforeInstallPromptEvent | null>(null);
+    useState<BeforeInstallPromptEvent | null>(() => {
+      if (typeof window === 'undefined') return null;
+      return (window as WindowWithInstallPrompt).__deferredInstallPrompt ?? null;
+    });
+  const [showManualInstallGuide, setShowManualInstallGuide] = useState(false);
   const [isPwaInstalled, setIsPwaInstalled] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return (
@@ -166,19 +174,37 @@ export function Sidebar({
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    const syncFromWindowPrompt = () => {
+      const earlyPrompt = (window as WindowWithInstallPrompt)
+        .__deferredInstallPrompt;
+      if (earlyPrompt) {
+        setDeferredInstallPrompt(earlyPrompt);
+        setShowManualInstallGuide(false);
+      }
+    };
+
+    syncFromWindowPrompt();
+
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      setDeferredInstallPrompt(e as BeforeInstallPromptEvent);
+      const promptEvent = e as BeforeInstallPromptEvent;
+      (window as WindowWithInstallPrompt).__deferredInstallPrompt = promptEvent;
+      setDeferredInstallPrompt(promptEvent);
+      setShowManualInstallGuide(false);
     };
 
     const handleAppInstalled = () => {
       setIsPwaInstalled(true);
       setDeferredInstallPrompt(null);
+      setShowManualInstallGuide(false);
+      (window as WindowWithInstallPrompt).__deferredInstallPrompt = null;
     };
 
+    window.addEventListener('x4sport-install-ready', syncFromWindowPrompt);
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
     return () => {
+      window.removeEventListener('x4sport-install-ready', syncFromWindowPrompt);
       window.removeEventListener(
         'beforeinstallprompt',
         handleBeforeInstallPrompt,
@@ -188,10 +214,20 @@ export function Sidebar({
   }, []);
 
   const handleInstallAppClick = async () => {
-    if (!deferredInstallPrompt) return;
+    const promptToUse =
+      deferredInstallPrompt ??
+      (typeof window !== 'undefined'
+        ? (window as WindowWithInstallPrompt).__deferredInstallPrompt
+        : null);
+
+    if (!promptToUse) {
+      setShowManualInstallGuide((prev) => !prev);
+      return;
+    }
+
     try {
-      await deferredInstallPrompt.prompt();
-      const { outcome } = await deferredInstallPrompt.userChoice;
+      await promptToUse.prompt();
+      const { outcome } = await promptToUse.userChoice;
       if (outcome === 'accepted') {
         setIsPwaInstalled(true);
       }
@@ -199,6 +235,9 @@ export function Sidebar({
       // Ignorar cancelación del usuario
     } finally {
       setDeferredInstallPrompt(null);
+      if (typeof window !== 'undefined') {
+        (window as WindowWithInstallPrompt).__deferredInstallPrompt = null;
+      }
     }
   };
 
@@ -573,13 +612,13 @@ export function Sidebar({
             )
           )}
 
-          {/* Instalación nativa PWA (solo visible si beforeinstallprompt está disponible y no está instalada) */}
-          {!isPwaInstalled && deferredInstallPrompt && (
+          {/* Botón Instalar App PWA (oculto automáticamente cuando ya corre en modo standalone) */}
+          {!isPwaInstalled && (
             <div
               data-testid="sidebar-pwa-install-section"
               className={
                 !isCollapsed || mobileOpen
-                  ? 'mt-2 px-1 pt-2 border-t border-slate-200/70 dark:border-slate-800/70'
+                  ? 'mt-2 px-1 pt-2 border-t border-slate-200/70 dark:border-slate-800/70 space-y-2'
                   : 'hidden lg:flex justify-center mt-2 pt-2 border-t border-slate-200/70 dark:border-slate-800/70'
               }
             >
@@ -589,20 +628,35 @@ export function Sidebar({
                 onClick={() => void handleInstallAppClick()}
                 title="Instalar App X4SPORT"
                 aria-label="Instalar App X4SPORT"
-                className={`flex min-h-[36px] items-center justify-center gap-2 rounded-lg border border-blue-500/35 bg-blue-50 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 hover:text-blue-900 dark:border-blue-500/35 dark:bg-blue-600/15 dark:text-blue-200 dark:hover:bg-blue-600/25 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+                className={`flex min-h-[38px] items-center justify-center gap-2 rounded-lg bg-[#38bdf8] text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-sky-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8] ${
                   isCollapsed && !mobileOpen
                     ? 'h-9 w-9 px-0'
                     : 'w-full px-3 py-1.5'
                 }`}
               >
+                <img
+                  src="/icon-192.png"
+                  alt=""
+                  className="h-4 w-4 rounded-sm shrink-0"
+                />
                 <Download
-                  className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400"
+                  className="h-3.5 w-3.5 shrink-0"
                   aria-hidden="true"
                 />
                 <span className={isCollapsed && !mobileOpen ? 'hidden' : 'truncate'}>
-                  Instalar App X4SPORT
+                  Instalar App
                 </span>
               </button>
+
+              {showManualInstallGuide && (!isCollapsed || mobileOpen) && (
+                <div
+                  data-testid="pwa-manual-install-guide"
+                  className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-2.5 py-2 text-[11px] leading-snug text-slate-700 dark:text-sky-100"
+                >
+                  <p>Chrome / Android: Menú ⋮ → &ldquo;Instalar aplicación&rdquo;.</p>
+                  <p className="mt-0.5">iPhone / Safari: Compartir ↑ → &ldquo;Agregar a inicio&rdquo;.</p>
+                </div>
+              )}
             </div>
           )}
         </nav>

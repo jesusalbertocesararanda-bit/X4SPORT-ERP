@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
+  BellRing,
   Check,
   CheckCheck,
   ChevronRight,
   Clock,
   CreditCard,
+  Download,
   Menu,
   Package,
   RotateCcw,
+  Smartphone,
   X,
 } from 'lucide-react';
 import type { AlertThresholdsConfig, SubModuleId } from '../types/erp';
@@ -17,6 +20,21 @@ import type { ERPUser } from '../utils/auth';
 import type { OperationalAlert } from '../utils/finance';
 import { getUnseenAlertCount } from '../utils/notifications';
 import { useNetworkQuality } from '../hooks/useNetworkQuality';
+import {
+  getSystemNotificationPermission,
+  requestSystemNotificationPermission,
+  sendTestSystemNotification,
+  type SystemNotificationPermission,
+} from '../hooks/usePushNotifications';
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+}
+
+type WindowWithInstallPrompt = Window & {
+  __deferredInstallPrompt?: BeforeInstallPromptEvent | null;
+};
 
 export type ConnectionStatus = 'online' | 'poor' | 'offline';
 
@@ -53,11 +71,125 @@ export function AppHeader({
   const [networkTooltipOpen, setNetworkTooltipOpen] = useState(false);
   const [networkHoverOpen, setNetworkHoverOpen] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
+  const [notifPermission, setNotifPermission] =
+    useState<SystemNotificationPermission>(() =>
+      getSystemNotificationPermission(),
+    );
+  const [notifActionBusy, setNotifActionBusy] = useState(false);
+  const [notifTestSent, setNotifTestSent] = useState(false);
+  const [deferredInstallPrompt, setDeferredInstallPrompt] =
+    useState<BeforeInstallPromptEvent | null>(() => {
+      if (typeof window === 'undefined') return null;
+      return (window as WindowWithInstallPrompt).__deferredInstallPrompt ?? null;
+    });
+  const [isPwaInstalled, setIsPwaInstalled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone ===
+        true
+    );
+  });
   const lastScrollYRef = useRef(0);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const networkQuality = useNetworkQuality(connectionStatus);
   const showNetworkTooltip = networkTooltipOpen || networkHoverOpen;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncFromWindowPrompt = () => {
+      const earlyPrompt = (window as WindowWithInstallPrompt)
+        .__deferredInstallPrompt;
+      if (earlyPrompt) {
+        setDeferredInstallPrompt(earlyPrompt);
+      }
+    };
+
+    syncFromWindowPrompt();
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      const promptEvent = e as BeforeInstallPromptEvent;
+      (window as WindowWithInstallPrompt).__deferredInstallPrompt = promptEvent;
+      setDeferredInstallPrompt(promptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setIsPwaInstalled(true);
+      setDeferredInstallPrompt(null);
+      (window as WindowWithInstallPrompt).__deferredInstallPrompt = null;
+    };
+
+    window.addEventListener('x4sport-install-ready', syncFromWindowPrompt);
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener('x4sport-install-ready', syncFromWindowPrompt);
+      window.removeEventListener(
+        'beforeinstallprompt',
+        handleBeforeInstallPrompt,
+      );
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleHeaderInstallClick = async () => {
+    const promptToUse =
+      deferredInstallPrompt ??
+      (typeof window !== 'undefined'
+        ? (window as WindowWithInstallPrompt).__deferredInstallPrompt
+        : null);
+    if (!promptToUse) return;
+    try {
+      await promptToUse.prompt();
+      const { outcome } = await promptToUse.userChoice;
+      if (outcome === 'accepted') {
+        setIsPwaInstalled(true);
+      }
+    } catch {
+      // Ignore user cancellation
+    } finally {
+      setDeferredInstallPrompt(null);
+      if (typeof window !== 'undefined') {
+        (window as WindowWithInstallPrompt).__deferredInstallPrompt = null;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!notifOpen) return;
+    setNotifPermission(getSystemNotificationPermission());
+    setNotifTestSent(false);
+  }, [notifOpen]);
+
+  const handleEnableNotifications = async () => {
+    if (notifActionBusy) return;
+    setNotifActionBusy(true);
+    try {
+      const nextPerm = await requestSystemNotificationPermission();
+      setNotifPermission(nextPerm);
+      if (nextPerm === 'granted') {
+        setNotifTestSent(true);
+      }
+    } finally {
+      setNotifActionBusy(false);
+    }
+  };
+
+  const handleTestNotification = async () => {
+    if (notifActionBusy) return;
+    setNotifActionBusy(true);
+    try {
+      const ok = await sendTestSystemNotification();
+      if (ok) {
+        setNotifTestSent(true);
+      }
+    } finally {
+      setNotifActionBusy(false);
+    }
+  };
 
   // Auto-hide topbar on scroll down, show immediately on scroll up
   useEffect(() => {
@@ -188,11 +320,23 @@ export function AppHeader({
           </nav>
         </div>
 
-        {/* Derecha: Estado de conexión + Usuario y Notificaciones */}
+        {/* Derecha: Instalar App (cuando prompt listo) + Estado de conexión + Usuario y Notificaciones */}
         <div
           ref={popoverRef}
           className="relative flex items-center gap-1.5 sm:gap-2.5 shrink-0"
         >
+          {!isPwaInstalled && deferredInstallPrompt && (
+            <button
+              type="button"
+              data-testid="btn-header-install-pwa"
+              title="Instalar App X4SPORT"
+              aria-label="Instalar App X4SPORT"
+              onClick={() => void handleHeaderInstallClick()}
+              className="inline-flex min-h-[36px] min-w-[36px] sm:min-h-[40px] sm:min-w-[40px] items-center justify-center rounded-lg border border-sky-400/50 bg-[#38bdf8]/15 px-2 text-[#38bdf8] transition-colors hover:bg-[#38bdf8] hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8]"
+            >
+              <Download className="h-4 w-4 shrink-0" aria-hidden="true" />
+            </button>
+          )}
           <div className="relative">
             <button
               type="button"
@@ -338,6 +482,80 @@ export function AppHeader({
                 >
                   <X className="h-4 w-4" aria-hidden="true" />
                 </button>
+              </div>
+
+              {/* Interruptor: Notificaciones en este Teléfono */}
+              <div
+                data-testid="phone-notifications-card"
+                className="flex items-center justify-between gap-2.5 border-b border-slate-800 bg-[#080E1C] px-4 py-2.5"
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div
+                    className={`rounded-lg border p-1.5 shrink-0 ${
+                      notifPermission === 'granted'
+                        ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-400'
+                        : notifPermission === 'denied' ||
+                            notifPermission === 'unsupported'
+                          ? 'border-red-500/35 bg-red-500/10 text-red-400'
+                          : 'border-sky-500/35 bg-sky-500/10 text-sky-400'
+                    }`}
+                  >
+                    <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold text-white">
+                      Notificaciones en este Teléfono
+                    </p>
+                    <p
+                      data-testid="phone-notifications-status"
+                      className={`text-[10px] font-medium ${
+                        notifPermission === 'granted'
+                          ? 'text-emerald-400'
+                          : notifPermission === 'denied' ||
+                              notifPermission === 'unsupported'
+                            ? 'text-red-300'
+                            : 'text-slate-400'
+                      }`}
+                    >
+                      {notifPermission === 'granted'
+                        ? notifTestSent
+                          ? 'Activadas en este dispositivo · Prueba enviada'
+                          : 'Activadas en este dispositivo'
+                        : notifPermission === 'denied' ||
+                            notifPermission === 'unsupported'
+                          ? 'Bloqueadas en navegador'
+                          : 'Desactivadas'}
+                    </p>
+                  </div>
+                </div>
+
+                {notifPermission === 'granted' ? (
+                  <button
+                    type="button"
+                    data-testid="btn-test-push-notifications"
+                    disabled={notifActionBusy}
+                    onClick={() => void handleTestNotification()}
+                    className="inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-md border border-slate-700 bg-[#0D1526] px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition-colors hover:border-sky-500/50 hover:bg-sky-500/15 hover:text-white disabled:opacity-60"
+                  >
+                    <BellRing className="h-3 w-3 text-sky-400" aria-hidden="true" />
+                    Probar
+                  </button>
+                ) : notifPermission === 'default' ? (
+                  <button
+                    type="button"
+                    data-testid="btn-enable-push-notifications"
+                    disabled={notifActionBusy}
+                    onClick={() => void handleEnableNotifications()}
+                    className="inline-flex min-h-[30px] shrink-0 items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
+                  >
+                    <BellRing className="h-3 w-3" aria-hidden="true" />
+                    Activar Notificaciones
+                  </button>
+                ) : (
+                  <span className="text-[10px] text-slate-500 text-right shrink-0">
+                    Permitir en ajustes
+                  </span>
+                )}
               </div>
 
               {alerts.length > 0 && unseenCount > 0 && (

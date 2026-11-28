@@ -12,6 +12,14 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <script>
+      window.__deferredInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.__deferredInstallPrompt = e;
+        window.dispatchEvent(new Event('x4sport-install-ready'));
+      });
+    </script>
     <meta name="description" content="Catálogo oficial con stock en tiempo real de X4SPORT. Camisetas de fútbol Player, Fans y Retro e indumentaria deportiva en Guacara, Carabobo." />
     <meta property="og:title" content="Catálogo X4SPORT" />
     <meta property="og:description" content="Stock disponible hoy · Camisetas de fútbol Player, Fans y Retro en Guacara, Carabobo. Consulta tallas y pide directo por WhatsApp." />

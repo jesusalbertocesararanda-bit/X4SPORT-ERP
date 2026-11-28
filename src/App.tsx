@@ -34,6 +34,7 @@ import { Sidebar } from './components/Sidebar';
 import { StatsView } from './components/StatsView';
 import { SupplierPriceHistoryView } from './components/SupplierPriceHistoryView';
 import { ThemeSelector } from './components/ThemeSelector';
+import { usePushNotifications } from './hooks/usePushNotifications';
 import { useThemePreference } from './hooks/useThemePreference';
 import { createInitialState } from './data/initialState';
 import {
@@ -188,8 +189,18 @@ export default function App() {
   );
   const [isHydratingDb, setIsHydratingDb] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
-  const [activeSubModule, setActiveSubModule] =
-    useState<SubModuleId>('dashboard');
+  const [activeSubModule, setActiveSubModule] = useState<SubModuleId>(() => {
+    if (typeof window === 'undefined') return 'dashboard';
+    try {
+      const viewParam = new URLSearchParams(window.location.search).get('view');
+      if (viewParam && viewParam in SUBMODULE_ROUTES) {
+        return viewParam as SubModuleId;
+      }
+    } catch {
+      // Ignore malformed URL query
+    }
+    return 'dashboard';
+  });
   const activeTab: TabId = SUBMODULE_ROUTES[activeSubModule].tab;
   const breadcrumb = getBreadcrumbParts(activeSubModule);
 
@@ -472,6 +483,39 @@ export default function App() {
     return () => {
       window.removeEventListener('popstate', syncPublicRoute);
       window.removeEventListener('hashchange', syncPublicRoute);
+    };
+  }, []);
+
+  usePushNotifications({
+    state,
+    enabled: !isPublicCatalogRoute && Boolean(currentUser),
+    isHydratingDb,
+  });
+
+  useEffect(() => {
+    const applyTargetView = (candidate: unknown) => {
+      if (typeof candidate === 'string' && candidate in SUBMODULE_ROUTES) {
+        setActiveSubModule(candidate as SubModuleId);
+      }
+    };
+    const handleCustomNavigate = (e: Event) => {
+      applyTargetView((e as CustomEvent<unknown>).detail);
+    };
+    const handleSwMessage = (e: MessageEvent) => {
+      const payload = e.data as { type?: string; view?: string } | null;
+      if (payload?.type === 'X4SPORT_NAVIGATE_VIEW') {
+        applyTargetView(payload.view);
+      }
+    };
+    window.addEventListener('x4sport:navigate-view', handleCustomNavigate);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+    return () => {
+      window.removeEventListener('x4sport:navigate-view', handleCustomNavigate);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
     };
   }, []);
 

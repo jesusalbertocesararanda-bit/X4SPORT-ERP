@@ -10,10 +10,11 @@ if (typeof window !== 'undefined' && !(window as unknown as { firebase?: unknown
 }
 
 if (
-  import.meta.env.PROD &&
   typeof window !== 'undefined' &&
   'serviceWorker' in navigator &&
-  window.location.protocol.startsWith('http')
+  (window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1')
 ) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('/sw.js').catch(() => {
