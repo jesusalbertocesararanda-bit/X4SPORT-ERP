@@ -22,10 +22,12 @@ import {
 import { PARTNER_SHARES } from '../data/initialState';
 import type {
   AppState,
+  BrandIdentityConfig,
   CapitalInjectionDestination,
   ExpenseCategory,
   ExpenseSource,
   MatrixConfigParams,
+  OperatingExpenseRecord,
   PartnerName,
   PaymentMethod,
   SinglePaymentMethod,
@@ -49,10 +51,18 @@ import {
   normalizeExpenseCategory,
   round2,
 } from '../utils/finance';
+import {
+  VoucherReceiptModal,
+  type ExpenseVoucherData,
+  type PartnerPayoutVoucherData,
+  type PartnerReinvestmentVoucherData,
+  type VoucherReceiptData,
+} from './VoucherReceiptModal';
 
 interface FinanceViewProps {
   state: AppState;
   currentUser?: ERPUser | null;
+  brandIdentity?: BrandIdentityConfig;
   activeSection?: 'matriz' | 'gastos' | 'socios' | 'capital' | 'caja' | 'cxc';
   matrixParams?: MatrixConfigParams;
   onOpenReceivables?: () => void;
@@ -134,6 +144,7 @@ const PETTY_CASH_QUICK_PRESETS: Array<{
 export function FinanceView({
   state,
   currentUser,
+  brandIdentity,
   activeSection,
   matrixParams,
   onOpenReceivables,
@@ -147,6 +158,7 @@ export function FinanceView({
   onResetDemoData,
 }: FinanceViewProps) {
   const isAdmin = isAdminUser(currentUser);
+  const operatorName = currentUser?.name?.trim() || 'Jesús César';
   const effectiveMatrixParams = matrixParams ?? DEFAULT_GENERAL_CONFIG.matrixParams;
   const vitalReserveMinUsd = round2(
     Math.max(0, effectiveMatrixParams.vitalReserveMinUsd ?? 150),
@@ -244,6 +256,8 @@ export function FinanceView({
   }, [isArqueoModalOpen]);
 
   const [showAllMovements, setShowAllMovements] = useState(false);
+  const [activeVoucher, setActiveVoucher] =
+    useState<VoucherReceiptData | null>(null);
 
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
@@ -349,12 +363,66 @@ export function FinanceView({
     }
   };
 
+  const formatExpenseSourceLabel = (source: ExpenseSource): string => {
+    if (source === 'operatingFund') {
+      return `Fondo Operativo ${effectiveMatrixParams.operatingFundPct}%`;
+    }
+    if (source === 'growthReinvestment') return 'Fondo de Reinversión 80%';
+    if (source === 'replacement') return 'Fondo de Reposición';
+    if (source === 'dividends') return 'Reparto Dividendos';
+    return 'Caja General (Prorrateo)';
+  };
+
+  const buildExpenseVoucherFromRecord = (
+    exp: OperatingExpenseRecord,
+    resultingCashBalance?: number,
+  ): ExpenseVoucherData => {
+    const displayCat =
+      normalizeExpenseCategory(exp.category) ??
+      exp.category ??
+      'Gasto histórico acumulado';
+    const isBridgeSource =
+      exp.source === 'replacement' || exp.source === 'growthReinvestment';
+    const bridgeOrOverdraftDetail =
+      exp.deficitCoveredByFunds && exp.deficitCoveredByFunds > 0
+        ? isBridgeSource
+          ? `Regla Puente Reposición ↔ Reinversión aplicada: excedente de ${formatUSD(exp.deficitCoveredByFunds)} cubierto por el fondo hermano / fondos activos.`
+          : `Sobregiro proporcional aplicado: ${formatUSD(exp.deficitCoveredByFunds)} cubierto desde fondos activos.`
+        : undefined;
+
+    return {
+      type: 'expense',
+      receiptCode: `EGR-${exp.id.slice(-6).toUpperCase()}`,
+      createdAt: exp.createdAt,
+      recordedBy: operatorName,
+      concept: exp.concept,
+      category: displayCat,
+      amount: exp.amount,
+      paymentMethod: exp.paymentMethod,
+      debitedFundsLabel: formatExpenseSourceLabel(exp.source),
+      bridgeOrOverdraftDetail,
+      resultingCashBalance,
+    };
+  };
+
+  const partnerMovements = useMemo(() => {
+    return (state.movements ?? []).filter(
+      (mov) => mov.type === 'dividend_withdrawal' || mov.type === 'reinvestment',
+    );
+  }, [state.movements]);
+
+  const extractPartnerFromDescription = (desc: string): string => {
+    const found = PARTNERS.find((p) => desc.includes(p));
+    return found ?? 'Socio X4SPORT';
+  };
+
   const handleCollect = async (
     id: string,
     debtor: string,
     amount: number,
     partialAmount?: number,
   ) => {
+    const rec = state.receivables.find((r) => r.id === id);
     const opId = `fin-cxc-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const res = await Promise.resolve(
       onCollectReceivable(id, collectionMethod, partialAmount, opId),
@@ -364,8 +432,45 @@ export function FinanceView({
       return;
     }
 
+    const paidNow =
+      partialAmount !== undefined ? round2(partialAmount) : round2(amount);
+    const remaining = round2(Math.max(0, amount - paidNow));
+    const linkedSale = rec?.saleId
+      ? state.sales.find((s) => s.id === rec.saleId)
+      : undefined;
+    const matchedCustomer = state.customers?.find(
+      (c) => c.name.trim().toLowerCase() === debtor.trim().toLowerCase(),
+    );
+    const saleReference = linkedSale
+      ? `${linkedSale.invoiceNumber || '#0001'} · ${
+          linkedSale.items && linkedSale.items.length > 0
+            ? linkedSale.items
+                .map((l) => `${l.quantity}x ${l.modelLabel} (${l.size})`)
+                .join(', ')
+            : `${linkedSale.quantity}x ${linkedSale.modelLabel} (${linkedSale.size})`
+        }`
+      : rec?.note || 'Cuenta por cobrar';
+    const saleTotal = linkedSale
+      ? round2(Math.max(0, linkedSale.finalPrice - (linkedSale.returnedAmount ?? 0)))
+      : round2(rec?.originalAmount ?? amount + (rec?.paidAmount ?? 0));
+
+    setActiveVoucher({
+      type: 'cxc_payment',
+      receiptCode: `CXC-${id.slice(-4).toUpperCase()}-${Date.now().toString().slice(-4)}`,
+      createdAt: new Date().toISOString(),
+      operatorName,
+      customerName: debtor,
+      customerPhone: linkedSale?.customerPhone || matchedCustomer?.phone,
+      saleReference,
+      saleTotal,
+      previousBalance: round2(amount),
+      paidAmount: paidNow,
+      remainingBalance: remaining,
+      paymentMethod: collectionMethod,
+      bcvRate: state.exchangeRates.bcv,
+    });
+
     if (partialAmount !== undefined && partialAmount < amount) {
-      const remaining = round2(Math.max(0, amount - partialAmount));
       setAbonoTargetId(null);
       setAbonoAmountInput('');
       setFeedback({
@@ -388,6 +493,17 @@ export function FinanceView({
       setFeedback({ type: 'error', text: res.error ?? 'No se pudo reinvertir.' });
       return;
     }
+    const nextGrowthFund = round2(state.funds.growthReinvestment + amount);
+    setActiveVoucher({
+      type: 'partner_reinvestment',
+      receiptCode: `REI-${Date.now().toString().slice(-6)}`,
+      createdAt: new Date().toISOString(),
+      partnerName: partner,
+      reinvestedAmount: amount,
+      destinationFund: `Fondo de Reinversión ${effectiveMatrixParams.growthReinvestmentPct}%`,
+      concept: 'Reinversión de dividendos acumulados al Fondo de Crecimiento',
+      updatedDetailLabel: `Fondo Reinversión: ${formatUSD(nextGrowthFund)} USDT · Dividendos ${partner}: $0.00 USDT`,
+    });
     setFeedback({
       type: 'success',
       text: `${formatUSD(amount)} en dividendos de ${partner} reinvertidos al Fondo de Crecimiento.`,
@@ -396,6 +512,7 @@ export function FinanceView({
 
   const handleWithdrawDividend = async (partner: PartnerName, amount: number) => {
     if (!onWithdrawDividends) return;
+    const prevPartnerBalance = round2(state.funds.dividendsByPartner[partner] ?? amount);
     const res = await Promise.resolve(onWithdrawDividends(partner, amount));
     if (!res.ok) {
       setFeedback({
@@ -404,6 +521,18 @@ export function FinanceView({
       });
       return;
     }
+    setActiveVoucher({
+      type: 'partner_payout',
+      receiptCode: `PAG-${Date.now().toString().slice(-6)}`,
+      createdAt: new Date().toISOString(),
+      authorizedBy: operatorName,
+      partnerName: partner,
+      concept: 'Retiro de Dividendos',
+      previousBalance: prevPartnerBalance,
+      paidAmount: amount,
+      remainingBalance: round2(Math.max(0, prevPartnerBalance - amount)),
+      paymentMethod: 'Efectivo / Caja Física',
+    });
     setFeedback({
       type: 'success',
       text: `Dividendo de ${formatUSD(amount)} retirado por ${partner} y descontado del Efectivo Físico en Caja.`,
@@ -441,6 +570,7 @@ export function FinanceView({
     e.preventDefault();
     setFeedback(null);
     const parsedAmount = Number(expenseAmount);
+    const cleanConcept = expenseConcept.trim();
     const res = await Promise.resolve(
       onRegisterOperatingExpense({
         concept: expenseConcept,
@@ -461,6 +591,27 @@ export function FinanceView({
       expenseSource !== 'cashOnHand' && parsedAmount > selectedFundAvailable;
     const isBridgeSource =
       expenseSource === 'replacement' || expenseSource === 'growthReinvestment';
+    const deficitAmount = triggeredDeficit
+      ? round2(Math.max(0, parsedAmount - selectedFundAvailable))
+      : 0;
+    const resultingCash = round2(Math.max(0, state.cashOnHand - parsedAmount));
+
+    setActiveVoucher(
+      buildExpenseVoucherFromRecord(
+        {
+          id: `exp-${Date.now().toString().slice(-6)}`,
+          concept: cleanConcept,
+          category: expenseCategory,
+          amount: round2(parsedAmount),
+          source: expenseSource,
+          paymentMethod: expenseMethod,
+          deficitCoveredByFunds: deficitAmount > 0 ? deficitAmount : undefined,
+          createdAt: new Date().toISOString(),
+        },
+        resultingCash,
+      ),
+    );
+
     setExpenseConcept('');
     setExpenseAmount('');
     setCategoryManualOverride(false);
@@ -468,9 +619,9 @@ export function FinanceView({
       type: 'success',
       text: triggeredDeficit
         ? isBridgeSource
-          ? `Gasto [${expenseCategory}] "${expenseConcept.trim()}" por ${formatUSD(parsedAmount)} registrado. Regla puente aplicada: el saldo excedente se cubrió con el fondo hermano (Reposición ↔ Reinversión) y los fondos activos según disponibilidad.`
-          : `Gasto [${expenseCategory}] "${expenseConcept.trim()}" por ${formatUSD(parsedAmount)} registrado. Regla de Sobregiro aplicada: el fondo elegido quedó en $0.00 y el excedente redujo proporcionalmente el resto de los fondos activos.`
-        : `Gasto [${expenseCategory}] "${expenseConcept.trim()}" por ${formatUSD(parsedAmount)} registrado y descontado de caja.`,
+          ? `Gasto [${expenseCategory}] "${cleanConcept}" por ${formatUSD(parsedAmount)} registrado. Regla puente aplicada: el saldo excedente se cubrió con el fondo hermano (Reposición ↔ Reinversión) y los fondos activos según disponibilidad.`
+          : `Gasto [${expenseCategory}] "${cleanConcept}" por ${formatUSD(parsedAmount)} registrado. Regla de Sobregiro aplicada: el fondo elegido quedó en $0.00 y el excedente redujo proporcionalmente el resto de los fondos activos.`
+        : `Gasto [${expenseCategory}] "${cleanConcept}" por ${formatUSD(parsedAmount)} registrado y descontado de caja.`,
     });
   };
 
@@ -478,6 +629,8 @@ export function FinanceView({
     e.preventDefault();
     setFeedback(null);
     const parsedAmount = Number(injAmount);
+    const cleanContributor = injContributor.trim();
+    const cleanConcept = injConcept.trim() || 'Inyección de liquidez';
     const res = await Promise.resolve(
       onRegisterCapitalInjection({
         contributor: injContributor,
@@ -494,11 +647,39 @@ export function FinanceView({
       });
       return;
     }
+
+    const isPartnerOrReinvestment =
+      PARTNERS.includes(cleanContributor as PartnerName) ||
+      injDestination === 'growthReinvestment';
+    if (isPartnerOrReinvestment) {
+      const destFund =
+        injDestination === 'growthReinvestment'
+          ? `Fondo de Reinversión ${effectiveMatrixParams.growthReinvestmentPct}%`
+          : injDestination === 'operatingFund'
+            ? `Fondo Operativo ${effectiveMatrixParams.operatingFundPct}%`
+            : 'Caja Operativa';
+      const nextCash = round2(state.cashOnHand + parsedAmount);
+      const nextGrowth = round2(state.funds.growthReinvestment + parsedAmount);
+      setActiveVoucher({
+        type: 'partner_reinvestment',
+        receiptCode: `REI-${Date.now().toString().slice(-6)}`,
+        createdAt: new Date().toISOString(),
+        partnerName: cleanContributor,
+        reinvestedAmount: round2(parsedAmount),
+        destinationFund: destFund,
+        concept: `${cleanConcept} (${injMethod})`,
+        updatedDetailLabel:
+          injDestination === 'growthReinvestment'
+            ? `Fondo Reinversión: ${formatUSD(nextGrowth)} USDT · Caja: ${formatUSD(nextCash)} USDT`
+            : `Caja Operativa: ${formatUSD(nextCash)} USDT`,
+      });
+    }
+
     setInjConcept('');
     setInjAmount('');
     setFeedback({
       type: 'success',
-      text: `Inyección de ${formatUSD(parsedAmount)} (${injContributor.trim()}) conciliada en caja operativa sin alterar el costo FIFO de inventario.`,
+      text: `Inyección de ${formatUSD(parsedAmount)} (${cleanContributor}) conciliada en caja operativa sin alterar el costo FIFO de inventario.`,
     });
   };
 
@@ -1100,6 +1281,82 @@ export function FinanceView({
               </tbody>
             </table>
           </div>
+
+          {partnerMovements.length > 0 && (
+            <div className="mt-5 border-t border-slate-800 pt-4 space-y-2">
+              <p className="text-xs font-semibold text-slate-300">
+                Historial de Liquidaciones y Reinversiones de Socios
+              </p>
+              <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/70">
+                {partnerMovements.slice(0, 20).map((mov, idx) => {
+                  const partner = extractPartnerFromDescription(mov.description);
+                  const isReinv = mov.type === 'reinvestment';
+                  return (
+                    <div
+                      key={`${mov.id || 'pmov'}-${idx}`}
+                      className="flex flex-wrap items-center justify-between gap-2 py-2 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-slate-200 truncate">{mov.description}</p>
+                        <p className="text-[11px] text-slate-500">
+                          {new Date(mov.createdAt).toLocaleString('es-VE', {
+                            dateStyle: 'short',
+                            timeStyle: 'short',
+                          })}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`font-mono-num font-semibold ${
+                            isReinv ? 'text-emerald-400' : 'text-red-300'
+                          }`}
+                        >
+                          {isReinv ? '+' : '-'}
+                          {formatUSD(Math.abs(mov.amount))}
+                        </span>
+                        <button
+                          type="button"
+                          data-testid={`btn-partner-mov-voucher-${mov.id || idx}`}
+                          title="Ver / descargar comprobante .JPG"
+                          aria-label={`Ver comprobante de ${mov.description}`}
+                          onClick={() => {
+                            if (isReinv) {
+                              const payload: PartnerReinvestmentVoucherData = {
+                                type: 'partner_reinvestment',
+                                receiptCode: `REI-${(mov.id || String(idx)).slice(-6).toUpperCase()}`,
+                                createdAt: mov.createdAt,
+                                partnerName: partner,
+                                reinvestedAmount: Math.abs(mov.amount),
+                                destinationFund: `Fondo de Reinversión ${effectiveMatrixParams.growthReinvestmentPct}%`,
+                                concept: mov.description,
+                              };
+                              setActiveVoucher(payload);
+                            } else {
+                              const payload: PartnerPayoutVoucherData = {
+                                type: 'partner_payout',
+                                receiptCode: `PAG-${(mov.id || String(idx)).slice(-6).toUpperCase()}`,
+                                createdAt: mov.createdAt,
+                                authorizedBy: operatorName,
+                                partnerName: partner,
+                                concept: 'Retiro de Dividendos',
+                                paidAmount: Math.abs(mov.amount),
+                                paymentMethod: 'Efectivo / Caja Física',
+                              };
+                              setActiveVoucher(payload);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 hover:text-white"
+                        >
+                          <Receipt className="h-3 w-3" aria-hidden="true" />
+                          JPG
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </section>
         )}
 
@@ -1593,9 +1850,24 @@ export function FinanceView({
                       })}
                     </p>
                   </div>
-                  <span className="font-mono-num text-sm font-semibold text-red-300">
-                    -{formatUSD(exp.amount)}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-mono-num text-sm font-semibold text-red-300">
+                      -{formatUSD(exp.amount)}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid={`btn-expense-voucher-${exp.id}`}
+                      title="Ver / descargar comprobante de gasto .JPG"
+                      aria-label={`Ver comprobante de gasto ${exp.concept}`}
+                      onClick={() =>
+                        setActiveVoucher(buildExpenseVoucherFromRecord(exp))
+                      }
+                      className="inline-flex items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 hover:text-white"
+                    >
+                      <Receipt className="h-3 w-3" aria-hidden="true" />
+                      JPG
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -1821,9 +2093,40 @@ export function FinanceView({
                       })}
                     </p>
                   </div>
-                  <span className="font-mono-num text-sm font-semibold text-emerald-400">
-                    +{formatUSD(inj.amount)}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-mono-num text-sm font-semibold text-emerald-400">
+                      +{formatUSD(inj.amount)}
+                    </span>
+                    {(PARTNERS.includes(inj.contributor.trim() as PartnerName) ||
+                      inj.destination === 'growthReinvestment') && (
+                      <button
+                        type="button"
+                        data-testid={`btn-reinvestment-voucher-${inj.id}`}
+                        title="Ver / descargar comprobante de reinversión .JPG"
+                        aria-label={`Ver comprobante de reinversión ${inj.contributor}`}
+                        onClick={() =>
+                          setActiveVoucher({
+                            type: 'partner_reinvestment',
+                            receiptCode: `REI-${inj.id.slice(-6).toUpperCase()}`,
+                            createdAt: inj.createdAt,
+                            partnerName: inj.contributor,
+                            reinvestedAmount: inj.amount,
+                            destinationFund:
+                              inj.destination === 'growthReinvestment'
+                                ? `Fondo de Reinversión ${effectiveMatrixParams.growthReinvestmentPct}%`
+                                : inj.destination === 'operatingFund'
+                                  ? `Fondo Operativo ${effectiveMatrixParams.operatingFundPct}%`
+                                  : 'Caja Operativa',
+                            concept: `${inj.concept} (${inj.paymentMethod})`,
+                          })
+                        }
+                        className="inline-flex items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 hover:text-white"
+                      >
+                        <Receipt className="h-3 w-3" aria-hidden="true" />
+                        JPG
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1988,18 +2291,73 @@ export function FinanceView({
                           })}
                         </p>
                       </div>
-                      <span
-                        className={`font-mono-num font-semibold shrink-0 ${
-                          mov.amount > 0
-                            ? 'text-emerald-400'
-                            : mov.amount < 0
-                              ? 'text-red-300'
-                              : 'text-slate-400'
-                        }`}
-                      >
-                        {mov.amount > 0 ? '+' : ''}
-                        {formatUSD(mov.amount)}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`font-mono-num font-semibold ${
+                            mov.amount > 0
+                              ? 'text-emerald-400'
+                              : mov.amount < 0
+                                ? 'text-red-300'
+                                : 'text-slate-400'
+                          }`}
+                        >
+                          {mov.amount > 0 ? '+' : ''}
+                          {formatUSD(mov.amount)}
+                        </span>
+                        {(mov.type === 'dividend_withdrawal' ||
+                          mov.type === 'reinvestment' ||
+                          mov.type === 'expense') && (
+                          <button
+                            type="button"
+                            title="Ver / descargar comprobante .JPG"
+                            aria-label={`Ver comprobante de ${mov.description}`}
+                            onClick={() => {
+                              if (mov.type === 'dividend_withdrawal') {
+                                setActiveVoucher({
+                                  type: 'partner_payout',
+                                  receiptCode: `PAG-${(mov.id || String(idx)).slice(-6).toUpperCase()}`,
+                                  createdAt: mov.createdAt,
+                                  authorizedBy: operatorName,
+                                  partnerName: extractPartnerFromDescription(
+                                    mov.description,
+                                  ),
+                                  concept: 'Retiro de Dividendos',
+                                  paidAmount: Math.abs(mov.amount),
+                                  paymentMethod: 'Efectivo / Caja Física',
+                                });
+                              } else if (mov.type === 'reinvestment') {
+                                setActiveVoucher({
+                                  type: 'partner_reinvestment',
+                                  receiptCode: `REI-${(mov.id || String(idx)).slice(-6).toUpperCase()}`,
+                                  createdAt: mov.createdAt,
+                                  partnerName: extractPartnerFromDescription(
+                                    mov.description,
+                                  ),
+                                  reinvestedAmount: Math.abs(mov.amount),
+                                  destinationFund: `Fondo de Reinversión ${effectiveMatrixParams.growthReinvestmentPct}%`,
+                                  concept: mov.description,
+                                });
+                              } else {
+                                setActiveVoucher({
+                                  type: 'expense',
+                                  receiptCode: `EGR-${(mov.id || String(idx)).slice(-6).toUpperCase()}`,
+                                  createdAt: mov.createdAt,
+                                  recordedBy: operatorName,
+                                  concept: mov.description,
+                                  category: 'Gasto Operativo',
+                                  amount: Math.abs(mov.amount),
+                                  paymentMethod: 'Caja Física',
+                                  debitedFundsLabel: 'Según registro contable',
+                                });
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 hover:text-white"
+                          >
+                            <Receipt className="h-2.5 w-2.5" aria-hidden="true" />
+                            JPG
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2139,6 +2497,12 @@ export function FinanceView({
           </div>
         </div>
       )}
+
+      <VoucherReceiptModal
+        voucher={activeVoucher}
+        brandIdentity={brandIdentity}
+        onClose={() => setActiveVoucher(null)}
+      />
     </div>
   );
 }

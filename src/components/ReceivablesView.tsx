@@ -5,24 +5,34 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Receipt,
   Search,
   Wallet,
 } from 'lucide-react';
 import type {
   AppState,
+  BrandIdentityConfig,
   PaymentMethod,
   ReceivableItem,
   SinglePaymentMethod,
 } from '../types/erp';
+import type { ERPUser } from '../utils/auth';
 import {
   formatUSD,
   formatVES,
   getTotalReceivables,
   round2,
 } from '../utils/finance';
+import {
+  VoucherReceiptModal,
+  type CxcPaymentVoucherData,
+  type VoucherReceiptData,
+} from './VoucherReceiptModal';
 
 interface ReceivablesViewProps {
   state: AppState;
+  currentUser?: ERPUser | null;
+  brandIdentity?: BrandIdentityConfig;
   receivableOverdueDays?: number;
   onCollectReceivable: (
     receivableId: string,
@@ -49,8 +59,59 @@ function createCollectOpId(recId: string): string {
   return `cxc-${recId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function buildCxcVoucherData(
+  state: AppState,
+  rec: ReceivableItem,
+  params: {
+    receiptCode: string;
+    createdAt: string;
+    operatorName: string;
+    previousBalance: number;
+    paidAmount: number;
+    remainingBalance: number;
+    paymentMethod: string;
+  },
+): CxcPaymentVoucherData {
+  const linkedSale = rec.saleId
+    ? state.sales.find((s) => s.id === rec.saleId)
+    : undefined;
+  const matchedCustomer = state.customers?.find(
+    (c) => c.name.trim().toLowerCase() === rec.debtor.trim().toLowerCase(),
+  );
+  const saleReference = linkedSale
+    ? `${linkedSale.invoiceNumber || '#0001'} · ${
+        linkedSale.items && linkedSale.items.length > 0
+          ? linkedSale.items
+              .map((l) => `${l.quantity}x ${l.modelLabel} (${l.size})`)
+              .join(', ')
+          : `${linkedSale.quantity}x ${linkedSale.modelLabel} (${linkedSale.size})`
+      }`
+    : rec.note || 'Cuenta por cobrar';
+  const saleTotal = linkedSale
+    ? round2(Math.max(0, linkedSale.finalPrice - (linkedSale.returnedAmount ?? 0)))
+    : round2(rec.originalAmount ?? rec.amount + (rec.paidAmount ?? 0));
+
+  return {
+    type: 'cxc_payment',
+    receiptCode: params.receiptCode,
+    createdAt: params.createdAt,
+    operatorName: params.operatorName,
+    customerName: rec.debtor,
+    customerPhone: linkedSale?.customerPhone || matchedCustomer?.phone,
+    saleReference,
+    saleTotal,
+    previousBalance: round2(params.previousBalance),
+    paidAmount: round2(params.paidAmount),
+    remainingBalance: round2(Math.max(0, params.remainingBalance)),
+    paymentMethod: params.paymentMethod,
+    bcvRate: state.exchangeRates.bcv,
+  };
+}
+
 export function ReceivablesView({
   state,
+  currentUser,
+  brandIdentity,
   receivableOverdueDays = 30,
   onCollectReceivable,
 }: ReceivablesViewProps) {
@@ -66,10 +127,14 @@ export function ReceivablesView({
     Record<string, boolean>
   >({});
   const [isSubmittingId, setIsSubmittingId] = useState<string | null>(null);
+  const [activeVoucher, setActiveVoucher] =
+    useState<VoucherReceiptData | null>(null);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
   } | null>(null);
+
+  const operatorName = currentUser?.name?.trim() || 'Jesús César';
 
   const enrichedReceivables = useMemo(() => {
     return (state.receivables ?? []).map((rec) => {
@@ -148,6 +213,19 @@ export function ReceivablesView({
       const remaining = round2(Math.max(0, rec.amount - paidNow));
       setAbonoTargetId(null);
       setAbonoAmountInput('');
+
+      const receiptCode = `CXC-${rec.id.slice(-4).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+      setActiveVoucher(
+        buildCxcVoucherData(state, rec, {
+          receiptCode,
+          createdAt: new Date().toISOString(),
+          operatorName,
+          previousBalance: rec.amount,
+          paidAmount: paidNow,
+          remainingBalance: remaining,
+          paymentMethod: collectionMethod,
+        }),
+      );
 
       if (remaining > 0.009) {
         setFeedback({
@@ -464,27 +542,63 @@ export function ReceivablesView({
                         </button>
 
                         {isExpanded && (
-                          <ul className="mt-1.5 space-y-1 rounded-lg border border-slate-800 bg-[#080E1C] p-2.5 text-xs text-slate-300">
-                            {rec.installments!.map((inst) => (
-                              <li
-                                key={inst.id}
-                                className="flex items-center justify-between gap-2"
-                              >
-                                <span>
-                                  {new Date(inst.createdAt).toLocaleString(
-                                    'es-VE',
-                                    {
-                                      dateStyle: 'short',
-                                      timeStyle: 'short',
-                                    },
-                                  )}{' '}
-                                  · {inst.paymentMethod}
-                                </span>
-                                <span className="font-mono-num font-semibold text-emerald-400">
-                                  +{formatUSD(inst.amount)}
-                                </span>
-                              </li>
-                            ))}
+                          <ul className="mt-1.5 space-y-1.5 rounded-lg border border-slate-800 bg-[#080E1C] p-2.5 text-xs text-slate-300">
+                            {rec.installments!.map((inst, instIdx) => {
+                              const laterPaid = rec.installments!
+                                .slice(0, instIdx)
+                                .reduce((sum, item) => sum + item.amount, 0);
+                              const remainingAfterInst = round2(
+                                rec.amount + laterPaid,
+                              );
+                              const previousBalanceBeforeInst = round2(
+                                remainingAfterInst + inst.amount,
+                              );
+                              return (
+                                <li
+                                  key={inst.id}
+                                  className="flex items-center justify-between gap-2"
+                                >
+                                  <span className="min-w-0 truncate">
+                                    {new Date(inst.createdAt).toLocaleString(
+                                      'es-VE',
+                                      {
+                                        dateStyle: 'short',
+                                        timeStyle: 'short',
+                                      },
+                                    )}{' '}
+                                    · {inst.paymentMethod}
+                                  </span>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="font-mono-num font-semibold text-emerald-400">
+                                      +{formatUSD(inst.amount)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      data-testid={`btn-cxc-installment-voucher-${inst.id}`}
+                                      title="Ver / descargar comprobante .JPG"
+                                      aria-label={`Ver comprobante de abono ${formatUSD(inst.amount)}`}
+                                      onClick={() =>
+                                        setActiveVoucher(
+                                          buildCxcVoucherData(state, rec, {
+                                            receiptCode: `CXC-${inst.id.slice(-6).toUpperCase()}`,
+                                            createdAt: inst.createdAt,
+                                            operatorName,
+                                            previousBalance: previousBalanceBeforeInst,
+                                            paidAmount: inst.amount,
+                                            remainingBalance: remainingAfterInst,
+                                            paymentMethod: inst.paymentMethod,
+                                          }),
+                                        )
+                                      }
+                                      className="inline-flex items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 hover:text-white"
+                                    >
+                                      <Receipt className="h-3 w-3" aria-hidden="true" />
+                                      JPG
+                                    </button>
+                                  </div>
+                                </li>
+                              );
+                            })}
                           </ul>
                         )}
                       </div>
@@ -496,6 +610,12 @@ export function ReceivablesView({
           </div>
         )}
       </section>
+
+      <VoucherReceiptModal
+        voucher={activeVoucher}
+        brandIdentity={brandIdentity}
+        onClose={() => setActiveVoucher(null)}
+      />
     </div>
   );
 }

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BarChart3,
   ChevronDown,
   ChevronRight,
+  Download,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -133,6 +134,11 @@ const DEFAULT_EXPANDED_BRANCHES: Record<string, boolean> = {
   'tree-configuracion': false,
 };
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+}
+
 export function Sidebar({
   activeSubModule,
   isCollapsed,
@@ -146,6 +152,56 @@ export function Sidebar({
   onSelectSubModule,
   onLogout,
 }: SidebarProps) {
+  const [deferredInstallPrompt, setDeferredInstallPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [isPwaInstalled, setIsPwaInstalled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone ===
+        true
+    );
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setIsPwaInstalled(true);
+      setDeferredInstallPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener(
+        'beforeinstallprompt',
+        handleBeforeInstallPrompt,
+      );
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallAppClick = async () => {
+    if (!deferredInstallPrompt) return;
+    try {
+      await deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setIsPwaInstalled(true);
+      }
+    } catch {
+      // Ignorar cancelación del usuario
+    } finally {
+      setDeferredInstallPrompt(null);
+    }
+  };
+
   const [expandedBranches, setExpandedBranches] = useState<
     Record<string, boolean>
   >(() => {
@@ -515,6 +571,39 @@ export function Sidebar({
                 </button>
               </div>
             )
+          )}
+
+          {/* Instalación nativa PWA (solo visible si beforeinstallprompt está disponible y no está instalada) */}
+          {!isPwaInstalled && deferredInstallPrompt && (
+            <div
+              data-testid="sidebar-pwa-install-section"
+              className={
+                !isCollapsed || mobileOpen
+                  ? 'mt-2 px-1 pt-2 border-t border-slate-200/70 dark:border-slate-800/70'
+                  : 'hidden lg:flex justify-center mt-2 pt-2 border-t border-slate-200/70 dark:border-slate-800/70'
+              }
+            >
+              <button
+                type="button"
+                data-testid="btn-install-pwa"
+                onClick={() => void handleInstallAppClick()}
+                title="Instalar App X4SPORT"
+                aria-label="Instalar App X4SPORT"
+                className={`flex min-h-[36px] items-center justify-center gap-2 rounded-lg border border-blue-500/35 bg-blue-50 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 hover:text-blue-900 dark:border-blue-500/35 dark:bg-blue-600/15 dark:text-blue-200 dark:hover:bg-blue-600/25 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+                  isCollapsed && !mobileOpen
+                    ? 'h-9 w-9 px-0'
+                    : 'w-full px-3 py-1.5'
+                }`}
+              >
+                <Download
+                  className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400"
+                  aria-hidden="true"
+                />
+                <span className={isCollapsed && !mobileOpen ? 'hidden' : 'truncate'}>
+                  Instalar App X4SPORT
+                </span>
+              </button>
+            </div>
           )}
         </nav>
 

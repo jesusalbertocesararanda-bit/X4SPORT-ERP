@@ -9,4 +9,17 @@ if (typeof window !== 'undefined' && !(window as unknown as { firebase?: unknown
   (window as unknown as { firebase?: unknown }).firebase = firebase;
 }
 
+if (
+  import.meta.env.PROD &&
+  typeof window !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  window.location.protocol.startsWith('http')
+) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Silenciar errores si el navegador o iframe restringe Service Workers
+    });
+  });
+}
+
 createRoot(document.getElementById('root')!).render(<App />);

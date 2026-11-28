@@ -1963,6 +1963,8 @@ export default function App() {
               {activeTab === 'finanzas' && activeSubModule === 'ventas-cxc' && (
                 <ReceivablesView
                   state={state}
+                  currentUser={currentUser}
+                  brandIdentity={generalConfig.brandIdentity}
                   receivableOverdueDays={generalConfig.alertThresholds.receivableOverdueDays}
                   onCollectReceivable={handleCollectReceivable}
                 />
@@ -1972,6 +1974,7 @@ export default function App() {
                 <FinanceView
                   state={state}
                   currentUser={currentUser}
+                  brandIdentity={generalConfig.brandIdentity}
                   activeSection={
                     activeSubModule === 'finanzas-gastos'
                       ? 'gastos'
