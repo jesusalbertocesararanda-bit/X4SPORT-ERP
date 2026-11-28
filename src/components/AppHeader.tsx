@@ -16,6 +16,7 @@ import type { AlertThresholdsConfig, SubModuleId } from '../types/erp';
 import type { ERPUser } from '../utils/auth';
 import type { OperationalAlert } from '../utils/finance';
 import { getUnseenAlertCount } from '../utils/notifications';
+import { useNetworkQuality } from '../hooks/useNetworkQuality';
 
 export type ConnectionStatus = 'online' | 'poor' | 'offline';
 
@@ -49,14 +50,19 @@ export function AppHeader({
   onNavigateAlert,
 }: AppHeaderProps) {
   const [notifOpen, setNotifOpen] = useState(false);
+  const [networkTooltipOpen, setNetworkTooltipOpen] = useState(false);
+  const [networkHoverOpen, setNetworkHoverOpen] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
   const lastScrollYRef = useRef(0);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
+  const networkQuality = useNetworkQuality(connectionStatus);
+  const showNetworkTooltip = networkTooltipOpen || networkHoverOpen;
+
   // Auto-hide topbar on scroll down, show immediately on scroll up
   useEffect(() => {
     const handleScroll = () => {
-      if (notifOpen) {
+      if (notifOpen || networkTooltipOpen) {
         setIsVisible(true);
         return;
       }
@@ -75,7 +81,7 @@ export function AppHeader({
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
-  }, [notifOpen]);
+  }, [notifOpen, networkTooltipOpen]);
 
   // Reset visible when route changes
   useEffect(() => {
@@ -83,9 +89,12 @@ export function AppHeader({
   }, [moduleLabel, subModuleLabel]);
 
   useEffect(() => {
-    if (!notifOpen) return;
+    if (!notifOpen && !networkTooltipOpen) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setNotifOpen(false);
+      if (e.key === 'Escape') {
+        setNotifOpen(false);
+        setNetworkTooltipOpen(false);
+      }
     };
     const handleClickOutside = (e: MouseEvent) => {
       if (
@@ -93,6 +102,7 @@ export function AppHeader({
         !popoverRef.current.contains(e.target as Node)
       ) {
         setNotifOpen(false);
+        setNetworkTooltipOpen(false);
       }
     };
     window.addEventListener('keydown', handleKey);
@@ -101,24 +111,10 @@ export function AppHeader({
       window.removeEventListener('keydown', handleKey);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [notifOpen]);
+  }, [notifOpen, networkTooltipOpen]);
 
   const seenSet = new Set(seenAlertIds);
   const unseenCount = getUnseenAlertCount(alerts, seenAlertIds);
-
-  const connectionDotClass =
-    connectionStatus === 'offline'
-      ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]'
-      : connectionStatus === 'poor'
-        ? 'bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.75)]'
-        : 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.75)]';
-
-  const connectionLabel =
-    connectionStatus === 'offline'
-      ? 'Sin conexión'
-      : connectionStatus === 'poor'
-        ? 'Conexión débil'
-        : 'Conectado y sincronizado';
 
   const cleanUserName = currentUser?.name
     ? currentUser.name.replace(/\s*\(X4SPORT\)\s*$/i, '').trim()
@@ -197,50 +193,73 @@ export function AppHeader({
           ref={popoverRef}
           className="relative flex items-center gap-1.5 sm:gap-2.5 shrink-0"
         >
-          <div
-            data-testid="header-connection-status"
-            data-status={connectionStatus}
-            title={
-              cleanUserName
-                ? `${cleanUserName} · ${connectionLabel}`
-                : connectionLabel
-            }
-            aria-label={
-              cleanUserName
-                ? `${cleanUserName}, ${connectionLabel}`
-                : connectionLabel
-            }
-            className={`inline-flex min-h-[36px] sm:min-h-[40px] items-center gap-1.5 sm:gap-2 rounded-lg border px-2 sm:px-3 py-1 sm:py-1.5 text-xs transition-colors ${
-              connectionStatus === 'offline'
-                ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-200'
-                : connectionStatus === 'poor'
-                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                  : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-[#0D1526] dark:text-slate-200'
-            }`}
-          >
-            <span
-              data-testid="header-connection-dot"
-              className={`h-2.5 w-2.5 rounded-full shrink-0 ${connectionDotClass}`}
-            />
-            {connectionStatus !== 'online' && (
+          <div className="relative">
+            <button
+              type="button"
+              data-testid="header-connection-status"
+              data-status={connectionStatus}
+              data-quality={networkQuality.level}
+              title={
+                cleanUserName
+                  ? `${cleanUserName} · ${networkQuality.diagnostic}`
+                  : networkQuality.diagnostic
+              }
+              aria-label={
+                cleanUserName
+                  ? `${cleanUserName}, ${networkQuality.diagnostic}`
+                  : networkQuality.diagnostic
+              }
+              aria-expanded={showNetworkTooltip}
+              onClick={() => {
+                setNotifOpen(false);
+                setNetworkTooltipOpen((prev) => !prev);
+              }}
+              onMouseEnter={() => setNetworkHoverOpen(true)}
+              onMouseLeave={() => setNetworkHoverOpen(false)}
+              onFocus={() => setNetworkHoverOpen(true)}
+              onBlur={() => setNetworkHoverOpen(false)}
+              className={`inline-flex min-h-[36px] sm:min-h-[40px] items-center gap-1.5 sm:gap-2 rounded-lg border px-2 sm:px-3 py-1 sm:py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${networkQuality.pillClassName}`}
+            >
               <span
-                data-testid="header-connection-label"
-                className="text-[10px] sm:text-[11px] font-semibold whitespace-nowrap"
+                data-testid="header-connection-dot"
+                className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all duration-300 ${networkQuality.dotClassName}`}
+              />
+              {cleanUserName ? (
+                <span
+                  data-testid="header-active-user-name"
+                  className="font-semibold whitespace-nowrap"
+                >
+                  {cleanUserName}
+                </span>
+              ) : (
+                <span
+                  data-testid="header-connection-label"
+                  className="text-[11px] font-semibold whitespace-nowrap"
+                >
+                  {networkQuality.label}
+                </span>
+              )}
+            </button>
+
+            {showNetworkTooltip && (
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="header-network-tooltip"
+                className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 w-max max-w-[250px] rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-left shadow-xl backdrop-blur-md dark:border-slate-700 dark:bg-[#0D1526]/95"
               >
-                {connectionStatus === 'offline'
-                  ? 'Sin conexión'
-                  : 'Conexión débil'}
-              </span>
-            )}
-            {cleanUserName && (
-              <span
-                data-testid="header-active-user-name"
-                className={`font-semibold whitespace-nowrap ${
-                  connectionStatus !== 'online' ? 'hidden md:inline' : ''
-                }`}
-              >
-                {cleanUserName}
-              </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-2 w-2 rounded-full shrink-0 ${networkQuality.dotClassName}`}
+                  />
+                  <span className="text-[11px] font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                    {networkQuality.diagnostic}
+                  </span>
+                </div>
+                <p className="mt-0.5 pl-4 text-[10px] text-slate-500 dark:text-slate-400">
+                  {networkQuality.detailLine}
+                </p>
+              </div>
             )}
           </div>
 
@@ -254,7 +273,10 @@ export function AppHeader({
                 ? `Notificaciones (${unseenCount} no leídas)`
                 : 'Notificaciones (sin alertas pendientes)'
             }
-            onClick={() => setNotifOpen((prev) => !prev)}
+            onClick={() => {
+              setNetworkTooltipOpen(false);
+              setNotifOpen((prev) => !prev);
+            }}
             className={`relative inline-flex min-h-[36px] sm:min-h-[40px] items-center justify-center gap-1.5 sm:gap-2 rounded-lg border px-2 sm:px-3.5 py-1.5 sm:py-2 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
               unseenCount > 0
                 ? 'border-red-500/45 bg-red-500/10 text-red-700 hover:bg-red-500/20 dark:text-red-200'
