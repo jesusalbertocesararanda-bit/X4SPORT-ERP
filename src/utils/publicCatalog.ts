@@ -9,6 +9,8 @@ import type {
 import {
   ALL_JERSEY_SIZES,
   compareJerseySizes,
+  formatUSD,
+  formatVES,
   type InventorySizeMatrixRow,
   normalizeVersionDisplay,
   round2,
@@ -1512,4 +1514,362 @@ export function propagateModelPhotosAfterBatchMutation(
     purchases: nextPurchases,
   };
 }
+
+export const PUBLIC_CART_STORAGE_KEY = 'x4sport_public_cart_v1';
+
+export interface PublicCartItem {
+  id: string;
+  modelKey: string;
+  team: TeamCategory;
+  model: string;
+  player?: string;
+  version: 'Fans' | 'Player' | 'Retro';
+  size: JerseySize;
+  quantity: number;
+  unitPrice: number;
+  maxStock: number;
+  photoUrl?: string;
+}
+
+export interface PublicCartCandidate {
+  modelKey: string;
+  team: TeamCategory;
+  model: string;
+  player?: string;
+  version: 'Fans' | 'Player' | 'Retro';
+  size: JerseySize;
+  unitPrice: number;
+  maxStock: number;
+  photoUrl?: string;
+  quantityToAdd?: number;
+}
+
+export interface PublicCartTotals {
+  totalItems: number;
+  distinctLines: number;
+  totalUsd: number;
+  totalBs: number | null;
+  bcvRate: number | null;
+}
+
+export interface BuildWhatsAppMultiItemMessageInput {
+  items: PublicCartItem[];
+  bcvRate?: number | null;
+  customerName?: string;
+  deliveryZone?: string;
+}
+
+export function buildPublicCartItemId(
+  modelKey: string,
+  size: JerseySize | string,
+): string {
+  return `${modelKey}::${String(size).trim()}`;
+}
+
+export function addItemToPublicCart(
+  cart: PublicCartItem[],
+  candidate: PublicCartCandidate,
+): PublicCartItem[] {
+  const safeMaxStock = Math.max(0, Math.floor(candidate.maxStock));
+  if (safeMaxStock <= 0) return cart;
+
+  const qtyToAdd = Math.max(1, Math.floor(candidate.quantityToAdd ?? 1));
+  const id = buildPublicCartItemId(candidate.modelKey, candidate.size);
+  const parsed = splitModelAndPlayerParts(candidate.model);
+  const cleanModel = parsed.baseModel || candidate.model.trim();
+  const cleanPlayer =
+    candidate.player?.trim() || parsed.player || undefined;
+  const normalizedVer = normalizeVersionDisplay(candidate.version);
+
+  const existingIndex = cart.findIndex((item) => item.id === id);
+  if (existingIndex === -1) {
+    const clampedQty = Math.min(qtyToAdd, safeMaxStock);
+    return [
+      ...cart,
+      {
+        id,
+        modelKey: candidate.modelKey,
+        team: candidate.team,
+        model: cleanModel,
+        ...(cleanPlayer ? { player: cleanPlayer } : {}),
+        version: normalizedVer,
+        size: candidate.size,
+        quantity: clampedQty,
+        unitPrice: round2(candidate.unitPrice),
+        maxStock: safeMaxStock,
+        ...(candidate.photoUrl?.trim() ? { photoUrl: candidate.photoUrl.trim() } : {}),
+      },
+    ];
+  }
+
+  return cart.map((item, idx) => {
+    if (idx !== existingIndex) return item;
+    const nextQty = Math.min(item.quantity + qtyToAdd, safeMaxStock);
+    return {
+      ...item,
+      team: candidate.team,
+      model: cleanModel,
+      ...(cleanPlayer ? { player: cleanPlayer } : {}),
+      version: normalizedVer,
+      quantity: nextQty,
+      unitPrice: round2(candidate.unitPrice),
+      maxStock: safeMaxStock,
+      ...(candidate.photoUrl?.trim() ? { photoUrl: candidate.photoUrl.trim() } : {}),
+    };
+  });
+}
+
+export function updatePublicCartItemQty(
+  cart: PublicCartItem[],
+  itemId: string,
+  nextQty: number,
+): PublicCartItem[] {
+  if (!Number.isFinite(nextQty)) return cart;
+  const targetQty = Math.floor(nextQty);
+  if (targetQty <= 0) {
+    return cart.filter((item) => item.id !== itemId);
+  }
+  return cart.flatMap((item) => {
+    if (item.id !== itemId) return [item];
+    const safeMax = Math.max(0, Math.floor(item.maxStock));
+    if (safeMax <= 0) return [];
+    return [
+      {
+        ...item,
+        quantity: Math.min(targetQty, safeMax),
+      },
+    ];
+  });
+}
+
+export function removeItemFromPublicCart(
+  cart: PublicCartItem[],
+  itemId: string,
+): PublicCartItem[] {
+  return cart.filter((item) => item.id !== itemId);
+}
+
+export function syncPublicCartWithCatalogGroups(
+  cart: PublicCartItem[],
+  teamGroups: PublicCatalogTeamGroup[],
+): PublicCartItem[] {
+  if (cart.length === 0) return cart;
+
+  const liveByLineId = new Map<
+    string,
+    { product: PublicCatalogProduct; sizeOpt: PublicCatalogSizeOption }
+  >();
+
+  for (const group of teamGroups) {
+    for (const product of group.products) {
+      for (const sizeOpt of product.sizes) {
+        if (sizeOpt.stock <= 0) continue;
+        liveByLineId.set(buildPublicCartItemId(product.key, sizeOpt.size), {
+          product,
+          sizeOpt,
+        });
+      }
+    }
+  }
+
+  let changed = false;
+  const next: PublicCartItem[] = [];
+
+  for (const item of cart) {
+    const match = liveByLineId.get(item.id);
+    if (!match) {
+      changed = true;
+      continue;
+    }
+
+    const liveStock = Math.max(0, Math.floor(match.sizeOpt.stock));
+    if (liveStock <= 0) {
+      changed = true;
+      continue;
+    }
+
+    const parsed = splitModelAndPlayerParts(match.product.model);
+    const liveModel = parsed.baseModel || match.product.model.trim();
+    const livePlayer = parsed.player || item.player || undefined;
+    const clampedQty = Math.max(1, Math.min(Math.floor(item.quantity), liveStock));
+    const livePrice = round2(match.sizeOpt.salePrice);
+    const livePhoto = match.product.photoUrl?.trim() || undefined;
+
+    if (
+      clampedQty !== item.quantity ||
+      liveStock !== item.maxStock ||
+      livePrice !== item.unitPrice ||
+      liveModel !== item.model ||
+      livePlayer !== item.player ||
+      livePhoto !== item.photoUrl ||
+      match.product.team !== item.team ||
+      match.product.version !== item.version
+    ) {
+      changed = true;
+    }
+
+    next.push({
+      ...item,
+      team: match.product.team,
+      model: liveModel,
+      ...(livePlayer ? { player: livePlayer } : {}),
+      version: match.product.version,
+      quantity: clampedQty,
+      unitPrice: livePrice,
+      maxStock: liveStock,
+      ...(livePhoto ? { photoUrl: livePhoto } : {}),
+    });
+  }
+
+  return changed ? next : cart;
+}
+
+export function calculatePublicCartTotals(
+  items: PublicCartItem[],
+  bcvRate?: number | null,
+): PublicCartTotals {
+  let totalItems = 0;
+  let totalUsd = 0;
+  let distinctLines = 0;
+
+  for (const item of items) {
+    const qty = Number.isFinite(item.quantity)
+      ? Math.max(0, Math.floor(item.quantity))
+      : 0;
+    if (qty <= 0) continue;
+    const price = Number.isFinite(item.unitPrice) ? Math.max(0, item.unitPrice) : 0;
+    distinctLines += 1;
+    totalItems += qty;
+    totalUsd = round2(totalUsd + round2(price * qty));
+  }
+
+  const validBcv = isRateValid(bcvRate) ? bcvRate : null;
+  const totalBs = validBcv !== null ? round2(totalUsd * validBcv) : null;
+
+  return {
+    totalItems,
+    distinctLines,
+    totalUsd,
+    totalBs,
+    bcvRate: validBcv,
+  };
+}
+
+export function buildWhatsAppMultiItemMessage({
+  items,
+  bcvRate,
+  customerName,
+  deliveryZone,
+}: BuildWhatsAppMultiItemMessageInput): string {
+  const activeItems = items.filter(
+    (item) => Number.isFinite(item.quantity) && Math.floor(item.quantity) > 0,
+  );
+  const totals = calculatePublicCartTotals(activeItems, bcvRate);
+
+  const lines: string[] = [
+    'Hola X4SPORT, quiero realizar el siguiente pedido desde el Catálogo:',
+  ];
+
+  if (activeItems.length > 0) {
+    lines.push('');
+    activeItems.forEach((item, index) => {
+      const qty = Math.floor(item.quantity);
+      const parsed = splitModelAndPlayerParts(item.model);
+      const displayModel = parsed.baseModel || item.model.trim();
+      const displayPlayer = item.player?.trim() || parsed.player;
+      const versionLabel = normalizeVersionDisplay(item.version);
+      const subtotalUsd = round2(item.unitPrice * qty);
+      const playerSegment = displayPlayer ? ` · ${displayPlayer}` : '';
+      lines.push(
+        `${index + 1}. ${qty}x ${displayModel} (${versionLabel})${playerSegment} · Talla ${item.size} — ${formatUSD(subtotalUsd)} USD`,
+      );
+    });
+  }
+
+  lines.push('');
+  lines.push(`Total USD: ${formatUSD(totals.totalUsd)} USD`);
+  if (totals.totalBs !== null && totals.bcvRate !== null) {
+    lines.push(
+      `Total en Bolívares (Tasa BCV ${formatVES(totals.bcvRate)}): ${formatVES(totals.totalBs)}`,
+    );
+  }
+
+  const cleanName = customerName?.trim();
+  const cleanZone = deliveryZone?.trim();
+  if (cleanName || cleanZone) {
+    lines.push('');
+    if (cleanName) {
+      lines.push(`Nombre: ${cleanName}`);
+    }
+    if (cleanZone) {
+      lines.push(`Ciudad / Entrega: ${cleanZone}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+export function buildCatalogMultiItemWhatsAppHref(
+  turnIndex: number,
+  params: BuildWhatsAppMultiItemMessageInput,
+): { advisor: CatalogWhatsAppAdvisor; href: string; message: string } {
+  const advisor = getAdvisorForTurnIndex(turnIndex);
+  const message = buildWhatsAppMultiItemMessage(params);
+  const href = `https://wa.me/${advisor.waNumber}?text=${encodeURIComponent(message)}`;
+  return { advisor, href, message };
+}
+
+export function loadPublicCartFromSession(
+  storage?: Storage | null,
+): PublicCartItem[] {
+  try {
+    const store =
+      storage !== undefined
+        ? storage
+        : typeof window !== 'undefined'
+          ? window.sessionStorage
+          : null;
+    const raw = store?.getItem(PUBLIC_CART_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is PublicCartItem =>
+        Boolean(entry) &&
+        typeof entry === 'object' &&
+        typeof (entry as PublicCartItem).id === 'string' &&
+        typeof (entry as PublicCartItem).modelKey === 'string' &&
+        typeof (entry as PublicCartItem).model === 'string' &&
+        typeof (entry as PublicCartItem).size === 'string' &&
+        typeof (entry as PublicCartItem).quantity === 'number' &&
+        typeof (entry as PublicCartItem).unitPrice === 'number' &&
+        typeof (entry as PublicCartItem).maxStock === 'number',
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function savePublicCartToSession(
+  items: PublicCartItem[],
+  storage?: Storage | null,
+): void {
+  try {
+    const store =
+      storage !== undefined
+        ? storage
+        : typeof window !== 'undefined'
+          ? window.sessionStorage
+          : null;
+    if (!store) return;
+    if (items.length === 0) {
+      store.removeItem(PUBLIC_CART_STORAGE_KEY);
+    } else {
+      store.setItem(PUBLIC_CART_STORAGE_KEY, JSON.stringify(items));
+    }
+  } catch {
+    // Ignore storage quota or private mode restrictions
+  }
+}
+
 

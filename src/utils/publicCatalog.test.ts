@@ -10,13 +10,18 @@ import {
   sanitizeForFirebase,
 } from './finance';
 import {
+  addItemToPublicCart,
   advanceWhatsAppTurnIndex,
   applyCatalogPhotoMutation,
+  buildCatalogMultiItemWhatsAppHref,
   buildCatalogWhatsAppHref,
+  buildPublicCartItemId,
   buildPublicCatalogGroups,
   buildShareableCatalogUrl,
   buildUpcomingTransitCards,
+  buildWhatsAppMultiItemMessage,
   calculateCatalogBsPrice,
+  calculatePublicCartTotals,
   CATALOG_WHATSAPP_ADVISORS,
   clampCatalogCarouselIndex,
   computeClampedSwipeOffset,
@@ -30,16 +35,22 @@ import {
   getModelIdentityKey,
   isPublicCatalogModeFromLocation,
   isRateValid,
+  loadPublicCartFromSession,
   normalizarUrlImagen,
   normalizeCatalogImageUrl,
   normalizeCatalogModelKey,
   obtenerFallbackUrlImagen,
   parseCatalogImageList,
   propagateModelPhotosAfterBatchMutation,
+  removeItemFromPublicCart,
   resolveCatalogKeywords,
   resolveCatalogPhoto,
   resolveModelPhotoAnywhere,
   sanitizeFirebaseCatalogKey,
+  savePublicCartToSession,
+  syncPublicCartWithCatalogGroups,
+  updatePublicCartItemQty,
+  type PublicCartItem,
 } from './publicCatalog';
 
 function createMemoryStorage(): Storage {
@@ -759,5 +770,281 @@ test('propagateModelPhotosAfterBatchMutation propagates new photos to 0-stock pr
     false,
   );
 });
+
+test('Multi-item public cart enforces max stock per (modelKey + size) and syncs with live inventory', () => {
+  const base = createEmptyCleanState();
+  const state = {
+    ...base,
+    exchangeRates: { bcv: 46.5, usdt: 52.0, updatedAt: '2026-11-28T10:00:00Z' },
+    inventory: [
+      {
+        id: 'rm-m',
+        team: 'Real Madrid' as const,
+        model: 'Real Madrid Local 25/26 · Bellingham #5',
+        version: 'Player' as const,
+        size: 'M' as const,
+        stock: 2,
+        unitCost: 11,
+        cogs: 11,
+        salePrice: 28,
+        fifoBatches: [],
+      },
+      {
+        id: 'rm-l',
+        team: 'Real Madrid' as const,
+        model: 'Real Madrid Local 25/26 · Bellingham #5',
+        version: 'Player' as const,
+        size: 'L' as const,
+        stock: 3,
+        unitCost: 11,
+        cogs: 11,
+        salePrice: 28,
+        fifoBatches: [],
+      },
+      {
+        id: 'fcb-s',
+        team: 'Barcelona' as const,
+        model: 'Barcelona Local 25/26',
+        version: 'Fans' as const,
+        size: 'S' as const,
+        stock: 1,
+        unitCost: 9,
+        cogs: 9,
+        salePrice: 22,
+        fifoBatches: [],
+      },
+    ],
+  };
+
+  const groups = buildPublicCatalogGroups(state);
+  const rmGroup = groups.find((g) => g.team === 'Real Madrid')!;
+  const rmProduct = rmGroup.products[0];
+  const fcbProduct = groups.find((g) => g.team === 'Barcelona')!.products[0];
+
+  let cart: PublicCartItem[] = [];
+  cart = addItemToPublicCart(cart, {
+    modelKey: rmProduct.key,
+    team: rmProduct.team,
+    model: rmProduct.model,
+    version: rmProduct.version,
+    size: 'M',
+    unitPrice: 28,
+    maxStock: 2,
+  });
+  cart = addItemToPublicCart(cart, {
+    modelKey: rmProduct.key,
+    team: rmProduct.team,
+    model: rmProduct.model,
+    version: rmProduct.version,
+    size: 'M',
+    unitPrice: 28,
+    maxStock: 2,
+  });
+  // Attempt to exceed maxStock (2) for size M -> stays clamped at 2
+  cart = addItemToPublicCart(cart, {
+    modelKey: rmProduct.key,
+    team: rmProduct.team,
+    model: rmProduct.model,
+    version: rmProduct.version,
+    size: 'M',
+    unitPrice: 28,
+    maxStock: 2,
+  });
+
+  // Same model, different size L -> creates distinct line item
+  cart = addItemToPublicCart(cart, {
+    modelKey: rmProduct.key,
+    team: rmProduct.team,
+    model: rmProduct.model,
+    version: rmProduct.version,
+    size: 'L',
+    unitPrice: 28,
+    maxStock: 3,
+  });
+  // Barcelona S
+  cart = addItemToPublicCart(cart, {
+    modelKey: fcbProduct.key,
+    team: fcbProduct.team,
+    model: fcbProduct.model,
+    version: fcbProduct.version,
+    size: 'S',
+    unitPrice: 22,
+    maxStock: 1,
+  });
+
+  assert.equal(cart.length, 3);
+  const rmMId = buildPublicCartItemId(rmProduct.key, 'M');
+  const rmLId = buildPublicCartItemId(rmProduct.key, 'L');
+  const fcbSId = buildPublicCartItemId(fcbProduct.key, 'S');
+  assert.equal(cart.find((i) => i.id === rmMId)?.quantity, 2);
+  assert.equal(cart.find((i) => i.id === rmMId)?.player, 'Bellingham #5');
+  assert.equal(cart.find((i) => i.id === rmLId)?.quantity, 1);
+
+  // updatePublicCartItemQty clamps above maxStock and removes at <= 0
+  cart = updatePublicCartItemQty(cart, rmMId, 99);
+  assert.equal(cart.find((i) => i.id === rmMId)?.quantity, 2);
+  cart = updatePublicCartItemQty(cart, rmLId, 0);
+  assert.equal(cart.some((i) => i.id === rmLId), false);
+  assert.equal(cart.length, 2);
+
+  // Live stock drops: RM M drops from 2 -> 1, Barcelona S sells out (0)
+  const updatedGroups = buildPublicCatalogGroups({
+    ...state,
+    inventory: [
+      { ...state.inventory[0], stock: 1 },
+      state.inventory[1],
+      { ...state.inventory[2], stock: 0 },
+    ],
+  });
+  const synced = syncPublicCartWithCatalogGroups(cart, updatedGroups);
+  assert.equal(synced.length, 1);
+  assert.equal(synced[0].id, rmMId);
+  assert.equal(synced[0].quantity, 1);
+  assert.equal(synced[0].maxStock, 1);
+  assert.equal(synced.some((i) => i.id === fcbSId), false);
+
+  // removeItemFromPublicCart clears cleanly
+  const emptied = removeItemFromPublicCart(synced, rmMId);
+  assert.equal(emptied.length, 0);
+});
+
+test('calculatePublicCartTotals sums USD accurately and computes BCV official Bs equivalent', () => {
+  const items: PublicCartItem[] = [
+    {
+      id: 'k1::M',
+      modelKey: 'k1',
+      team: 'Real Madrid',
+      model: 'Real Madrid Local 25/26',
+      player: 'Bellingham #5',
+      version: 'Player',
+      size: 'M',
+      quantity: 2,
+      unitPrice: 28,
+      maxStock: 4,
+    },
+    {
+      id: 'k2::L',
+      modelKey: 'k2',
+      team: 'Barcelona',
+      model: 'Barcelona Visitante 25/26',
+      version: 'Fans',
+      size: 'L',
+      quantity: 1,
+      unitPrice: 22.5,
+      maxStock: 3,
+    },
+  ];
+
+  // 2 * 28 + 1 * 22.5 = 78.50 USD; 78.50 * 46.25 = 3630.625 -> 3630.63
+  const totalsWithBcv = calculatePublicCartTotals(items, 46.25);
+  assert.equal(totalsWithBcv.totalItems, 3);
+  assert.equal(totalsWithBcv.distinctLines, 2);
+  assert.equal(totalsWithBcv.totalUsd, 78.5);
+  assert.equal(totalsWithBcv.bcvRate, 46.25);
+  assert.equal(totalsWithBcv.totalBs, 3630.63);
+
+  // When BCV rate is 0 or invalid, totalBs is null while totalUsd still computes
+  const totalsNoBcv = calculatePublicCartTotals(items, 0);
+  assert.equal(totalsNoBcv.totalItems, 3);
+  assert.equal(totalsNoBcv.totalUsd, 78.5);
+  assert.equal(totalsNoBcv.bcvRate, null);
+  assert.equal(totalsNoBcv.totalBs, null);
+});
+
+test('buildWhatsAppMultiItemMessage formats numbered items, totals, BCV Bs, and optional customer fields', () => {
+  const items: PublicCartItem[] = [
+    {
+      id: 'k1::M',
+      modelKey: 'k1',
+      team: 'Real Madrid',
+      model: 'Real Madrid Local 25/26',
+      player: 'Bellingham #5',
+      version: 'Player',
+      size: 'M',
+      quantity: 2,
+      unitPrice: 28,
+      maxStock: 4,
+    },
+    {
+      id: 'k2::L',
+      modelKey: 'k2',
+      team: 'Barcelona',
+      model: 'Barcelona Visitante 25/26',
+      version: 'Fans',
+      size: 'L',
+      quantity: 1,
+      unitPrice: 22,
+      maxStock: 2,
+    },
+  ];
+
+  const msgWithClient = buildWhatsAppMultiItemMessage({
+    items,
+    bcvRate: 50,
+    customerName: 'Carlos Pérez',
+    deliveryZone: 'Guacara',
+  });
+
+  assert.equal(
+    msgWithClient.startsWith(
+      'Hola X4SPORT, quiero realizar el siguiente pedido desde el Catálogo:',
+    ),
+    true,
+  );
+  assert.equal(
+    msgWithClient.includes(
+      '1. 2x Real Madrid Local 25/26 (Player) · Bellingham #5 · Talla M — $56.00 USD',
+    ),
+    true,
+  );
+  assert.equal(
+    msgWithClient.includes(
+      '2. 1x Barcelona Visitante 25/26 (Fans) · Talla L — $22.00 USD',
+    ),
+    true,
+  );
+  assert.equal(msgWithClient.includes('Total USD: $78.00 USD'), true);
+  assert.equal(msgWithClient.includes('Total en Bolívares (Tasa BCV'), true);
+  assert.equal(msgWithClient.includes('3.900,00'), true);
+  assert.equal(msgWithClient.includes('Nombre: Carlos Pérez'), true);
+  assert.equal(msgWithClient.includes('Ciudad / Entrega: Guacara'), true);
+
+  // Without optional fields or valid BCV rate: omits Name, Delivery Zone, and Bs line
+  const msgMinimal = buildWhatsAppMultiItemMessage({
+    items: [items[1]],
+    bcvRate: 0,
+    customerName: '   ',
+    deliveryZone: '',
+  });
+  assert.equal(msgMinimal.includes('Total USD: $22.00 USD'), true);
+  assert.equal(msgMinimal.includes('Total en Bolívares'), false);
+  assert.equal(msgMinimal.includes('Nombre:'), false);
+  assert.equal(msgMinimal.includes('Ciudad / Entrega:'), false);
+
+  // URL generation encodes full message and routes to turn advisor
+  const linkInfo = buildCatalogMultiItemWhatsAppHref(0, {
+    items,
+    bcvRate: 50,
+  });
+  assert.equal(linkInfo.advisor.waNumber, CATALOG_WHATSAPP_ADVISORS[0].waNumber);
+  assert.equal(
+    linkInfo.href.startsWith(`https://wa.me/${CATALOG_WHATSAPP_ADVISORS[0].waNumber}?text=`),
+    true,
+  );
+  assert.equal(
+    decodeURIComponent(linkInfo.href.split('?text=')[1]).includes('$78.00 USD'),
+    true,
+  );
+
+  // Session storage roundtrip works cleanly
+  const mem = createMemoryStorage();
+  savePublicCartToSession(items, mem);
+  const restored = loadPublicCartFromSession(mem);
+  assert.equal(restored.length, 2);
+  assert.equal(restored[0].id, 'k1::M');
+  savePublicCartToSession([], mem);
+  assert.equal(loadPublicCartFromSession(mem).length, 0);
+});
+
 
 

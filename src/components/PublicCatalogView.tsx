@@ -6,9 +6,12 @@ import {
   ChevronRight,
   Clock,
   MessageCircle,
+  Minus,
+  Plus,
   Search,
   Shield,
   ShoppingBag,
+  Trash2,
   X,
   ZoomIn,
 } from 'lucide-react';
@@ -18,22 +21,34 @@ import {
   compareJerseySizes,
   formatUSD,
   formatVES,
+  round2,
 } from '../utils/finance';
 import {
+  addItemToPublicCart,
   advanceWhatsAppTurnIndex,
+  buildCatalogMultiItemWhatsAppHref,
   buildCatalogWhatsAppHref,
+  buildPublicCartItemId,
   buildPublicCatalogGroups,
   buildUpcomingTransitCards,
   calculateCatalogBsPrice,
+  calculatePublicCartTotals,
   clampCatalogCarouselIndex,
   computeClampedSwipeOffset,
   filterPublicCatalogGroups,
   filterUpcomingTransitCards,
   getCurrentWhatsAppTurnIndex,
   isRateValid,
+  loadPublicCartFromSession,
   normalizarUrlImagen,
   obtenerFallbackUrlImagen,
   parseCatalogImageList,
+  removeItemFromPublicCart,
+  savePublicCartToSession,
+  syncPublicCartWithCatalogGroups,
+  updatePublicCartItemQty,
+  type PublicCartCandidate,
+  type PublicCartItem,
   type PublicCatalogProduct,
   type PublicCatalogTeamGroup,
   type PublicTransitCard,
@@ -501,11 +516,15 @@ function CatalogProductCard({
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
+  cartQtyByLineId,
+  onAddToCart,
 }: {
   product: PublicCatalogProduct;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
+  cartQtyByLineId: Map<string, number>;
+  onAddToCart: (candidate: PublicCartCandidate) => void;
 }) {
   const [selectedSize, setSelectedSize] = useState<JerseySize>(
     product.sizes[0]?.size ?? 'M',
@@ -516,6 +535,9 @@ function CatalogProductCard({
   const currentPrice = activeSizeInfo?.salePrice ?? product.minPrice;
   const currentStock = activeSizeInfo?.stock ?? product.totalStock;
   const currentSizeLabel = activeSizeInfo?.size ?? 'M';
+  const lineId = buildPublicCartItemId(product.key, currentSizeLabel);
+  const inCartQty = cartQtyByLineId.get(lineId) ?? 0;
+  const isAtMaxStock = currentStock <= 0 || inCartQty >= currentStock;
 
   const { advisor, href } = buildCatalogWhatsAppHref(waTurnIndex, {
     model: product.model,
@@ -523,6 +545,21 @@ function CatalogProductCard({
     size: currentSizeLabel,
     isTransit: false,
   });
+
+  const handleAddClick = () => {
+    if (isAtMaxStock) return;
+    onAddToCart({
+      modelKey: product.key,
+      team: product.team,
+      model: product.model,
+      version: product.version,
+      size: currentSizeLabel,
+      unitPrice: currentPrice,
+      maxStock: currentStock,
+      photoUrl: product.photoUrl,
+      quantityToAdd: 1,
+    });
+  };
 
   return (
     <article
@@ -580,16 +617,26 @@ function CatalogProductCard({
           </div>
         </div>
 
-        {/* Urgencia, Precio y CTA WhatsApp */}
-        <div className="space-y-2 border-t border-slate-800/80 pt-2 sm:space-y-3 sm:pt-3">
-          <p
-            data-testid="catalog-stock-badge"
-            className={`text-[11px] font-semibold sm:text-xs ${
-              currentStock <= 5 ? 'text-amber-300' : 'text-emerald-300'
-            }`}
-          >
-            ¡Quedan {currentStock} en stock!
-          </p>
+        {/* Urgencia, Precio y CTAs de Pedido */}
+        <div className="space-y-2 border-t border-slate-800/80 pt-2 sm:space-y-2.5 sm:pt-3">
+          <div className="flex items-center justify-between gap-1.5">
+            <p
+              data-testid="catalog-stock-badge"
+              className={`text-[11px] font-semibold sm:text-xs ${
+                currentStock <= 5 ? 'text-amber-300' : 'text-emerald-300'
+              }`}
+            >
+              ¡Quedan {currentStock} en stock!
+            </p>
+            {inCartQty > 0 && (
+              <span
+                data-testid={`catalog-in-cart-${product.key}-${currentSizeLabel}`}
+                className="font-mono-num shrink-0 rounded bg-[#38bdf8]/15 px-1.5 py-0.5 text-[10px] font-bold text-[#38bdf8]"
+              >
+                {inCartQty} en pedido
+              </span>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-baseline justify-between gap-x-1.5 gap-y-0.5 sm:gap-2">
             <span
@@ -619,20 +666,43 @@ function CatalogProductCard({
             )}
           </div>
 
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid="catalog-buy-btn"
-            data-advisor={advisor.name}
-            data-wa-number={advisor.waNumber}
-            onClick={onWhatsAppClick}
-            className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 whitespace-nowrap sm:min-h-[44px] sm:gap-2 sm:px-4 sm:py-2 sm:text-sm"
-          >
-            <MessageCircle className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
-            <span className="sm:hidden">Comprar</span>
-            <span className="hidden sm:inline">Comprar por WhatsApp</span>
-          </a>
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              data-testid={`catalog-add-btn-${product.key}`}
+              disabled={isAtMaxStock}
+              onClick={handleAddClick}
+              className={`inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8] whitespace-nowrap sm:min-h-[42px] sm:gap-2 sm:px-3.5 sm:py-2 sm:text-sm ${
+                isAtMaxStock
+                  ? 'cursor-not-allowed border border-amber-500/40 bg-amber-500/10 text-amber-300'
+                  : 'bg-[#38bdf8] text-[#060B16] hover:bg-sky-300 active:scale-[0.99]'
+              }`}
+            >
+              {isAtMaxStock ? (
+                <span>Máx. disponible</span>
+              ) : (
+                <>
+                  <ShoppingBag className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+                  <span>Agregar al Pedido</span>
+                </>
+              )}
+            </button>
+
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="catalog-buy-btn"
+              data-advisor={advisor.name}
+              data-wa-number={advisor.waNumber}
+              onClick={onWhatsAppClick}
+              className="inline-flex min-h-[34px] w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700/90 bg-[#080E1C] px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition-colors hover:border-[#38bdf8]/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8] whitespace-nowrap sm:min-h-[38px] sm:gap-2 sm:px-3 sm:text-xs"
+            >
+              <MessageCircle className="h-3.5 w-3.5 shrink-0 text-[#38bdf8]" aria-hidden="true" />
+              <span className="sm:hidden">WhatsApp directo</span>
+              <span className="hidden sm:inline">Comprar directo por WhatsApp</span>
+            </a>
+          </div>
         </div>
       </div>
     </article>
@@ -881,16 +951,43 @@ function SwimlaneSection({
   );
 }
 
+function CartItemThumbnail({ item }: { item: PublicCartItem }) {
+  const [failed, setFailed] = useState(false);
+  const src = item.photoUrl ? normalizarUrlImagen(item.photoUrl) : '';
+  if (!src || failed) {
+    return (
+      <div className="flex h-16 w-14 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-[#070D19] p-1">
+        <TeamCrest team={item.team} className="h-8 w-8" />
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-16 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-[#070D19] p-1">
+      <img
+        src={src}
+        alt={`${item.model} (${item.version})`}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className="h-full w-full object-contain"
+      />
+    </div>
+  );
+}
+
 function TeamProductSection({
   group,
   usdtRate,
   waTurnIndex,
   onWhatsAppClick,
+  cartQtyByLineId,
+  onAddToCart,
 }: {
   group: PublicCatalogTeamGroup;
   usdtRate: number;
   waTurnIndex: number;
   onWhatsAppClick: () => void;
+  cartQtyByLineId: Map<string, number>;
+  onAddToCart: (candidate: PublicCartCandidate) => void;
 }) {
   return (
     <SwimlaneSection
@@ -916,6 +1013,8 @@ function TeamProductSection({
           usdtRate={usdtRate}
           waTurnIndex={waTurnIndex}
           onWhatsAppClick={onWhatsAppClick}
+          cartQtyByLineId={cartQtyByLineId}
+          onAddToCart={onAddToCart}
         />
       ))}
     </SwimlaneSection>
@@ -934,6 +1033,12 @@ export function PublicCatalogView({
   const [waTurnIndex, setWaTurnIndex] = useState<number>(() =>
     getCurrentWhatsAppTurnIndex(),
   );
+  const [cartItems, setCartItems] = useState<PublicCartItem[]>(() =>
+    loadPublicCartFromSession(),
+  );
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [customerName, setCustomerName] = useState('');
+  const [deliveryZone, setDeliveryZone] = useState('');
 
   const handleAdvanceWhatsAppTurn = () => {
     const next = advanceWhatsAppTurnIndex();
@@ -941,10 +1046,79 @@ export function PublicCatalogView({
   };
 
   const usdtRate = state.exchangeRates.usdt;
+  const bcvRate = state.exchangeRates.bcv;
   const catalogEnabled = state.catalogEnabled !== false;
 
   const teamGroups = useMemo(() => buildPublicCatalogGroups(state), [state]);
   const transitCards = useMemo(() => buildUpcomingTransitCards(state), [state]);
+
+  // Sincronización automática de solo lectura contra el stock en vivo
+  useEffect(() => {
+    setCartItems((prev) => syncPublicCartWithCatalogGroups(prev, teamGroups));
+  }, [teamGroups]);
+
+  // Persistencia efímera exclusivamente en sessionStorage del navegador (cero escrituras en Firebase)
+  useEffect(() => {
+    savePublicCartToSession(cartItems);
+  }, [cartItems]);
+
+  useEffect(() => {
+    if (cartItems.length === 0 && isCartOpen) {
+      setIsCartOpen(false);
+    }
+  }, [cartItems.length, isCartOpen]);
+
+  useEffect(() => {
+    if (!isCartOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsCartOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isCartOpen]);
+
+  const cartQtyByLineId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of cartItems) {
+      map.set(item.id, item.quantity);
+    }
+    return map;
+  }, [cartItems]);
+
+  const cartTotals = useMemo(
+    () => calculatePublicCartTotals(cartItems, bcvRate),
+    [cartItems, bcvRate],
+  );
+
+  const multiWhatsApp = useMemo(
+    () =>
+      buildCatalogMultiItemWhatsAppHref(waTurnIndex, {
+        items: cartItems,
+        bcvRate,
+        customerName,
+        deliveryZone,
+      }),
+    [waTurnIndex, cartItems, bcvRate, customerName, deliveryZone],
+  );
+
+  const handleAddToCart = useCallback((candidate: PublicCartCandidate) => {
+    setCartItems((prev) => addItemToPublicCart(prev, candidate));
+  }, []);
+
+  const handleUpdateCartQty = useCallback((itemId: string, nextQty: number) => {
+    setCartItems((prev) => updatePublicCartItemQty(prev, itemId, nextQty));
+  }, []);
+
+  const handleRemoveCartItem = useCallback((itemId: string) => {
+    setCartItems((prev) => removeItemFromPublicCart(prev, itemId));
+  }, []);
+
+  const handleClearCart = useCallback(() => {
+    setCartItems([]);
+    setIsCartOpen(false);
+  }, []);
 
   const availableSizeFilters = useMemo<SizeFilter[]>(() => {
     const present = new Set<JerseySize>(ALL_JERSEY_SIZES);
@@ -1117,7 +1291,11 @@ export function PublicCatalogView({
           </div>
         </main>
       ) : (
-        <main className="mx-auto w-full max-w-full min-w-0 overflow-x-clip space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8 xl:max-w-7xl">
+        <main
+          className={`mx-auto w-full max-w-full min-w-0 overflow-x-clip space-y-8 px-3 py-5 sm:space-y-10 sm:px-6 sm:py-8 xl:max-w-7xl ${
+            cartTotals.totalItems > 0 ? 'pb-24 sm:pb-28' : ''
+          }`}
+        >
           {/* Hero compacto + Buscador Inteligente */}
           <section className="w-full max-w-full min-w-0 overflow-x-clip space-y-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0D172B] via-[#0B1222] to-[#080D19] p-4 sm:space-y-5 sm:p-7">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -1272,6 +1450,8 @@ export function PublicCatalogView({
                   usdtRate={usdtRate}
                   waTurnIndex={waTurnIndex}
                   onWhatsAppClick={handleAdvanceWhatsAppTurn}
+                  cartQtyByLineId={cartQtyByLineId}
+                  onAddToCart={handleAddToCart}
                 />
               ))}
 
@@ -1306,6 +1486,8 @@ export function PublicCatalogView({
                       usdtRate={usdtRate}
                       waTurnIndex={waTurnIndex}
                       onWhatsAppClick={handleAdvanceWhatsAppTurn}
+                      cartQtyByLineId={cartQtyByLineId}
+                      onAddToCart={handleAddToCart}
                     />
                   ))}
                 </SwimlaneSection>
@@ -1344,6 +1526,305 @@ export function PublicCatalogView({
             X4SPORT · Indumentaria Deportiva · Guacara, Carabobo, Venezuela
           </footer>
         </main>
+      )}
+
+      {/* Barra flotante inferior del Carrito Multi-Prenda */}
+      {catalogEnabled && cartTotals.totalItems > 0 && (
+        <div
+          data-testid="catalog-cart-floating-bar"
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-800 bg-[#060B16]/95 backdrop-blur-md shadow-[0_-10px_30px_rgba(0,0,0,0.65)]"
+        >
+          <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-3 px-3 py-2.5 sm:px-6 sm:py-3">
+            <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#38bdf8]/40 bg-[#38bdf8]/15 text-[#38bdf8]">
+                <ShoppingBag className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-200 sm:text-sm">
+                  <span className="font-mono-num text-white">
+                    {cartTotals.totalItems}
+                  </span>{' '}
+                  {cartTotals.totalItems === 1 ? 'prenda' : 'prendas'} en tu pedido
+                </p>
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span
+                    data-testid="cart-floating-total-usd"
+                    className="font-mono-num text-sm font-bold text-[#38bdf8] sm:text-base"
+                  >
+                    {formatUSD(cartTotals.totalUsd)} USD
+                  </span>
+                  {cartTotals.totalBs !== null && (
+                    <span className="hidden font-mono-num text-xs text-slate-400 sm:inline">
+                      · {formatVES(cartTotals.totalBs)} (BCV)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              data-testid="catalog-view-order-btn"
+              onClick={() => setIsCartOpen(true)}
+              className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-xl bg-[#38bdf8] px-4 py-2 text-xs font-bold text-[#060B16] transition-colors hover:bg-sky-300 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8] whitespace-nowrap sm:px-5 sm:text-sm"
+            >
+              Ver Pedido →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal / Drawer Resumen de Pedido Multi-Prenda */}
+      {isCartOpen && cartItems.length > 0 && (
+        <div
+          data-testid="catalog-cart-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="catalog-cart-modal-title"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 backdrop-blur-sm sm:items-center sm:p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsCartOpen(false);
+            }
+          }}
+        >
+          <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-slate-800 bg-[#0D1526] text-slate-100 shadow-2xl sm:rounded-2xl">
+            {/* Encabezado Modal */}
+            <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3.5 sm:px-5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#38bdf8]/40 bg-[#38bdf8]/15 text-[#38bdf8]">
+                  <ShoppingBag className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h2
+                    id="catalog-cart-modal-title"
+                    className="truncate font-display text-base font-bold text-white sm:text-lg"
+                  >
+                    Resumen de tu Pedido
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    {cartTotals.totalItems}{' '}
+                    {cartTotals.totalItems === 1 ? 'prenda seleccionada' : 'prendas seleccionadas'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar resumen de pedido"
+                onClick={() => setIsCartOpen(false)}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-[#080E1C] text-slate-300 hover:border-slate-600 hover:text-white"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* Lista de prendas + campos opcionales */}
+            <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
+              <ul className="space-y-3">
+                {cartItems.map((item) => {
+                  const isAtCap = item.quantity >= item.maxStock;
+                  const lineSubtotal = round2(item.unitPrice * item.quantity);
+                  return (
+                    <li
+                      key={item.id}
+                      data-testid={`cart-item-row-${item.id}`}
+                      className="flex items-start gap-3 rounded-xl border border-slate-800 bg-[#080E1C] p-3"
+                    >
+                      <CartItemThumbnail item={item} />
+
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold leading-snug text-white break-words">
+                              {item.model}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {item.version}
+                              {item.player ? ` · ${item.player}` : ''} ·{' '}
+                              <span className="font-semibold text-[#38bdf8]">
+                                Talla {item.size}
+                              </span>
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            data-testid={`cart-remove-${item.id}`}
+                            aria-label={`Eliminar ${item.model} talla ${item.size}`}
+                            onClick={() => handleRemoveCartItem(item.id)}
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-800 hover:text-rose-400"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              data-testid={`cart-dec-${item.id}`}
+                              aria-label="Disminuir cantidad"
+                              onClick={() =>
+                                handleUpdateCartQty(item.id, item.quantity - 1)
+                              }
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 bg-[#0D1526] text-slate-200 hover:border-slate-500 hover:text-white"
+                            >
+                              <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                            <span
+                              data-testid={`cart-qty-${item.id}`}
+                              className="font-mono-num min-w-[26px] text-center text-sm font-bold text-white"
+                            >
+                              {item.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              data-testid={`cart-inc-${item.id}`}
+                              aria-label="Aumentar cantidad"
+                              disabled={isAtCap}
+                              onClick={() =>
+                                handleUpdateCartQty(item.id, item.quantity + 1)
+                              }
+                              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-slate-200 transition-colors ${
+                                isAtCap
+                                  ? 'cursor-not-allowed border-slate-800 bg-[#060B16] text-slate-600'
+                                  : 'border-slate-700 bg-[#0D1526] hover:border-[#38bdf8] hover:text-white'
+                              }`}
+                            >
+                              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                            {isAtCap && (
+                              <span className="text-[11px] font-semibold text-amber-300">
+                                Máx. disponible
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="text-right">
+                            <p
+                              data-testid={`cart-subtotal-${item.id}`}
+                              className="font-mono-num text-sm font-bold text-white"
+                            >
+                              {formatUSD(lineSubtotal)} USD
+                            </p>
+                            {item.quantity > 1 && (
+                              <p className="font-mono-num text-[10px] text-slate-400">
+                                {formatUSD(item.unitPrice)} c/u
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {/* Campos opcionales y discretos para el cliente */}
+              <div className="grid grid-cols-1 gap-2.5 border-t border-slate-800/80 pt-3 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="cart-customer-name"
+                    className="mb-1 block text-[11px] font-medium text-slate-400"
+                  >
+                    Nombre del cliente (opcional)
+                  </label>
+                  <input
+                    id="cart-customer-name"
+                    data-testid="cart-customer-name"
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="Tu nombre"
+                    className="w-full min-h-[38px] rounded-lg border border-slate-700 bg-[#060B16] px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-[#38bdf8] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="cart-delivery-zone"
+                    className="mb-1 block text-[11px] font-medium text-slate-400"
+                  >
+                    Ciudad / Entrega (opcional)
+                  </label>
+                  <input
+                    id="cart-delivery-zone"
+                    data-testid="cart-delivery-zone"
+                    list="x4sport-delivery-zones"
+                    type="text"
+                    value={deliveryZone}
+                    onChange={(e) => setDeliveryZone(e.target.value)}
+                    placeholder="Guacara, Valencia, Envío..."
+                    className="w-full min-h-[38px] rounded-lg border border-slate-700 bg-[#060B16] px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-[#38bdf8] focus:outline-none"
+                  />
+                  <datalist id="x4sport-delivery-zones">
+                    <option value="Guacara" />
+                    <option value="Valencia" />
+                    <option value="San Diego" />
+                    <option value="Naguanagua" />
+                    <option value="Envío Nacional (MRW / Zoom)" />
+                  </datalist>
+                </div>
+              </div>
+            </div>
+
+            {/* Totales y acciones de cierre */}
+            <div className="space-y-3 border-t border-slate-800 bg-[#080E1C] px-4 py-4 sm:px-5">
+              <div className="space-y-1.5 rounded-xl border border-slate-800 bg-[#060B16] p-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-300">
+                    Total a Pagar en USD
+                  </span>
+                  <span
+                    data-testid="cart-modal-total-usd"
+                    className="font-mono-num text-lg font-bold text-white"
+                  >
+                    {formatUSD(cartTotals.totalUsd)} USD
+                  </span>
+                </div>
+                {cartTotals.totalBs !== null && cartTotals.bcvRate !== null ? (
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-slate-800/80 pt-1.5">
+                    <span className="text-[11px] text-slate-400">
+                      Equivalente Tasa BCV oficial ({formatVES(cartTotals.bcvRate)})
+                    </span>
+                    <span
+                      data-testid="cart-modal-total-bs"
+                      className="font-mono-num text-sm font-bold text-[#38bdf8]"
+                    >
+                      {formatVES(cartTotals.totalBs)}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-amber-300">
+                    Equivalente en Bolívares (Tasa BCV) en actualización.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row-reverse">
+                <a
+                  href={multiWhatsApp.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid="cart-send-whatsapp-btn"
+                  data-advisor={multiWhatsApp.advisor.name}
+                  data-wa-number={multiWhatsApp.advisor.waNumber}
+                  onClick={handleAdvanceWhatsAppTurn}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-[#38bdf8] px-4 py-2.5 text-sm font-bold text-[#060B16] transition-colors hover:bg-sky-300 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#38bdf8]"
+                >
+                  <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>Enviar Pedido por WhatsApp</span>
+                </a>
+                <button
+                  type="button"
+                  data-testid="cart-clear-btn"
+                  onClick={handleClearCart}
+                  className="inline-flex min-h-[42px] items-center justify-center rounded-xl border border-slate-700 bg-transparent px-4 py-2 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-800/60 hover:text-white"
+                >
+                  Vaciar carrito
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
