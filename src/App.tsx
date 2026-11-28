@@ -449,6 +449,7 @@ export default function App() {
 
   // Inicializar listener de autenticación de Google Calendar (token solo en memoria)
   useEffect(() => {
+    if (isPublicCatalogModeFromLocation()) return;
     const unsubscribe = initGoogleCalendarAuth(
       (user) => {
         setCalendarAuth({
@@ -1717,7 +1718,42 @@ export default function App() {
     [],
   );
 
-  if (!isPublicCatalogRoute && !isCatalogPreview && !currentUser) {
+  const handleExitPublicCatalogToLogin = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', `${window.location.origin}/`);
+    }
+    setIsCatalogPreview(false);
+    setIsPublicCatalogRoute(false);
+  }, []);
+
+  if (isPublicCatalogRoute || isCatalogPreview) {
+    if (isPublicCatalogRoute && isHydratingDb) {
+      return (
+        <div className="erp-catalog-shell flex min-h-screen flex-col items-center justify-center gap-3 bg-[#060B16] p-6 text-center text-slate-100">
+          <Loader2
+            className="h-8 w-8 animate-spin text-blue-400"
+            aria-hidden="true"
+          />
+          <p className="font-display text-base font-semibold text-white">
+            Cargando Catálogo Oficial X4SPORT...
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <PublicCatalogView
+        state={state}
+        isPreviewMode={isCatalogPreview && !isPublicCatalogRoute}
+        onExitPreview={() => setIsCatalogPreview(false)}
+        onGoToPartnerLogin={
+          isPublicCatalogRoute ? handleExitPublicCatalogToLogin : undefined
+        }
+      />
+    );
+  }
+
+  if (!currentUser) {
     return (
       <div className="erp-auth-shell min-h-screen bg-slate-50 text-slate-900 dark:bg-[#060B16] dark:text-slate-100 flex flex-col items-center justify-center relative">
         <div className="fixed top-4 right-4 z-40">
@@ -1806,30 +1842,6 @@ export default function App() {
           otpEmailConfig={generalConfig.otpEmailConfig}
         />
       </div>
-    );
-  }
-
-  if (isPublicCatalogRoute || isCatalogPreview) {
-    if (isPublicCatalogRoute && isHydratingDb) {
-      return (
-        <div className="erp-catalog-shell flex min-h-screen flex-col items-center justify-center gap-3 bg-[#060B16] p-6 text-center text-slate-100">
-          <Loader2
-            className="h-8 w-8 animate-spin text-blue-400"
-            aria-hidden="true"
-          />
-          <p className="font-display text-base font-semibold text-white">
-            Cargando Catálogo Oficial X4SPORT...
-          </p>
-        </div>
-      );
-    }
-
-    return (
-      <PublicCatalogView
-        state={state}
-        isPreviewMode={isCatalogPreview && !isPublicCatalogRoute}
-        onExitPreview={() => setIsCatalogPreview(false)}
-      />
     );
   }
 

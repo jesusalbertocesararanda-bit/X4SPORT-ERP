@@ -47,8 +47,8 @@ import {
 import { DEFAULT_GENERAL_CONFIG, formatUSD, round2 } from '../utils/finance';
 import type { GoogleCalendarAuthState } from '../utils/googleCalendar';
 import {
-  buildShareableCatalogUrl,
   convertGoogleDriveUrlToDirect,
+  getPublicCatalogShareUrl,
 } from '../utils/publicCatalog';
 import { GoogleCalendarBanner } from './GoogleCalendarBanner';
 
@@ -339,7 +339,7 @@ export function ConfigView({
   }
 
   const catalogEnabled = state.catalogEnabled !== false;
-  const shareableCatalogUrl = buildShareableCatalogUrl();
+  const shareableCatalogUrl = getPublicCatalogShareUrl();
   const authorizedUsersList = getMergedAuthorizedUsers(state.authorizedUsers);
 
   const handleSaveGeneralParameters = async (e: React.FormEvent) => {

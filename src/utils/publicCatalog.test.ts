@@ -33,6 +33,7 @@ import {
   filterUpcomingTransitCards,
   getCurrentWhatsAppTurnIndex,
   getModelIdentityKey,
+  getPublicCatalogShareUrl,
   isPublicCatalogModeFromLocation,
   isRateValid,
   loadPublicCartFromSession,
@@ -40,6 +41,7 @@ import {
   normalizeCatalogImageUrl,
   normalizeCatalogModelKey,
   obtenerFallbackUrlImagen,
+  OFFICIAL_PUBLIC_CATALOG_URL,
   parseCatalogImageList,
   propagateModelPhotosAfterBatchMutation,
   removeItemFromPublicCart,
@@ -1045,6 +1047,84 @@ test('buildWhatsAppMultiItemMessage formats numbered items, totals, BCV Bs, and 
   savePublicCartToSession([], mem);
   assert.equal(loadPublicCartFromSession(mem).length, 0);
 });
+
+test('getPublicCatalogShareUrl replaces temporary/local hosts with official production URL and preserves production domains', () => {
+  const officialUrl =
+    'https://x4sport-erp.jesusalbertocesararanda.workers.dev/?catalogo=1';
+  assert.equal(OFFICIAL_PUBLIC_CATALOG_URL, officialUrl);
+
+  // Temporary AI Studio / Cloud Run / localhost URLs always normalize to official URL
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'https:',
+      origin: 'https://ais-dev-q5hrnvlf5jubwyurq52e3n-424886739590.us-west2.run.app',
+      pathname: '/',
+    }),
+    officialUrl,
+  );
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'https:',
+      origin: 'https://ais-pre-xyz123.us-west2.run.app',
+      pathname: '/catalogo',
+    }),
+    officialUrl,
+  );
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'http:',
+      origin: 'http://localhost:3000',
+      pathname: '/',
+    }),
+    officialUrl,
+  );
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'http:',
+      origin: 'http://127.0.0.1:3000',
+      pathname: '/',
+    }),
+    officialUrl,
+  );
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'https:',
+      origin: 'https://aistudio.google.com',
+      pathname: '/',
+    }),
+    officialUrl,
+  );
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'https:',
+      origin: 'https://abc123.googleusercontent.com',
+      pathname: '/',
+    }),
+    officialUrl,
+  );
+
+  // Official Cloudflare Worker domain & custom production domains preserve their origin
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'https:',
+      origin: 'https://x4sport-erp.jesusalbertocesararanda.workers.dev',
+      pathname: '/',
+    }),
+    officialUrl,
+  );
+  assert.equal(
+    getPublicCatalogShareUrl({
+      protocol: 'https:',
+      origin: 'https://x4sport.app',
+      pathname: '/catalogo',
+    }),
+    'https://x4sport.app/?catalogo=1',
+  );
+
+  // Trailing slash on /catalogo/ still activates public catalog route
+  assert.equal(isPublicCatalogModeFromLocation({ pathname: '/catalogo/' }), true);
+});
+
 
 
 

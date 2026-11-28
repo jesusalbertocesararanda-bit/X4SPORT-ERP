@@ -5,10 +5,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Lock,
   MessageCircle,
   Minus,
   Plus,
   Search,
+  Share2,
   Shield,
   ShoppingBag,
   Trash2,
@@ -38,6 +40,7 @@ import {
   filterPublicCatalogGroups,
   filterUpcomingTransitCards,
   getCurrentWhatsAppTurnIndex,
+  getPublicCatalogShareUrl,
   isRateValid,
   loadPublicCartFromSession,
   normalizarUrlImagen,
@@ -60,6 +63,7 @@ interface PublicCatalogViewProps {
   state: AppState;
   isPreviewMode?: boolean;
   onExitPreview?: () => void;
+  onGoToPartnerLogin?: () => void;
 }
 
 type VersionFilter = 'Todas' | 'Player' | 'Fans' | 'Retro';
@@ -1025,6 +1029,7 @@ export function PublicCatalogView({
   state,
   isPreviewMode = false,
   onExitPreview,
+  onGoToPartnerLogin,
 }: PublicCatalogViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [versionFilter, setVersionFilter] = useState<VersionFilter>('Todas');
@@ -1191,6 +1196,15 @@ export function PublicCatalogView({
     [transitCards],
   );
 
+  const shareCatalogUrl = useMemo(() => getPublicCatalogShareUrl(), []);
+  const shareCatalogWhatsAppHref = useMemo(
+    () =>
+      `https://wa.me/?text=${encodeURIComponent(
+        `⚽ ¡Revisa el catálogo oficial actualizado en tiempo real de camisetas X4SPORT! ${shareCatalogUrl}`,
+      )}`,
+    [shareCatalogUrl],
+  );
+
   const fallbackContact = buildCatalogWhatsAppHref(waTurnIndex, {
     model: 'Catálogo X4SPORT',
     version: 'Player',
@@ -1285,6 +1299,17 @@ export function PublicCatalogView({
                   className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-700 bg-[#080E1C] px-4 py-2.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
                 >
                   Volver al Panel Admin
+                </button>
+              )}
+              {!isPreviewMode && onGoToPartnerLogin && (
+                <button
+                  type="button"
+                  data-testid="btn-partner-access-login"
+                  onClick={onGoToPartnerLogin}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-700 bg-[#080E1C] px-4 py-2.5 text-xs font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                >
+                  <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                  Acceso Socios
                 </button>
               )}
             </div>
@@ -1522,8 +1547,33 @@ export function PublicCatalogView({
             ))}
           </SwimlaneSection>
 
-          <footer className="border-t border-slate-800/80 pt-6 pb-8 text-center text-xs text-slate-500">
-            X4SPORT · Indumentaria Deportiva · Guacara, Carabobo, Venezuela
+          <footer className="flex flex-col items-center justify-between gap-3 border-t border-slate-800/80 pt-6 pb-8 text-center text-xs text-slate-500 sm:flex-row sm:text-left">
+            <span>
+              X4SPORT · Indumentaria Deportiva · Guacara, Carabobo, Venezuela
+            </span>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <a
+                href={shareCatalogWhatsAppHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="catalog-share-whatsapp-btn"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-[#0D1526] px-3 py-1.5 text-[11px] font-medium text-[#38bdf8] transition-colors hover:border-[#38bdf8]/50 hover:text-sky-300"
+              >
+                <Share2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                Compartir Catálogo por WhatsApp
+              </a>
+              {!isPreviewMode && onGoToPartnerLogin && (
+                <button
+                  type="button"
+                  data-testid="btn-partner-access-login"
+                  onClick={onGoToPartnerLogin}
+                  className="inline-flex items-center gap-1 text-[11px] text-slate-500 underline decoration-slate-700 transition-colors hover:text-slate-300"
+                >
+                  <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
+                  Acceso Socios
+                </button>
+              )}
+            </div>
           </footer>
         </main>
       )}

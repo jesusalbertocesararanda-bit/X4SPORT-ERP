@@ -15,11 +15,11 @@ import {
 import type { AppState, TeamCategory } from '../types/erp';
 import { normalizeVersionDisplay } from '../utils/finance';
 import {
-  buildShareableCatalogUrl,
   CATALOG_WHATSAPP_ADVISORS,
   compressCatalogImageFile,
   extractGoogleDriveFileId,
   getModelIdentityKey,
+  getPublicCatalogShareUrl,
   normalizarUrlImagen,
   obtenerFallbackUrlImagen,
   parseCatalogImageList,
@@ -57,7 +57,7 @@ export function CatalogAdminView({
   onOpenCatalogPreview,
 }: CatalogAdminViewProps) {
   const catalogEnabled = state.catalogEnabled !== false;
-  const shareUrl = useMemo(() => buildShareableCatalogUrl(), []);
+  const shareUrl = useMemo(() => getPublicCatalogShareUrl(), []);
 
   const [copiedLink, setCopiedLink] = useState(false);
   const [adminSearch, setAdminSearch] = useState('');
@@ -382,10 +382,11 @@ export function CatalogAdminView({
               href={shareWhatsAppHref}
               target="_blank"
               rel="noopener noreferrer"
+              data-testid="btn-share-catalog-whatsapp"
               className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-600/25 hover:text-white whitespace-nowrap"
             >
               <MessageCircle className="h-4 w-4" aria-hidden="true" />
-              Enviar por WhatsApp
+              Compartir Catálogo por WhatsApp
             </a>
 
             <a

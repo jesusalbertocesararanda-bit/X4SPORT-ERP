@@ -351,11 +351,30 @@ test('writePublicCatalogSnapshot escribe el catálogo sanitizado en x4sport/publ
   }
 });
 
-test('subscribePublicCatalog se suscribe únicamente a x4sport/publicCatalog y nunca lee erpState', () => {
+test('subscribePublicCatalog ejecuta auth anónima silenciosa, se suscribe únicamente a x4sport/publicCatalog y nunca lee erpState ni escribe', async () => {
   const originalWindow = (globalThis as { window?: unknown }).window;
   const originalFetch = globalThis.fetch;
   const requestedPaths: string[] = [];
   const fetchedUrls: string[] = [];
+  let signInCalls = 0;
+  let setCalls = 0;
+
+  const authMock = {
+    currentUser: null as {
+      uid: string;
+      isAnonymous: boolean;
+      getIdToken: () => Promise<string>;
+    } | null,
+    signInAnonymously: async () => {
+      signInCalls += 1;
+      authMock.currentUser = {
+        uid: 'anon-catalog-reader',
+        isAnonymous: true,
+        getIdToken: async () => 'public-anon-token',
+      };
+      return { user: authMock.currentUser };
+    },
+  };
 
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     fetchedUrls.push(String(input));
@@ -370,10 +389,14 @@ test('subscribePublicCatalog se suscribe únicamente a x4sport/publicCatalog y n
       apps: [{}],
       initializeApp: () => ({}),
       app: () => ({}),
+      auth: () => authMock,
       database: () => ({
         ref: (path: string) => {
           requestedPaths.push(path);
           return {
+            set: async () => {
+              setCalls += 1;
+            },
             on: (
               _evt: 'value',
               cb: (snap: { exists: () => boolean; val: () => unknown }) => void,
@@ -416,10 +439,15 @@ test('subscribePublicCatalog se suscribe únicamente a x4sport/publicCatalog y n
       },
       () => {},
     );
+    await new Promise((resolve) => setTimeout(resolve, 25));
     unsubscribe();
 
+    assert.equal(signInCalls, 1);
+    assert.equal(setCalls, 0);
     assert.deepEqual(requestedPaths, [RTDB_PUBLIC_CATALOG_PATH]);
+    assert.ok(fetchedUrls.length >= 1);
     assert.ok(fetchedUrls.every((u) => u.includes(RTDB_PUBLIC_CATALOG_PATH)));
+    assert.ok(fetchedUrls.every((u) => u.includes('?auth=public-anon-token')));
     assert.ok(fetchedUrls.every((u) => !u.includes(RTDB_ERP_PATH)));
     assert.equal(deliveredStates.length, 1);
     const receivedState = deliveredStates[0];

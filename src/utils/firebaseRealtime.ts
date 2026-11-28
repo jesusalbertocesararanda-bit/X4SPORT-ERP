@@ -55,6 +55,7 @@ export interface PublicCatalogInventoryItem {
   size: JerseySize;
   stock: number;
   salePrice: number;
+  imageUrl?: string;
 }
 
 export interface PublicCatalogBatchItem {
@@ -66,6 +67,7 @@ export interface PublicCatalogBatchItem {
   orderedQuantity: number;
   quantity: number;
   salePrice?: number;
+  imageUrl?: string;
 }
 
 export interface PublicCatalogBatch {
@@ -792,6 +794,7 @@ export function buildPublicCatalogSnapshot(state: AppState): PublicCatalogSnapsh
       size: item.size,
       stock: Number.isFinite(item.stock) ? item.stock : 0,
       salePrice: Number.isFinite(item.salePrice) ? item.salePrice : 0,
+      ...(item.imageUrl?.trim() ? { imageUrl: item.imageUrl.trim() } : {}),
     }));
 
   const rawBatches = toArray<PurchaseBatchRecord>(state.purchaseBatches);
@@ -827,6 +830,7 @@ export function buildPublicCatalogSnapshot(state: AppState): PublicCatalogSnapsh
         ...(typeof item.salePrice === 'number' && Number.isFinite(item.salePrice)
           ? { salePrice: item.salePrice }
           : {}),
+        ...(item.imageUrl?.trim() ? { imageUrl: item.imageUrl.trim() } : {}),
       })),
     }));
 
@@ -883,6 +887,7 @@ export function normalizePublicCatalogToAppState(raw: unknown): AppState {
       salePrice: Number.isFinite(item.salePrice) ? item.salePrice : 0,
       cogs: 0,
       fifoBatches: [],
+      ...(item.imageUrl?.trim() ? { imageUrl: item.imageUrl.trim() } : {}),
     }));
 
   const purchaseBatches: PurchaseBatchRecord[] = toArray<PublicCatalogBatch>(
@@ -926,6 +931,7 @@ export function normalizePublicCatalogToAppState(raw: unknown): AppState {
         ...(typeof item.salePrice === 'number' && Number.isFinite(item.salePrice)
           ? { salePrice: item.salePrice }
           : {}),
+        ...(item.imageUrl?.trim() ? { imageUrl: item.imageUrl.trim() } : {}),
         factoryUnitCost: 0,
         proratedFreightPerUnit: 0,
         landedUnitCost: 0,
@@ -1001,7 +1007,9 @@ export async function writePublicCatalogSnapshot(state: AppState): Promise<void>
 
 /**
  * Suscripción ligera de SOLO LECTURA al nodo público `x4sport/publicCatalog`.
- * Nunca descarga `x4sport/erpState` (ventas, clientes, CxC, fondos ni usuarios).
+ * Nunca descarga `x4sport/erpState` (ventas, clientes, CxC, fondos ni usuarios)
+ * ni realiza escrituras en Firebase. Si RTDB exige sesión, inicia sesión anónima
+ * automática (signInAnonymously) exclusivamente para lectura pública.
  */
 export function subscribePublicCatalog(
   onState: (state: AppState) => void,
@@ -1010,6 +1018,7 @@ export function subscribePublicCatalog(
   let active = true;
   let receivedRealtimeSnapshot = false;
   let deliveredInitial = false;
+  let detachRealtimeListener: (() => void) | null = null;
 
   const deliverPublicState = (raw: unknown, fromRealtime: boolean) => {
     if (!active) return;
@@ -1025,70 +1034,113 @@ export function subscribePublicCatalog(
     onState(appState);
   };
 
-  const restUrl = `${firebaseConfig.databaseURL}/${RTDB_PUBLIC_CATALOG_PATH}.json`;
-  void fetch(restUrl, { cache: 'no-store' })
-    .then(async (resp) => {
-      if (!active || receivedRealtimeSnapshot || !resp.ok) return;
-      const data: unknown = await resp.json();
-      if (!active || receivedRealtimeSnapshot) return;
-      if (data !== null && data !== undefined) {
-        deliverPublicState(data, false);
-      }
-    })
-    .catch(() => {
-      // Fallback handled by onValue listener or timeout
-    });
-
-  const safetyTimer = setTimeout(() => {
+  const deliverFallbackBackup = () => {
     if (!active || deliveredInitial) return;
     deliveredInitial = true;
     const backup = readLocalPublicCatalogBackup();
     onState(backup ?? normalizePublicCatalogToAppState(null));
+  };
+
+  const safetyTimer = setTimeout(() => {
+    if (!active || deliveredInitial) return;
+    deliverFallbackBackup();
     onError(
       'Conexión lenta con Firebase Realtime Database; mostrando catálogo guardado mientras sincroniza.',
     );
   }, 6000);
 
-  try {
-    const db = getFirebaseDatabase();
-    const publicRef = db.ref(RTDB_PUBLIC_CATALOG_PATH);
+  void ensureSilentFirebaseAuth()
+    .then(async () => {
+      if (!active) return;
 
-    const listener = publicRef.on(
-      'value',
-      (snapshot) => {
-        if (!active) return;
-        clearTimeout(safetyTimer);
-        try {
-          if (!snapshot.exists() || snapshot.val() === null) {
-            deliverPublicState(null, true);
+      let restAuthQuery = '';
+      try {
+        const token = await window.firebase?.auth?.()?.currentUser?.getIdToken?.();
+        if (token) {
+          restAuthQuery = `?auth=${encodeURIComponent(token)}`;
+        }
+      } catch {
+        // Continuar sin token REST si las reglas de publicCatalog permiten lectura anónima abierta
+      }
+
+      const restUrl = `${firebaseConfig.databaseURL}/${RTDB_PUBLIC_CATALOG_PATH}.json${restAuthQuery}`;
+      void fetch(restUrl, { cache: 'no-store' })
+        .then(async (resp) => {
+          if (!active || receivedRealtimeSnapshot) return;
+          if (resp.status === 401 || resp.status === 403) {
+            clearTimeout(safetyTimer);
+            deliverFallbackBackup();
+            onError(
+              lastSilentAuthError
+                ? `No se pudo autenticar lectura pública (${lastSilentAuthError}).`
+                : `Lectura pública bloqueada en Firebase RTDB (HTTP ${resp.status}).`,
+            );
             return;
           }
-          deliverPublicState(snapshot.val(), true);
-        } catch (err) {
-          if (!active) return;
-          onError(formatFirebaseError(err));
-        }
-      },
-      (error) => {
-        if (!active) return;
-        clearTimeout(safetyTimer);
-        onError(formatFirebaseError(error));
-      },
-    );
+          if (!resp.ok) return;
+          const data: unknown = await resp.json();
+          if (!active || receivedRealtimeSnapshot) return;
+          if (data !== null && data !== undefined) {
+            deliverPublicState(data, false);
+          }
+        })
+        .catch(() => {
+          // Fallback handled by onValue listener or timeout
+        });
 
-    return () => {
-      active = false;
+      try {
+        const db = getFirebaseDatabase();
+        const publicRef = db.ref(RTDB_PUBLIC_CATALOG_PATH);
+
+        const listener = publicRef.on(
+          'value',
+          (snapshot) => {
+            if (!active) return;
+            clearTimeout(safetyTimer);
+            try {
+              if (!snapshot.exists() || snapshot.val() === null) {
+                deliverPublicState(null, true);
+                return;
+              }
+              deliverPublicState(snapshot.val(), true);
+            } catch (err) {
+              if (!active) return;
+              deliverFallbackBackup();
+              onError(formatFirebaseError(err));
+            }
+          },
+          (error) => {
+            if (!active) return;
+            clearTimeout(safetyTimer);
+            deliverFallbackBackup();
+            onError(formatFirebaseError(error));
+          },
+        );
+
+        detachRealtimeListener = () => {
+          publicRef.off('value', listener);
+        };
+      } catch (err) {
+        clearTimeout(safetyTimer);
+        deliverFallbackBackup();
+        onError(formatFirebaseError(err));
+      }
+    })
+    .catch((err: unknown) => {
+      if (!active) return;
       clearTimeout(safetyTimer);
-      publicRef.off('value', listener);
-    };
-  } catch (err) {
+      deliverFallbackBackup();
+      onError(formatFirebaseError(err));
+    });
+
+  return () => {
+    active = false;
     clearTimeout(safetyTimer);
-    onError(formatFirebaseError(err));
-    return () => {
-      active = false;
-      clearTimeout(safetyTimer);
-    };
-  }
+    if (detachRealtimeListener) {
+      detachRealtimeListener();
+    }
+  };
 }
+
 
 

@@ -1100,6 +1100,47 @@ export function buildCatalogWhatsAppHref(
   return { advisor, href, message };
 }
 
+export const OFFICIAL_PUBLIC_CATALOG_URL =
+  'https://x4sport-erp.jesusalbertocesararanda.workers.dev/?catalogo=1';
+
+function isTemporaryOrLocalCatalogHost(
+  rawOriginOrHost: string,
+  protocol?: string,
+): boolean {
+  if (protocol === 'file:') return true;
+  const clean = rawOriginOrHost.trim().toLowerCase();
+  if (!clean || clean === 'null') return true;
+
+  let hostname = clean;
+  try {
+    hostname = new URL(clean.includes('://') ? clean : `https://${clean}`)
+      .hostname.toLowerCase();
+  } catch {
+    hostname = clean.replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
+  }
+
+  if (!hostname) return true;
+  if (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0' ||
+    hostname === '::1'
+  ) {
+    return true;
+  }
+
+  return (
+    hostname.includes('ais-dev-') ||
+    hostname.includes('ais-pre-') ||
+    hostname.endsWith('.run.app') ||
+    hostname === 'aistudio.google.com' ||
+    hostname.endsWith('.aistudio.google.com') ||
+    hostname.endsWith('.googleusercontent.com') ||
+    hostname.endsWith('.webcontainer.io') ||
+    hostname.includes('local-credentialless')
+  );
+}
+
 export function isPublicCatalogModeFromLocation(locationLike?: {
   search?: string;
   hash?: string;
@@ -1117,30 +1158,47 @@ export function isPublicCatalogModeFromLocation(locationLike?: {
     if (val === '1' || val === 'true') return true;
   }
 
-  const hash = (loc.hash ?? '').toLowerCase();
+  const hash = (loc.hash ?? '').toLowerCase().replace(/\/+$/, '');
   if (hash === '#catalogo' || hash === '#/catalogo') return true;
 
-  const pathname = (loc.pathname ?? '').toLowerCase();
+  const pathname = (loc.pathname ?? '').toLowerCase().replace(/\/+$/, '');
   if (pathname === '/catalogo' || pathname.endsWith('/catalogo')) return true;
 
   return false;
+}
+
+export function getPublicCatalogShareUrl(locationLike?: {
+  protocol?: string;
+  origin?: string;
+  pathname?: string;
+  hostname?: string;
+}): string {
+  const loc =
+    locationLike ??
+    (typeof window !== 'undefined' ? window.location : undefined);
+  if (!loc) return OFFICIAL_PUBLIC_CATALOG_URL;
+
+  const rawOrigin =
+    loc.origin && loc.origin !== 'null' ? loc.origin.trim() : '';
+  const hostCandidate = rawOrigin || loc.hostname?.trim() || '';
+
+  if (isTemporaryOrLocalCatalogHost(hostCandidate, loc.protocol)) {
+    return OFFICIAL_PUBLIC_CATALOG_URL;
+  }
+
+  const normalizedOrigin = rawOrigin
+    ? rawOrigin.replace(/\/+$/, '')
+    : `https://${loc.hostname!.trim()}`;
+  return `${normalizedOrigin}/?catalogo=1`;
 }
 
 export function buildShareableCatalogUrl(locationLike?: {
   protocol?: string;
   origin?: string;
   pathname?: string;
+  hostname?: string;
 }): string {
-  const loc =
-    locationLike ??
-    (typeof window !== 'undefined' ? window.location : undefined);
-  if (!loc) return '?catalogo=1';
-  if (loc.protocol === 'file:') {
-    return `${loc.pathname ?? ''}#catalogo`;
-  }
-  const baseOrigin = loc.origin && loc.origin !== 'null' ? loc.origin : '';
-  const basePath = loc.pathname && loc.pathname !== '/' ? loc.pathname : '/';
-  return `${baseOrigin}${basePath}?catalogo=1`;
+  return getPublicCatalogShareUrl(locationLike);
 }
 
 export async function compressCatalogImageFile(file: File): Promise<string> {
