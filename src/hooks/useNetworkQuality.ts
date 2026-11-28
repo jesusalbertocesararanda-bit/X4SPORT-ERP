@@ -111,10 +111,15 @@ export function classifyNetworkQuality(
     };
   }
 
+  const normalizedDownlink =
+    downlinkMbps !== null && Number.isFinite(downlinkMbps) && downlinkMbps > 0
+      ? downlinkMbps
+      : null;
+
   const speedMetaParts: string[] = [];
   if (effectiveType) speedMetaParts.push(effectiveType.toUpperCase());
-  if (downlinkMbps !== null && Number.isFinite(downlinkMbps)) {
-    speedMetaParts.push(`${downlinkMbps.toFixed(1)} Mbps`);
+  if (normalizedDownlink !== null) {
+    speedMetaParts.push(`${normalizedDownlink.toFixed(1)} Mbps`);
   }
   if (jitterMs > 0) {
     speedMetaParts.push(`Jitter ${jitterMs} ms`);
@@ -150,7 +155,8 @@ export function classifyNetworkQuality(
 
   // Nivel 3 — Regular / Lenta (Amarillo Ámbar)
   const hasMediumHighLatency = latencyMs !== null && latencyMs >= 350;
-  const hasSlowDownlink = downlinkMbps !== null && downlinkMbps < 1.5;
+  const hasSlowDownlink =
+    normalizedDownlink !== null && normalizedDownlink < 1.5;
   const is3g = effectiveType === '3g';
 
   if (
@@ -175,7 +181,8 @@ export function classifyNetworkQuality(
   }
 
   // Nivel 1 — Excelente (Verde Esmeralda brillante con halo)
-  const hasOptimalSpeed = downlinkMbps === null || downlinkMbps >= 5;
+  const hasOptimalSpeed =
+    normalizedDownlink === null || normalizedDownlink >= 5;
   const hasLowLatency = latencyMs !== null && latencyMs < 150;
   const hasHighStability = consecutiveFailures === 0 && jitterMs <= 120;
 
@@ -248,12 +255,17 @@ export function useNetworkQuality(
 
   const recentRttsRef = useRef<number[]>([]);
   const probeInFlightRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
 
   const syncConnectionApi = useCallback(() => {
+    if (!isMountedRef.current) return;
     const conn = getNavigatorConnection();
     setConnMeta({
       downlinkMbps:
-        typeof conn?.downlink === 'number' && Number.isFinite(conn.downlink)
+        typeof conn?.downlink === 'number' &&
+        Number.isFinite(conn.downlink) &&
+        conn.downlink > 0
           ? conn.downlink
           : null,
       effectiveType: normalizeEffectiveType(conn?.effectiveType),
@@ -268,6 +280,7 @@ export function useNetworkQuality(
 
   const runProbe = useCallback(async () => {
     if (typeof window === 'undefined' || typeof fetch === 'undefined') return;
+    if (!isMountedRef.current) return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setIsBrowserOnline(false);
       return;
@@ -276,6 +289,7 @@ export function useNetworkQuality(
 
     probeInFlightRef.current = true;
     const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
     const isHttpOrigin =
@@ -295,6 +309,7 @@ export function useNetworkQuality(
         cache: 'no-store',
         signal: controller.signal,
       });
+      if (!isMountedRef.current) return;
       const endedAt =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const measuredMs = Math.max(1, Math.round(endedAt - startedAt));
@@ -311,18 +326,23 @@ export function useNetworkQuality(
         consecutiveFailures: 0,
       });
     } catch {
+      if (!isMountedRef.current) return;
       setProbeState((prev) => ({
         ...prev,
         consecutiveFailures: prev.consecutiveFailures + 1,
       }));
     } finally {
       window.clearTimeout(timeoutId);
+      if (activeAbortControllerRef.current === controller) {
+        activeAbortControllerRef.current = null;
+      }
       probeInFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    isMountedRef.current = true;
 
     const handleOnline = () => {
       setIsBrowserOnline(true);
@@ -369,6 +389,9 @@ export function useNetworkQuality(
     }, PROBE_INTERVAL_MS);
 
     return () => {
+      isMountedRef.current = false;
+      activeAbortControllerRef.current?.abort();
+      activeAbortControllerRef.current = null;
       window.clearInterval(intervalId);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);

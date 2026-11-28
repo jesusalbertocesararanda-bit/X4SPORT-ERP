@@ -7,7 +7,7 @@ export type SystemNotificationPermission =
 
 const DAILY_REMINDER_STORAGE_KEY = 'x4sport_daily_notif_reminder_date_v1';
 
-interface ReceivableSnapshot {
+export interface ReceivableSnapshot {
   debtor: string;
   amount: number;
   paidAmount: number;
@@ -15,7 +15,7 @@ interface ReceivableSnapshot {
   instIds: Set<string>;
 }
 
-interface NotificationBaseline {
+export interface NotificationBaseline {
   initialized: boolean;
   saleIds: Set<string>;
   receivables: Map<string, ReceivableSnapshot>;
@@ -23,6 +23,15 @@ interface NotificationBaseline {
   inventoryStock: Map<string, number>;
   collectedReceivablesCount: number;
 }
+
+export interface LiveNotificationEvent {
+  title: string;
+  body: string;
+  tag: string;
+  targetView: SubModuleId;
+}
+
+const MAX_NEW_SALES_PER_LIVE_TICK = 3;
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -130,7 +139,18 @@ export async function sendTestSystemNotification(): Promise<boolean> {
   );
 }
 
-function buildBaselineFromState(state: AppState): NotificationBaseline {
+export function createEmptyNotificationBaseline(): NotificationBaseline {
+  return {
+    initialized: false,
+    saleIds: new Set(),
+    receivables: new Map(),
+    expenseIds: new Set(),
+    inventoryStock: new Map(),
+    collectedReceivablesCount: 0,
+  };
+}
+
+export function buildNotificationBaseline(state: AppState): NotificationBaseline {
   const receivables = new Map<string, ReceivableSnapshot>();
   for (const rec of state.receivables ?? []) {
     receivables.set(rec.id, {
@@ -157,6 +177,117 @@ function buildBaselineFromState(state: AppState): NotificationBaseline {
   };
 }
 
+export function collectLiveNotificationEvents(
+  prev: NotificationBaseline,
+  state: AppState,
+): {
+  events: LiveNotificationEvent[];
+  nextBaseline: NotificationBaseline;
+} {
+  const nextBaseline = buildNotificationBaseline(state);
+
+  // Protección anti-spam en la carga inicial o si se re-inicializa tras cerrar sesión
+  if (!prev.initialized) {
+    return { events: [], nextBaseline };
+  }
+
+  const newLiveSales = (state.sales ?? []).filter(
+    (sale) => !prev.saleIds.has(sale.id) && !sale.voided,
+  );
+
+  // Protección anti-spam ante hidratación tardía desde vacío o carga masiva / restauración Excel
+  if (
+    newLiveSales.length > MAX_NEW_SALES_PER_LIVE_TICK ||
+    (prev.saleIds.size === 0 && newLiveSales.length > 1)
+  ) {
+    return { events: [], nextBaseline };
+  }
+
+  const events: LiveNotificationEvent[] = [];
+
+  // a) Nueva Venta registrada
+  for (const sale of newLiveSales) {
+    const customer = sale.customerName?.trim() || 'Cliente Mostrador';
+    events.push({
+      title: `Nueva Venta · ${sale.seller}`,
+      body: `${customer} — $${round2(sale.finalPrice).toFixed(2)} USDT (${sale.paymentMethod})`,
+      tag: `x4sport-sale-${sale.id}`,
+      targetView: 'ventas-historial',
+    });
+  }
+
+  // b) Nuevo Abono o Liquidación en CxC
+  const currentRecMap = new Map(
+    (state.receivables ?? []).map((r) => [r.id, r]),
+  );
+  const salesById = new Map((state.sales ?? []).map((s) => [s.id, s]));
+
+  for (const rec of state.receivables ?? []) {
+    const prevRec = prev.receivables.get(rec.id);
+    if (!prevRec) continue;
+
+    const newInstallment = (rec.installments ?? []).find(
+      (inst) => !prevRec.instIds.has(inst.id),
+    );
+    if (newInstallment && newInstallment.amount > 0) {
+      events.push({
+        title: 'Abono Recibido · CxC',
+        body: `${rec.debtor} abonó $${round2(newInstallment.amount).toFixed(2)} USDT (Resta: $${round2(Math.max(0, rec.amount)).toFixed(2)} USDT)`,
+        tag: `x4sport-cxc-${rec.id}-${newInstallment.id}`,
+        targetView: 'ventas-cxc',
+      });
+    } else {
+      const deltaPaid = round2(prevRec.amount - rec.amount);
+      if (deltaPaid > 0.009) {
+        events.push({
+          title: 'Abono Recibido · CxC',
+          body: `${rec.debtor} abonó $${deltaPaid.toFixed(2)} USDT (Resta: $${round2(Math.max(0, rec.amount)).toFixed(2)} USDT)`,
+          tag: `x4sport-cxc-${rec.id}-${round2(rec.amount).toFixed(2)}`,
+          targetView: 'ventas-cxc',
+        });
+      }
+    }
+  }
+
+  // Liquidación total (la cuenta salió de state.receivables al cobrarse por completo)
+  if ((state.collectedReceivablesCount ?? 0) > prev.collectedReceivablesCount) {
+    for (const [recId, prevRec] of prev.receivables.entries()) {
+      if (!currentRecMap.has(recId) && prevRec.amount > 0.009) {
+        const isVoidedRelated = Boolean(
+          prevRec.saleId && salesById.get(prevRec.saleId)?.voided,
+        );
+        if (!isVoidedRelated) {
+          events.push({
+            title: 'Abono Recibido · CxC',
+            body: `${prevRec.debtor} abonó $${prevRec.amount.toFixed(2)} USDT (Resta: $0.00 USDT)`,
+            tag: `x4sport-cxc-paid-${recId}`,
+            targetView: 'ventas-cxc',
+          });
+        }
+      }
+    }
+  }
+
+  // c) Stock Crítico tras movimiento (baja a <= 2 unidades)
+  for (const item of state.inventory ?? []) {
+    const prevStock = prev.inventoryStock.get(item.id);
+    if (
+      prevStock !== undefined &&
+      item.stock < prevStock &&
+      item.stock <= 2
+    ) {
+      events.push({
+        title: 'Stock Crítico (≤ 2 uds)',
+        body: `${item.model} (${item.version} · Talla ${item.size}) — Quedan ${item.stock} ud(s)`,
+        tag: `x4sport-lowstock-${item.id}`,
+        targetView: 'inventario-stock',
+      });
+    }
+  }
+
+  return { events, nextBaseline };
+}
+
 interface UsePushNotificationsOptions {
   state: AppState;
   enabled: boolean;
@@ -168,112 +299,31 @@ export function usePushNotifications({
   enabled,
   isHydratingDb,
 }: UsePushNotificationsOptions): void {
-  const baselineRef = useRef<NotificationBaseline>({
-    initialized: false,
-    saleIds: new Set(),
-    receivables: new Map(),
-    expenseIds: new Set(),
-    inventoryStock: new Map(),
-    collectedReceivablesCount: 0,
-  });
+  const baselineRef = useRef<NotificationBaseline>(
+    createEmptyNotificationBaseline(),
+  );
 
-  // 1. Detección pasiva en vivo (con protección anti-spam al iniciar)
+  // 1. Detección pasiva en vivo (con protección anti-spam al iniciar o re-hidratar)
   useEffect(() => {
-    if (!enabled || isHydratingDb) return;
-
-    if (!baselineRef.current.initialized) {
-      baselineRef.current = buildBaselineFromState(state);
+    if (!enabled || isHydratingDb) {
+      baselineRef.current = createEmptyNotificationBaseline();
       return;
     }
 
-    const prev = baselineRef.current;
-
-    // a) Nueva Venta registrada
-    for (const sale of state.sales ?? []) {
-      if (!prev.saleIds.has(sale.id) && !sale.voided) {
-        const customer = sale.customerName?.trim() || 'Cliente Mostrador';
-        void sendSystemNotification(
-          `Nueva Venta · ${sale.seller}`,
-          `${customer} — $${round2(sale.finalPrice).toFixed(2)} USDT (${sale.paymentMethod})`,
-          `x4sport-sale-${sale.id}`,
-          'ventas-historial',
-        );
-      }
-    }
-
-    // b) Nuevo Abono o Liquidación en CxC
-    const currentRecMap = new Map(
-      (state.receivables ?? []).map((r) => [r.id, r]),
+    const { events, nextBaseline } = collectLiveNotificationEvents(
+      baselineRef.current,
+      state,
     );
-    const salesById = new Map((state.sales ?? []).map((s) => [s.id, s]));
+    baselineRef.current = nextBaseline;
 
-    for (const rec of state.receivables ?? []) {
-      const prevRec = prev.receivables.get(rec.id);
-      if (!prevRec) continue;
-
-      const newInstallment = (rec.installments ?? []).find(
-        (inst) => !prevRec.instIds.has(inst.id),
+    for (const evt of events) {
+      void sendSystemNotification(
+        evt.title,
+        evt.body,
+        evt.tag,
+        evt.targetView,
       );
-      if (newInstallment && newInstallment.amount > 0) {
-        void sendSystemNotification(
-          'Abono Recibido · CxC',
-          `${rec.debtor} abonó $${round2(newInstallment.amount).toFixed(2)} USDT (Resta: $${round2(rec.amount).toFixed(2)} USDT)`,
-          `x4sport-cxc-${rec.id}-${newInstallment.id}`,
-          'ventas-cxc',
-        );
-      } else {
-        const deltaPaid = round2(prevRec.amount - rec.amount);
-        if (deltaPaid > 0.009) {
-          void sendSystemNotification(
-            'Abono Recibido · CxC',
-            `${rec.debtor} abonó $${deltaPaid.toFixed(2)} USDT (Resta: $${round2(rec.amount).toFixed(2)} USDT)`,
-            `x4sport-cxc-${rec.id}-${Date.now()}`,
-            'ventas-cxc',
-          );
-        }
-      }
     }
-
-    // Liquidación total (la cuenta salió de state.receivables al cobrarse por completo)
-    if (
-      (state.collectedReceivablesCount ?? 0) > prev.collectedReceivablesCount
-    ) {
-      for (const [recId, prevRec] of prev.receivables.entries()) {
-        if (!currentRecMap.has(recId) && prevRec.amount > 0.009) {
-          const isVoidedRelated = Boolean(
-            prevRec.saleId && salesById.get(prevRec.saleId)?.voided,
-          );
-          if (!isVoidedRelated) {
-            void sendSystemNotification(
-              'Abono Recibido · CxC',
-              `${prevRec.debtor} abonó $${prevRec.amount.toFixed(2)} USDT (Resta: $0.00 USDT)`,
-              `x4sport-cxc-paid-${recId}`,
-              'ventas-cxc',
-            );
-          }
-        }
-      }
-    }
-
-    // c) Stock Crítico tras movimiento (baja a <= 2 unidades)
-    for (const item of state.inventory ?? []) {
-      const prevStock = prev.inventoryStock.get(item.id);
-      if (
-        prevStock !== undefined &&
-        item.stock < prevStock &&
-        item.stock <= 2
-      ) {
-        void sendSystemNotification(
-          'Stock Crítico (≤ 2 uds)',
-          `${item.model} (${item.version} · Talla ${item.size}) — Quedan ${item.stock} ud(s)`,
-          `x4sport-lowstock-${item.id}`,
-          'inventario-stock',
-        );
-      }
-    }
-
-    // Actualizar snapshot de referencia (sales, receivables, expenses, stock)
-    baselineRef.current = buildBaselineFromState(state);
   }, [enabled, isHydratingDb, state]);
 
   // 2. Recordatorio Diario Inteligente (Máximo 1 vez cada 24h usando localStorage)

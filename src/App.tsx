@@ -1238,40 +1238,67 @@ export default function App() {
 
   const handleAttachSaleCalendarMetadata = useCallback(
     (saleId: string, eventId: string, htmlLink?: string) => {
-      const next = attachSaleCalendarMetadata(
+      const optimisticNext = attachSaleCalendarMetadata(
         latestStateRef.current,
         saleId,
         eventId,
         htmlLink,
       );
-      latestStateRef.current = next;
-      setState(next);
-      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void updateErpState({ sales: next.sales })
-        .then(() => setDbError(null))
-        .catch((err: unknown) => {
-          setDbError(formatFirebaseError(err));
-        });
+      latestStateRef.current = optimisticNext;
+      setState(optimisticNext);
+      saveLocalStateBackup(optimisticNext, { allowOverwriteEmpty: true });
+      void transactErpState(
+        (current) => ({
+          ok: true,
+          state: attachSaleCalendarMetadata(current, saleId, eventId, htmlLink),
+        }),
+        optimisticNext,
+      ).then((outcome) => {
+        if (outcome.ok && outcome.state) {
+          latestStateRef.current = outcome.state;
+          setState(outcome.state);
+          saveLocalStateBackup(outcome.state, { allowOverwriteEmpty: true });
+          setDbError(null);
+        } else if (!outcome.ok && outcome.error) {
+          setDbError(outcome.error);
+        }
+      });
     },
     [],
   );
 
   const handleAttachPurchaseCalendarMetadata = useCallback(
     (batchId: string, eventId: string, htmlLink?: string) => {
-      const next = attachPurchaseBatchCalendarMetadata(
+      const optimisticNext = attachPurchaseBatchCalendarMetadata(
         latestStateRef.current,
         batchId,
         eventId,
         htmlLink,
       );
-      latestStateRef.current = next;
-      setState(next);
-      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void updateErpState({ purchaseBatches: next.purchaseBatches })
-        .then(() => setDbError(null))
-        .catch((err: unknown) => {
-          setDbError(formatFirebaseError(err));
-        });
+      latestStateRef.current = optimisticNext;
+      setState(optimisticNext);
+      saveLocalStateBackup(optimisticNext, { allowOverwriteEmpty: true });
+      void transactErpState(
+        (current) => ({
+          ok: true,
+          state: attachPurchaseBatchCalendarMetadata(
+            current,
+            batchId,
+            eventId,
+            htmlLink,
+          ),
+        }),
+        optimisticNext,
+      ).then((outcome) => {
+        if (outcome.ok && outcome.state) {
+          latestStateRef.current = outcome.state;
+          setState(outcome.state);
+          saveLocalStateBackup(outcome.state, { allowOverwriteEmpty: true });
+          setDbError(null);
+        } else if (!outcome.ok && outcome.error) {
+          setDbError(outcome.error);
+        }
+      });
     },
     [],
   );
@@ -1604,46 +1631,58 @@ export default function App() {
   const handleSaveCatalogPhoto = useCallback(
     (modelKey: string, photoUrl: string) => {
       if (!modelKey || !photoUrl) return;
-      const next = applyCatalogPhotoMutation(latestStateRef.current, {
+      const optimisticNext = applyCatalogPhotoMutation(latestStateRef.current, {
         modelKey,
         photoUrl,
       });
-      latestStateRef.current = next;
-      setState(next);
-      saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-      void updateErpState({
-        catalogPhotos: next.catalogPhotos,
-        inventory: next.inventory,
-        purchaseBatches: next.purchaseBatches,
-        purchases: next.purchases,
-      })
-        .then(() => setDbError(null))
-        .catch((err: unknown) => {
-          setDbError(formatFirebaseError(err));
-        });
+      latestStateRef.current = optimisticNext;
+      setState(optimisticNext);
+      saveLocalStateBackup(optimisticNext, { allowOverwriteEmpty: true });
+      void transactErpState(
+        (current) => ({
+          ok: true,
+          state: applyCatalogPhotoMutation(current, { modelKey, photoUrl }),
+        }),
+        optimisticNext,
+      ).then((outcome) => {
+        if (outcome.ok && outcome.state) {
+          latestStateRef.current = outcome.state;
+          setState(outcome.state);
+          saveLocalStateBackup(outcome.state, { allowOverwriteEmpty: true });
+          setDbError(null);
+        } else if (!outcome.ok && outcome.error) {
+          setDbError(outcome.error);
+        }
+      });
     },
     [],
   );
 
   const handleRemoveCatalogPhoto = useCallback((modelKey: string) => {
     if (!modelKey) return;
-    const next = applyCatalogPhotoMutation(latestStateRef.current, {
+    const optimisticNext = applyCatalogPhotoMutation(latestStateRef.current, {
       modelKey,
       photoUrl: '',
     });
-    latestStateRef.current = next;
-    setState(next);
-    saveLocalStateBackup(next, { allowOverwriteEmpty: true });
-    void updateErpState({
-      catalogPhotos: next.catalogPhotos,
-      inventory: next.inventory,
-      purchaseBatches: next.purchaseBatches,
-      purchases: next.purchases,
-    })
-      .then(() => setDbError(null))
-      .catch((err: unknown) => {
-        setDbError(formatFirebaseError(err));
-      });
+    latestStateRef.current = optimisticNext;
+    setState(optimisticNext);
+    saveLocalStateBackup(optimisticNext, { allowOverwriteEmpty: true });
+    void transactErpState(
+      (current) => ({
+        ok: true,
+        state: applyCatalogPhotoMutation(current, { modelKey, photoUrl: '' }),
+      }),
+      optimisticNext,
+    ).then((outcome) => {
+      if (outcome.ok && outcome.state) {
+        latestStateRef.current = outcome.state;
+        setState(outcome.state);
+        saveLocalStateBackup(outcome.state, { allowOverwriteEmpty: true });
+        setDbError(null);
+      } else if (!outcome.ok && outcome.error) {
+        setDbError(outcome.error);
+      }
+    });
   }, []);
 
   const handleSaveCatalogKeywords = useCallback(

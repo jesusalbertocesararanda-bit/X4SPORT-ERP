@@ -80,6 +80,27 @@ export function toVoucherDateIso(createdAt?: string): string {
   return `${year}-${month}-${day}`;
 }
 
+export function safeNonNegAmount(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return round2(Math.max(0, value));
+}
+
+export function isCxcVoucherPaidInFull(remainingBalance: number): boolean {
+  return safeNonNegAmount(remainingBalance) <= 0.009;
+}
+
+export function formatVoucherSignedAmount(
+  sign: '+' | '-',
+  amount: number,
+  currencySuffix = ' USDT',
+): string {
+  const clean =
+    typeof amount === 'number' && Number.isFinite(amount)
+      ? round2(Math.abs(amount))
+      : 0;
+  return `${sign}${formatUSD(clean)}${currencySuffix}`;
+}
+
 export function getVoucherFilename(voucher: VoucherReceiptData): string {
   const dateIso = toVoucherDateIso(voucher.createdAt);
   switch (voucher.type) {
@@ -205,12 +226,17 @@ export function VoucherReceiptModal({
     }
   };
 
+  const cxcRemainingClean =
+    voucher.type === 'cxc_payment'
+      ? safeNonNegAmount(voucher.remainingBalance)
+      : 0;
   const isCxcPaidInFull =
-    voucher.type === 'cxc_payment' && round2(voucher.remainingBalance) <= 0.009;
+    voucher.type === 'cxc_payment' && isCxcVoucherPaidInFull(cxcRemainingClean);
   const showBcvEquivalent =
     voucher.type === 'cxc_payment' &&
     voucher.paymentMethod === 'Pago Móvil / Bs' &&
     typeof voucher.bcvRate === 'number' &&
+    Number.isFinite(voucher.bcvRate) &&
     voucher.bcvRate > 0;
 
   return (
@@ -429,7 +455,7 @@ export function VoucherReceiptModal({
               >
                 {isCxcPaidInFull
                   ? 'CUENTA CANCELADA POR COMPLETO ($0.00 PENDIENTE)'
-                  : `ABONO PARCIAL RECIBIDO · PENDIENTE ${formatUSD(voucher.remainingBalance)}`}
+                  : `ABONO PARCIAL RECIBIDO · PENDIENTE ${formatUSD(cxcRemainingClean)}`}
               </div>
             )}
 
@@ -743,7 +769,7 @@ export function VoucherReceiptModal({
                         color: '#0f172a',
                       }}
                     >
-                      {formatUSD(voucher.saleTotal)}
+                      {formatUSD(safeNonNegAmount(voucher.saleTotal))}
                     </span>
                   </div>
                   <div
@@ -763,7 +789,7 @@ export function VoucherReceiptModal({
                         color: '#334155',
                       }}
                     >
-                      {formatUSD(voucher.previousBalance)}
+                      {formatUSD(safeNonNegAmount(voucher.previousBalance))}
                     </span>
                   </div>
 
@@ -793,7 +819,7 @@ export function VoucherReceiptModal({
                           color: '#047857',
                         }}
                       >
-                        {formatUSD(voucher.paidAmount)}
+                        {formatUSD(safeNonNegAmount(voucher.paidAmount))}
                       </span>
                     </div>
                     <div
@@ -809,7 +835,7 @@ export function VoucherReceiptModal({
                       <span>Método: {voucher.paymentMethod}</span>
                       {showBcvEquivalent && voucher.bcvRate && (
                         <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-                          {formatVES(voucher.paidAmount * voucher.bcvRate)} BCV
+                          {formatVES(safeNonNegAmount(voucher.paidAmount) * voucher.bcvRate)} BCV
                         </span>
                       )}
                     </div>
@@ -832,7 +858,7 @@ export function VoucherReceiptModal({
                         color: isCxcPaidInFull ? '#047857' : '#b45309',
                       }}
                     >
-                      {formatUSD(voucher.remainingBalance)}
+                      {formatUSD(isCxcPaidInFull ? 0 : cxcRemainingClean)}
                     </span>
                   </div>
                 </>
@@ -890,7 +916,7 @@ export function VoucherReceiptModal({
                         color: '#b91c1c',
                       }}
                     >
-                      -{formatUSD(Math.abs(voucher.paidAmount))} USDT
+                      -{formatUSD(Math.abs(safeNonNegAmount(voucher.paidAmount)))} USDT
                     </span>
                   </div>
 
@@ -913,7 +939,7 @@ export function VoucherReceiptModal({
                           color: '#0f172a',
                         }}
                       >
-                        {formatUSD(voucher.remainingBalance)} USDT
+                        {formatUSD(safeNonNegAmount(voucher.remainingBalance))} USDT
                       </span>
                     </div>
                   )}
@@ -942,7 +968,7 @@ export function VoucherReceiptModal({
                         color: '#047857',
                       }}
                     >
-                      +{formatUSD(Math.abs(voucher.reinvestedAmount))} USDT
+                      {formatVoucherSignedAmount('+', voucher.reinvestedAmount)}
                     </span>
                   </div>
                   <div
@@ -996,7 +1022,7 @@ export function VoucherReceiptModal({
                         color: '#b91c1c',
                       }}
                     >
-                      -{formatUSD(Math.abs(voucher.amount))} USDT
+                      {formatVoucherSignedAmount('-', voucher.amount)}
                     </span>
                   </div>
 
